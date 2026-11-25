@@ -117,7 +117,7 @@ unspine→Spine (one) acc refl = [] , refl , sp-[]
 unspine→Spine (empty) acc refl = [] , refl , sp-[]
 unspine→Spine (dty _) acc refl = [] , refl , sp-[]
 unspine→Spine (ctor _ _) acc refl = [] , refl , sp-[]
-unspine→Spine (mData _ _ _) acc refl = [] , refl , sp-[]
+unspine→Spine (mData _ _ ars _) acc refl = [] , refl , sp-[]
 unspine→Spine (mNat _ _ _ _) acc refl = [] , refl , sp-[]
 unspine→Spine (mEmp _ _) acc refl = [] , refl , sp-[]
 unspine→Spine (mUnit _ _ _) acc refl = [] , refl , sp-[]
@@ -257,7 +257,7 @@ ctorSpine-just () | (unit , _)
 ctorSpine-just () | (one , _)
 ctorSpine-just () | (empty , _)
 ctorSpine-just () | ((dty _) , _)
-ctorSpine-just () | ((mData _ _ _) , _)
+ctorSpine-just () | ((mData _ _ ars _) , _)
 ctorSpine-just () | ((mNat _ _ _ _) , _)
 ctorSpine-just () | ((mEmp _ _) , _)
 ctorSpine-just () | ((mUnit _ _ _) , _)
@@ -304,7 +304,7 @@ dtyArgs-just () | (unit , _)
 dtyArgs-just () | (one , _)
 dtyArgs-just () | (empty , _)
 dtyArgs-just () | ((ctor _ _) , _)
-dtyArgs-just () | ((mData _ _ _) , _)
+dtyArgs-just () | ((mData _ _ ars _) , _)
 dtyArgs-just () | ((mNat _ _ _ _) , _)
 dtyArgs-just () | ((mEmp _ _) , _)
 dtyArgs-just () | ((mUnit _ _ _) , _)
@@ -353,7 +353,7 @@ defArgs-just () | (one , _)
 defArgs-just () | (empty , _)
 defArgs-just () | ((dty _) , _)
 defArgs-just () | ((ctor _ _) , _)
-defArgs-just () | ((mData _ _ _) , _)
+defArgs-just () | ((mData _ _ ars _) , _)
 defArgs-just () | ((mNat _ _ _ _) , _)
 defArgs-just () | ((mEmp _ _) , _)
 defArgs-just () | ((mUnit _ _ _) , _)

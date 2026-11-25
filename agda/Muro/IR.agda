@@ -112,8 +112,12 @@ atomDecl di names = mkData "Atom" [] [] (map (λ s → mkCtor s (dty di)) names)
 atom : ∀ {n} → ℕ → Tm n
 atom ci = ctor 0 ci
 
+zeroArities : ∀ {A : Set} → List A → List ℕ
+zeroArities [] = []
+zeroArities (_ ∷ xs) = zero ∷ zeroArities xs
+
 matom : ∀ {n} → Tm n → Tm (suc n) → List (Tm n) → Tm n
-matom = mData
+matom e P bs = mData e P (zeroArities bs) bs
 
 atomCon : (names : List String) → F.Fin (length names) → Term
 atomCon names i = Con "Atom" (Data.List.Base.lookup names i) []
@@ -137,7 +141,7 @@ mutual
   size empty          = 1
   size (dty _)        = 1
   size (ctor _ _)     = 1
-  size (mData e P bs) = suc (size e + size P + sumSize bs)
+  size (mData e P ars bs) = suc (size e + size P + sumSize bs)
   size (mNat e P z s) = suc (size e + size P + size z + size s)
   size (mEmp e P)     = suc (size e + size P)
   size (mUnit e P u)  = suc (size e + size P + size u)
@@ -337,7 +341,7 @@ layoutOf σ (dty i) with hard (lookupData σ i)
 ... | fail e = fail e
 ... | ok d = ok (dataL (DataDecl.dname d))
 layoutOf _ (ctor _ _) = fail "c:unsupported"
-layoutOf _ (mData _ _ _) = fail "c:unsupported"
+layoutOf _ (mData _ _ ars _) = fail "c:unsupported"
 layoutOf _ (mNat _ _ _ _) = fail "c:unsupported"
 layoutOf _ (mEmp _ _) = fail "c:unsupported"
 layoutOf _ (mUnit _ _ _) = fail "c:unsupported"
@@ -463,7 +467,7 @@ mutual
   freeIdxs empty          = []
   freeIdxs (dty _)        = []
   freeIdxs (ctor _ _)     = []
-  freeIdxs (mData e P bs) = freeIdxs e ++ outers (freeIdxs P) ++ freeList bs
+  freeIdxs (mData e P ars bs) = freeIdxs e ++ outers (freeIdxs P) ++ freeList bs
   freeIdxs (mNat e P z s) = freeIdxs e ++ outers (freeIdxs P) ++ freeIdxs z ++ outers (freeIdxs s)
   freeIdxs (mEmp e P)     = freeIdxs e ++ outers (freeIdxs P)
   freeIdxs (mUnit e P u)  = freeIdxs e ++ outers (freeIdxs P) ++ freeIdxs u
@@ -713,7 +717,7 @@ step n ih t eq σ k ctx = go t eq
   go empty refl = fail "c:unsupported"
   go (dty _) refl = fail "c:unsupported"
   go (ctor di ci) refl = finishCtor ih σ di ci [] k
-  go (mData e mot bs) refl with call ih σ e (abc-a (size e) (size mot) (sumSize bs)) ctx k
+  go (mData e mot ars bs) refl with call ih σ e (abc-a (size e) (size mot) (sumSize bs)) ctx k
   ... | fail e' = fail e'
   ... | ok (mkE etm elay ess , k1) with dataKey elay
   ... | fail e' = fail e'
@@ -882,14 +886,16 @@ termOf (fail e) = fail e
 
 ------------------------------------------------------------------------
 -- Agreement. Each `refl` is the elaboration computing to that image.
--- `atom` and `matom` are `ctor` and `mData`; the equations are definitional.
+-- `atom` is `ctor`. `matom` is `mData` with a zero-arity list of the
+-- same length as the arm list; the equations are definitional.
 ------------------------------------------------------------------------
 
 atom-is-ctor : ∀ {n} → atom {n} 0 ≡ ctor {n} 0 0
 atom-is-ctor = refl
 
-matom-is-match : ∀ {n} → matom {n} ≡ mData {n}
-matom-is-match = refl
+matom-is-match : ∀ {n} (e : Tm n) P bs →
+  matom e P bs ≡ mData e P (zeroArities bs) bs
+matom-is-match _ _ _ = refl
 
 ascDesc : List String
 ascDesc = "asc" ∷ "desc" ∷ []
@@ -990,7 +996,7 @@ boxBranch : Tm 0
 boxBranch = lam erased nat (lam affine nat (var (F.zero {1})))
 
 boxMatch : Tm 0
-boxMatch = mData (app (app (ctor 0 0) ze) (su ze)) nat (boxBranch ∷ [])
+boxMatch = mData (app (app (ctor 0 0) ze) (su ze)) nat (suc (suc zero) ∷ []) (boxBranch ∷ [])
 
 box-erased : termOf (elaborate boxSig 0 [] boxMatch)
            ≡ ok (Match (Con "Box" "mk" (Su Ze ∷ []))

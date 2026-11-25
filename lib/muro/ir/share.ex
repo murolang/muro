@@ -111,6 +111,24 @@ defmodule Muro.IR.Share do
   end
 
   @doc """
+  Worst-path heavy work of `t` under the non-generated runs in `funs`.
+
+  This is the same measure the keep rule uses (`work/2`): each fold,
+  stream, and `uncons`, followed through calls, with the `:busy -> 1`
+  cycle break and the `max(body, 1)` floor on a heavy run.
+  """
+  def path_work(funs, t) when is_list(funs) do
+    by_name = for f <- funs, not Map.get(f, :generated, false), into: %{}, do: {f.name, f}
+    tab = :ets.new(:share_work, [:set, :private])
+
+    try do
+      work(t, %{by_name: by_name, heavy: heavy_set(by_name), work: tab})
+    after
+      :ets.delete(tab)
+    end
+  end
+
+  @doc """
   The test a fold may make before each octet to stop early, or `:none`.
 
   `step` is a generated fold step (`fold: true`); its last parameter is

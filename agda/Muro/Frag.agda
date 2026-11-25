@@ -51,7 +51,7 @@ data Frag where
   f-empty : Frag empty
   f-dty   : ∀ {i} → Frag (dty i)
   f-ctor  : ∀ {i j} → Frag (ctor i j)
-  f-mData : ∀ {e P bs} → Frag e → Frag P → FragL bs → Frag (mData e P bs)
+  f-mData : ∀ {e P ars bs} → Frag e → Frag P → FragL bs → Frag (mData e P ars bs)
   f-mNat  : ∀ {e P z s} → Frag e → Frag P → Frag z → Frag s → Frag (mNat e P z s)
   f-mEmp  : ∀ {e P} → Frag e → Frag P → Frag (mEmp e P)
   f-mUnit : ∀ {e P u} → Frag e → Frag P → Frag u → Frag (mUnit e P u)
@@ -160,7 +160,7 @@ Frag-unren ρ one f-one = f-one
 Frag-unren ρ empty f-empty = f-empty
 Frag-unren ρ (dty _) f-dty = f-dty
 Frag-unren ρ (ctor _ _) f-ctor = f-ctor
-Frag-unren ρ (mData e P bs) (f-mData Fe FP Fbs) =
+Frag-unren ρ (mData e P ars bs) (f-mData Fe FP Fbs) =
   f-mData (Frag-unren ρ e Fe) (Frag-unren (lift ρ) P FP) (FragL-unren ρ bs Fbs)
 Frag-unren ρ (mNat e P z s) (f-mNat Fe FP Fz Fs) =
   f-mNat (Frag-unren ρ e Fe) (Frag-unren (lift ρ) P FP) (Frag-unren ρ z Fz) (Frag-unren (lift ρ) s Fs)

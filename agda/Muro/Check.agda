@@ -18,7 +18,7 @@ open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_; _≤_; _<_; z≤n; s≤s)
+open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _≤ᵇ_; _<ᵇ_; _+_; _⊔_; _≤_; _<_; z≤n; s≤s)
 open import Data.Nat.Properties using (≡ᵇ⇒≡)
 open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
@@ -118,6 +118,11 @@ eqFin {suc _} (suc i) (suc j) = eqFin i j
 eqFin {suc _} zero    (suc _) = false
 eqFin {suc _} (suc _) zero    = false
 
+eqNatList : List ℕ → List ℕ → Bool
+eqNatList []       []       = true
+eqNatList (x ∷ xs) (y ∷ ys) = (x ≡ᵇ y) ∧ eqNatList xs ys
+eqNatList _        _        = false
+
 apps : ∀ {n} → Tm n → Tm n × List (Tm n)
 apps = unspine
 
@@ -127,6 +132,123 @@ nthQty (pi _ _ B) (suc i) = nthQty B i
 nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 
 ------------------------------------------------------------------------
+-- Mentions of a de Bruijn index, capped at two. A reusable beta
+-- argument is shared when the body mentions it twice on one path
+-- (`lib/muro/check.ex` `reused?` / `var_uses`). A match motive is
+-- not a mention. Arms are alternatives: the count is the max
+-- (`cap⊔`, like `arm_count`). A mention in the scrutinee and a
+-- mention in an arm sit on one path, so those two are added and
+-- capped at two (`cap`, like Elixir `cap`). An mData arm is a λ
+-- telescope for the constructor fields (`checkBrPi`); those
+-- domains are field types, which Elixir does not count
+-- (`var_uses(x + ar, b, 0)` on the body under `ar` binders).
+------------------------------------------------------------------------
+
+-- Elixir `cap`: 2 when n ≥ 2, m ≥ 2, or n + m ≥ 2, otherwise n + m.
+cap : ℕ → ℕ → ℕ
+cap n m = if (2 ≤ᵇ n) ∨ (2 ≤ᵇ m) ∨ (2 ≤ᵇ n + m) then 2 else n + m
+
+-- Max of two counts, capped at two. Arms are alternatives.
+cap⊔ : ℕ → ℕ → ℕ
+cap⊔ n m = if 2 ≤ᵇ n ⊔ m then 2 else n ⊔ m
+
+mutual
+  varUses : ∀ {n} → ℕ → Tm n → ℕ → ℕ
+  varUses x t n = if 2 ≤ᵇ n then 2 else varUses′ x t n
+
+  varUses′ : ∀ {n} → ℕ → Tm n → ℕ → ℕ
+  varUses′ x (var y) n = if x ≡ᵇ toℕ y then suc n else n
+  varUses′ _ typ n = n
+  varUses′ x (pi _ A B) n = varUses (suc x) B (varUses x A n)
+  varUses′ x (lam _ A t) n = varUses (suc x) t (varUses x A n)
+  varUses′ x (app f a) n = varUses x a (varUses x f n)
+  varUses′ _ nat n = n
+  varUses′ _ ze n = n
+  varUses′ x (su t) n = varUses x t n
+  varUses′ _ unit n = n
+  varUses′ _ one n = n
+  varUses′ _ empty n = n
+  varUses′ _ (dty _) n = n
+  varUses′ _ (ctor _ _) n = n
+  varUses′ x (mData e _ ars bs) n = cap (varUses x e n) (armUses x ars bs)
+  varUses′ x (mNat e _ z s) n =
+    cap (varUses x e n) (cap⊔ (varUses x z 0) (varUses (suc x) s 0))
+  varUses′ x (mEmp e _) n = varUses x e n
+  varUses′ x (mUnit e _ u) n = varUses x u (varUses x e n)
+  varUses′ x (idt A a b) n = varUses x b (varUses x a (varUses x A n))
+  varUses′ _ rfl n = n
+  varUses′ x (rwt e P t) n = varUses x t (varUses (suc x) P (varUses x e n))
+  varUses′ _ (def _) n = n
+  varUses′ x (ann e A) n = varUses x A (varUses x e n)
+  varUses′ x (prod A B) n = varUses x B (varUses x A n)
+  varUses′ x (pair a b) n = varUses x b (varUses x a n)
+  varUses′ x (letp e t) n = varUses (suc (suc x)) t (varUses x e n)
+  varUses′ x (nu F) n = varUses (suc x) F n
+  varUses′ x (unf s f) n = varUses x f (varUses x s n)
+  varUses′ x (ucons e) n = varUses x e n
+  varUses′ _ i64 n = n
+  varUses′ _ f32ty n = n
+  varUses′ x (tensor d s) n = varUses x s (varUses x d n)
+  varUses′ x (addi a b) n = varUses x b (varUses x a n)
+  varUses′ x (muli a b) n = varUses x b (varUses x a n)
+  varUses′ x (addt t u) n = varUses x u (varUses x t n)
+  varUses′ x (toi64 t) n = varUses x t n
+  varUses′ x (packi a b) n = varUses x b (varUses x a n)
+  varUses′ x (word _ ts) n = varUsesList x ts n
+
+  varUsesList : ∀ {n} → ℕ → List (Tm n) → ℕ → ℕ
+  varUsesList _ [] n = n
+  varUsesList x (t ∷ ts) n = varUsesList x ts (varUses x t n)
+
+  -- Skip exactly `ar` leading λs without counting their domains, then
+  -- count the body at `x + ar`. Mirrors Elixir `var_uses(x + ar, b, 0)`.
+  -- A λ that belongs to the body (a Π motive) is not skipped.
+  skipArmLams : ∀ {n} → ℕ → ℕ → Tm n → ℕ
+  skipArmLams x zero t = varUses x t 0
+  skipArmLams x (suc ar) (lam _ _ t) = skipArmLams (suc x) ar t
+  skipArmLams x (suc _) t = varUses x t 0
+
+  -- Zip constructor arities with arms. Check, ⊢, and ⊨ require
+  -- `ars` to equal the constructors' field counts (`ctorFieldArities`),
+  -- so this peels exactly the field λs. A short list (ill-typed)
+  -- contributes 0.
+  armUses : ∀ {n} → ℕ → List ℕ → List (Tm n) → ℕ
+  armUses _ _ [] = 0
+  armUses _ [] _ = 0
+  armUses x (ar ∷ ars) (b ∷ bs) = cap⊔ (skipArmLams x ar b) (armUses x ars bs)
+
+reused : ∀ {n} → Tm n → Bool
+reused t = 2 ≤ᵇ varUses 0 t 0
+
+-- When a beta is shared: reusable grade, the body mentions the binder
+-- twice, and the remaining fuel is at least 2, so the argument can be
+-- entered at `suc k` rather than 0.
+--
+-- `noShare` is indexed by a reason, so ShareView holds of a reusable
+-- twice-mentioned body at fuel ≥ 2 only via `shareHere`.
+data NoShareReason (k : ℕ) (q : Qty) {n} (t : Tm (suc n)) : Set where
+  isAffine  : q ≡ affine → NoShareReason k q t
+  isErased  : q ≡ erased → NoShareReason k q t
+  lowFuel   : k < 2 → NoShareReason k q t
+  notReused : reused t ≡ false → NoShareReason k q t
+
+data ShareView : ℕ → Qty → ∀ {n} → Tm (suc n) → Set where
+  shareHere : ∀ k {n} (t : Tm (suc n)) → reused t ≡ true → ShareView (suc (suc k)) reuse t
+  noShare   : ∀ k q {n} (t : Tm (suc n)) → NoShareReason k q t → ShareView k q t
+
+shareViewOf : ∀ k q {n} (t : Tm (suc n)) → (b : Bool) → b ≡ reused t → ShareView k q t
+-- Affine and erased first so the case tree splits on `q` first and
+-- these two reduce at a variable `k` (needed by `noshare-affine`).
+shareViewOf k             affine t _    _ = noShare k affine t (isAffine refl)
+shareViewOf k             erased t _    _ = noShare k erased t (isErased refl)
+shareViewOf (suc (suc k)) reuse t true  p = shareHere k t (sym p)
+shareViewOf (suc (suc k)) reuse t false p = noShare (suc (suc k)) reuse t (notReused (sym p))
+shareViewOf zero          reuse t _    _ = noShare zero reuse t (lowFuel (s≤s z≤n))
+shareViewOf (suc zero)    reuse t _    _ = noShare (suc zero) reuse t (lowFuel (s≤s (s≤s z≤n)))
+
+shareView : ∀ k q {n} (t : Tm (suc n)) → ShareView k q t
+shareView k q t = shareViewOf k q t (reused t) refl
+
 -- Weak-head normalisation (β, ι, δ, ann). Fuel is the clock: every
 -- recursive call spends one unit, and running out is a failure of its
 -- own (outOfFuel), never a silently unreduced term.
@@ -145,9 +267,18 @@ idStep s          q A = ok (ucons (unf s (lam q A (var zero))))
 mutual
   whnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   whnf zero    _ _ = fail outOfFuel
+  -- A reusable argument mentioned at least twice on one path is
+  -- reduced once, so later mentions see that value. Fuel is a depth
+  -- bound: the argument is entered at one less than the body, and the
+  -- body keeps `k`, the call-by-name bound for the same beta
+  -- (`lib/muro/check.ex` `whnf_app`). Affine and erased binders stay
+  -- call-by-name. Fuel 1 would enter the argument at 0, and `whnf 0`
+  -- fails before looking, so that beta stays call-by-name too. Elixir
+  -- also keeps a linear binder call-by-name; Agda `Qty` has no linear
+  -- constructor.
   whnf (suc k) σ (app f a) with whnf k σ f
   ... | fail e            = fail e
-  ... | ok (lam _ _ t)    = whnf k σ (inst t a)
+  ... | ok (lam q _ t)    = whnfApp k σ q t a
   ... | ok f′             = ok (app f′ a)
   whnf (suc k) σ (mNat e P z s) with whnf k σ e
   ... | fail m      = fail m
@@ -159,7 +290,7 @@ mutual
   ... | ok one   = whnf k σ u
   ... | ok e′    = ok (mUnit e′ P u)
   whnf (suc k) σ (mEmp e P) = whnf k σ e >>= λ e′ → ok (mEmp e′ P)
-  whnf (suc k) σ (mData e P bs) = whnf k σ e >>= λ e′ → dataWhnf k σ e′ P bs
+  whnf (suc k) σ (mData e P ars bs) = whnf k σ e >>= λ e′ → dataWhnf k σ e′ P ars bs
   whnf (suc k) σ (def i) with lookupDef σ i
   ... | ok d    = whnf k σ (closed (Def.dbody d))
   ... | fail _  = ok (def i)
@@ -179,6 +310,36 @@ mutual
       nothing  → ok (word op ts′)
   whnf (suc _) _ t = ok t
 
+  whnfApp′ : ∀ {n} k σ q (t : Tm (suc n)) (a : Tm n)
+    → ShareView k q t → Result (Tm n)
+  whnfApp′ _ σ _ t a (noShare k′ _ _ _) = whnf k′ σ (inst t a)
+  whnfApp′ _ σ _ t a (shareHere k′ _ _) =
+    whnf (suc k′) σ a >>= λ a′ → whnf (suc (suc k′)) σ (inst t a′)
+
+  whnfApp : ∀ {n} → ℕ → Sig → Qty → Tm (suc n) → Tm n → Result (Tm n)
+  whnfApp k σ q t a = whnfApp′ k σ q t a (shareView k q t)
+
+  share-eq′ : ∀ {n} k σ (t : Tm (suc n)) (a : Tm n)
+    (b : Bool) (e : b ≡ reused t) → b ≡ true
+    → whnfApp′ (suc (suc k)) σ reuse t a (shareViewOf (suc (suc k)) reuse t b e)
+      ≡ (whnf (suc k) σ a >>= λ a′ → whnf (suc (suc k)) σ (inst t a′))
+  share-eq′ k σ t a true  e refl = refl
+  share-eq′ k σ t a false e ()
+
+  share-eq : ∀ {n} k σ (t : Tm (suc n)) (a : Tm n)
+    → reused t ≡ true
+    → whnfApp (suc (suc k)) σ reuse t a
+      ≡ (whnf (suc k) σ a >>= λ a′ → whnf (suc (suc k)) σ (inst t a′))
+  share-eq k σ t a p = share-eq′ k σ t a (reused t) refl p
+
+  noshare-affine : ∀ {n} k σ (t : Tm (suc n)) a
+    → whnfApp k σ affine t a ≡ whnf k σ (inst t a)
+  noshare-affine k σ t a = refl
+
+  noshare-erased : ∀ {n} k σ (t : Tm (suc n)) a
+    → whnfApp k σ erased t a ≡ whnf k σ (inst t a)
+  noshare-erased k σ t a = refl
+
   whnfList : ∀ {n} → ℕ → Sig → List (Tm n) → Result (List (Tm n))
   whnfList zero _ [] = ok []
   whnfList zero _ (_ ∷ _) = fail outOfFuel
@@ -197,13 +358,13 @@ mutual
   uconsWhnf _ _ (unf s (lam q A (var zero))) = idStep s q A
   uconsWhnf _ _ e = ok (ucons e)
 
-  dataWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm (suc n) → List (Tm n) → Result (Tm n)
-  dataWhnf k σ e P bs with ctorSpine e
+  dataWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm (suc n) → List ℕ → List (Tm n) → Result (Tm n)
+  dataWhnf k σ e P ars bs with ctorSpine e
   ... | just (_ , ci , args) =
     case lookupList bs ci of λ where
       (ok b)  → whnf k σ (appsFrom b args)
-      (fail _) → ok (mData e P bs)
-  ... | nothing = ok (mData e P bs)
+      (fail _) → ok (mData e P ars bs)
+  ... | nothing = ok (mData e P ars bs)
 
 -- Head of the spine isData inspects. One constructor per answer, and a
 -- catch-all for every other head, so the split stays the size of this
@@ -372,8 +533,8 @@ mutual
   synEqD empty          empty          = true
   synEqD (dty i)        (dty j)        = i ≡ᵇ j
   synEqD (ctor i j)     (ctor i′ j′)   = (i ≡ᵇ i′) ∧ (j ≡ᵇ j′)
-  synEqD (mData e P bs) (mData e′ P′ bs′) =
-    synEq e e′ ∧ synEq P P′ ∧ synEqList bs bs′
+  synEqD (mData e P ars bs) (mData e′ P′ ars′ bs′) =
+    eqNatList ars ars′ ∧ synEq e e′ ∧ synEq P P′ ∧ synEqList bs bs′
   synEqD (mNat e P z s) (mNat e′ P′ z′ s′) =
     synEq e e′ ∧ synEq P P′ ∧ synEq z z′ ∧ synEq s s′
   synEqD (mEmp e P)     (mEmp e′ P′)   = synEq e e′ ∧ synEq P P′
@@ -407,7 +568,7 @@ inSeen i (j ∷ js) = (i ≡ᵇ j) ∨ inSeen i js
 
 -- An eliminator whnf did not ι-reduce. The match did not fire.
 stuckForm : ∀ {n} → Tm n → Bool
-stuckForm (mData _ _ _)   = true
+stuckForm (mData _ _ ars _)   = true
 stuckForm (mNat _ _ _ _)  = true
 stuckForm (mEmp _ _)      = true
 stuckForm (mUnit _ _ _)   = true
@@ -489,7 +650,8 @@ mutual
   convND _ _ _    (dty i)       (dty j)       = guard "data index mismatch" (i ≡ᵇ j)
   convND _ _ _    (ctor i j)    (ctor i′ j′)  =
     guard "constructor mismatch" ((i ≡ᵇ i′) ∧ (j ≡ᵇ j′))
-  convND k σ seen (mData e P bs) (mData e′ P′ bs′) =
+  convND k σ seen (mData e P ars bs) (mData e′ P′ ars′ bs′) =
+    guard "mData arity mismatch" (eqNatList ars ars′) >>
     convGo k σ seen e e′ >> convGo k σ seen P P′ >> convArgs seen k σ bs bs′
   convND _ _ _    ze            ze            = ok tt
   convND _ _ _    one           one           = ok tt
@@ -555,9 +717,9 @@ data _≈[_]_ {n} : Tm n → Sig → Tm n → Set where
   ≈-ιuncons : ∀ {σ s f h t} →
               app f s ≈[ σ ] pair h t →
               ucons (unf s f) ≈[ σ ] pair h (unf t f)
-  ≈-ιdata  : ∀ {σ di ci args P bs b} →
+  ≈-ιdata  : ∀ {σ di ci args P ars bs b} →
              lookupList bs ci ≡ ok b →
-             mData (appsFrom (ctor di ci) args) P bs ≈[ σ ] appsFrom b args
+             mData (appsFrom (ctor di ci) args) P ars bs ≈[ σ ] appsFrom b args
 
 ------------------------------------------------------------------------
 -- Spec: bidirectional judgments.
@@ -641,10 +803,11 @@ data _,_⊢[_]_⇒_ σ Γ where
     → lookupData σ i ≡ ok d
     → σ , Γ ⊢[ spec ] dty i ⇒ dtyType (DataDecl.pqtys d) (DataDecl.idxs d)
 
-  ⇒-mData : ∀ {m di params idxs e P bs d}
+  ⇒-mData : ∀ {m di params idxs e P ars bs d}
     → lookupData σ di ≡ ok d
+    → ars ≡ ctorFieldArities d
     → σ , Γ ⊢[ m ] e ⇐ appsFrom (dty di) (List._++_ params idxs)
-    → σ , Γ ⊢[ m ] mData e P bs ⇒ motApp P idxs e
+    → σ , Γ ⊢[ m ] mData e P ars bs ⇒ motApp P idxs e
 
   ⇒-mNat : ∀ {m e P z s}
     → σ , Γ ⊢[ m ] e ⇐ nat
@@ -1021,7 +1184,7 @@ mutual
   hasSelf s (nu F)         = hasSelf s F
   hasSelf s (dty _)        = false
   hasSelf s (ctor _ _)     = false
-  hasSelf s (mData e P bs) = hasSelf s e ∨ hasSelf s P ∨ hasSelfList s bs
+  hasSelf s (mData e P ars bs) = hasSelf s e ∨ hasSelf s P ∨ hasSelfList s bs
   hasSelf s (mNat e P z u) = hasSelf s e ∨ hasSelf s P ∨ hasSelf s z ∨ hasSelf s u
   hasSelf s (mEmp e P)     = hasSelf s e ∨ hasSelf s P
   hasSelf s (mUnit e P u)  = hasSelf s e ∨ hasSelf s P ∨ hasSelf s u
@@ -1113,6 +1276,31 @@ true≢false ()
 fail≢ok : ∀ {A : Set} {e : String} {a : A} → fail e ≡ ok a → ⊥
 fail≢ok ()
 
+-- Outcome of a reusable beta: call-by-name at fuel k, or the argument
+-- was shared (remaining fuel at least 2) and reduced first.
+data ReuseWhnf {n} (k : ℕ) (σ : Sig) (t : Tm (suc n)) (a u : Tm n) : Set where
+  cbn    : whnf k σ (inst t a) ≡ ok u → ReuseWhnf k σ t a u
+  shared : ∀ k′ a′ → k ≡ suc (suc k′)
+         → whnf (suc k′) σ a ≡ ok a′
+         → whnf k σ (inst t a′) ≡ ok u
+         → ReuseWhnf k σ t a u
+
+reuseWhnf′ : ∀ {n} k σ (t : Tm (suc n)) (a u : Tm n)
+  (b : Bool) (e : b ≡ reused t)
+  → whnfApp′ k σ reuse t a (shareViewOf k reuse t b e) ≡ ok u
+  → ReuseWhnf k σ t a u
+reuseWhnf′ zero           σ t a u b e eq = cbn eq
+reuseWhnf′ (suc zero)     σ t a u b e eq = cbn eq
+reuseWhnf′ (suc (suc k′)) σ t a u false e eq = cbn eq
+reuseWhnf′ (suc (suc k′)) σ t a u true  e eq with whnf (suc k′) σ a in aeq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok a′  = shared k′ a′ refl aeq eq
+
+reuseWhnf : ∀ {n} k σ (t : Tm (suc n)) (a u : Tm n)
+  → whnfApp k σ reuse t a ≡ ok u
+  → ReuseWhnf k σ t a u
+reuseWhnf k σ t a u eq = reuseWhnf′ k σ t a u (reused t) refl eq
+
 ok≢fail : ∀ {A : Set} {a : A} {e : String} → ok a ≡ fail e → ⊥
 ok≢fail ()
 
@@ -1162,7 +1350,7 @@ mutual
   tail-go B empty false nb eq = absent-only B empty nb eq refl
   tail-go B (dty i) false nb eq = absent-only B (dty i) nb eq refl
   tail-go B (ctor i j) false nb eq = absent-only B (ctor i j) nb eq refl
-  tail-go B (mData e P bs) false nb eq = absent-only B (mData e P bs) nb eq refl
+  tail-go B (mData e P ars bs) false nb eq = absent-only B (mData e P ars bs) nb eq refl
   tail-go B (mNat e P z s) false nb eq = absent-only B (mNat e P z s) nb eq refl
   tail-go B (mEmp e P) false nb eq = absent-only B (mEmp e P) nb eq refl
   tail-go B (mUnit e P u) false nb eq = absent-only B (mUnit e P u) nb eq refl
@@ -1219,7 +1407,7 @@ mutual
   call-ok _ empty eq = ⊥-elim (boom refl eq)
   call-ok _ (dty _) eq = ⊥-elim (boom refl eq)
   call-ok _ (ctor _ _) eq = ⊥-elim (boom refl eq)
-  call-ok _ (mData _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mData _ _ ars _) eq = ⊥-elim (boom refl eq)
   call-ok _ (mNat _ _ _ _) eq = ⊥-elim (boom refl eq)
   call-ok _ (mEmp _ _) eq = ⊥-elim (boom refl eq)
   call-ok _ (mUnit _ _ _) eq = ⊥-elim (boom refl eq)
@@ -1278,7 +1466,7 @@ mutual
   occℕ i (lam _ A t)    = occℕ i A ∨ occℕ (suc i) t
   occℕ i (app f a)      = occℕ i f ∨ occℕ i a
   occℕ i (su t)         = occℕ i t
-  occℕ i (mData e P bs) = occℕ i e ∨ occℕ (suc i) P ∨ occℕList i bs
+  occℕ i (mData e P ars bs) = occℕ i e ∨ occℕ (suc i) P ∨ occℕList i bs
   occℕ i (mNat e P z s) = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i z ∨ occℕ (suc i) s
   occℕ i (mEmp e P)     = occℕ i e ∨ occℕ (suc i) P
   occℕ i (mUnit e P u)  = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i u
@@ -1451,7 +1639,7 @@ pairStep-ok _ one ()
 pairStep-ok _ empty ()
 pairStep-ok _ (dty _) ()
 pairStep-ok _ (ctor _ _) ()
-pairStep-ok _ (mData _ _ _) ()
+pairStep-ok _ (mData _ _ ars _) ()
 pairStep-ok _ (mNat _ _ _ _) ()
 pairStep-ok _ (mEmp _ _) ()
 pairStep-ok _ (mUnit _ _ _) ()
@@ -1493,7 +1681,7 @@ guardedStep-ok _ one ()
 guardedStep-ok _ empty ()
 guardedStep-ok _ (dty _) ()
 guardedStep-ok _ (ctor _ _) ()
-guardedStep-ok _ (mData _ _ _) ()
+guardedStep-ok _ (mData _ _ ars _) ()
 guardedStep-ok _ (mNat _ _ _ _) ()
 guardedStep-ok _ (mEmp _ _) ()
 guardedStep-ok _ (mUnit _ _ _) ()
@@ -1542,7 +1730,7 @@ mutual
   occurs x (su t)         = occurs x t
   occurs x (dty _)        = false
   occurs x (ctor _ _)     = false
-  occurs x (mData e P bs) = occurs x e ∨ occurs (suc x) P ∨ occursList x bs
+  occurs x (mData e P ars bs) = occurs x e ∨ occurs (suc x) P ∨ occursList x bs
   occurs x (mNat e P z s) = occurs x e ∨ occurs (suc x) P ∨ occurs x z ∨ occurs (suc x) s
   occurs x (mEmp e P)     = occurs x e ∨ occurs (suc x) P
   occurs x (mUnit e P u)  = occurs x e ∨ occurs (suc x) P ∨ occurs x u
@@ -1604,7 +1792,7 @@ mutual
   occursD i (pair a b)     = occursD i a ∨ occursD i b
   occursD i (idt A a b)    = occursD i A ∨ occursD i a ∨ occursD i b
   occursD i (mNat e P z s) = occursD i e ∨ occursD i P ∨ occursD i z ∨ occursD i s
-  occursD i (mData e P bs) = occursD i e ∨ occursD i P ∨ occursDList i bs
+  occursD i (mData e P ars bs) = occursD i e ∨ occursD i P ∨ occursDList i bs
   occursD i (mEmp e P)     = occursD i e ∨ occursD i P
   occursD i (mUnit e P u)  = occursD i e ∨ occursD i P ∨ occursD i u
   occursD i (rwt e P t)    = occursD i e ∨ occursD i P ∨ occursD i t
@@ -1677,7 +1865,7 @@ mutual
   absentGo k σ i seen (toi64 t)      = absentD k σ i seen t
   absentGo k σ i seen (packi a b)    = absentD k σ i seen a ∧ absentD k σ i seen b
   absentGo k σ i seen (word _ ts)    = absentDList k σ i seen ts
-  absentGo k σ i seen (mData e P bs) = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentDList k σ i seen bs
+  absentGo k σ i seen (mData e P ars bs) = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentDList k σ i seen bs
   absentGo k σ i seen (dty j)        = absentData k σ i seen j
   absentGo _ _ _ _ _                 = true
 
@@ -2230,10 +2418,11 @@ mutual
   infer′ k σ rs Γ (ctor _ _) m _ = fail "constructor requires an expected data type"
 
   -- ⇒-mData
-  infer′ k σ rs Γ (mData e P bs) m _ =
+  infer′ k σ rs Γ (mData e P ars bs) m _ =
     infer k σ rs Γ m e >>= λ (et , eu) →
     viewData k σ et >>= λ (di , params , idxs) →
     lookupData σ di >>= λ d →
+    guard "mData constructor arity mismatch" (eqNatList ars (ctorFieldArities d)) >>
     checkMotive k σ rs Γ di (DataDecl.idxs d) params P >>
     let motFun = firstMotLam di (DataDecl.idxs d) params P
     in checkBranches k σ rs Γ m di (scrutOk rs e) params idxs motFun 0 (DataDecl.ctors d) bs >>= λ bu →
@@ -2724,7 +2913,7 @@ mutual
     seedWalk k σ B Γ m A >> seedWalk k σ B (ext Γ q A) m t
   seedWalk k σ B Γ m (pi q A B′)    =
     seedWalk k σ B Γ m A >> seedWalk k σ B (ext Γ q A) m B′
-  seedWalk k σ B Γ m (mData e P bs) =
+  seedWalk k σ B Γ m (mData e P ars bs) =
     seedWalk k σ B Γ m e >>
     seedWalk k σ B (mDataΓ k σ Γ m e) m P >>
     seedWalkList k σ B Γ m bs
@@ -2856,7 +3045,7 @@ mutual
   mentions (pi _ A B)     = cats (mentions A) (mentions B)
   mentions (lam _ A t)    = cats (mentions A) (mentions t)
   mentions (su t)         = mentions t
-  mentions (mData e P bs) = cats (mentions e) (cats (mentions P) (mentionsList bs))
+  mentions (mData e P ars bs) = cats (mentions e) (cats (mentions P) (mentionsList bs))
   mentions (mNat e P z s) = cats (mentions e) (cats (mentions P) (cats (mentions z) (mentions s)))
   mentions (mEmp e P)     = cats (mentions e) (mentions P)
   mentions (mUnit e P u)  = cats (mentions e) (cats (mentions P) (mentions u))

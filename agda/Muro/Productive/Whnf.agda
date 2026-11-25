@@ -4,7 +4,9 @@
 -- The checker's whnf unfolds a definition whenever the lookup succeeds,
 -- at every mode. spec permits every definition, so the witness is at
 -- spec. No fragment hypothesis: a stuck numeral, float, or tensor is a
--- reflexive step, the same way a stuck variable is.
+-- reflexive step, the same way a stuck variable is. A reusable beta
+-- that shares its argument is still a ⇛* reduct: a ⇛* a′ gives
+-- inst t a ⇛* inst t a′ (⇛*-inst).
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -15,18 +17,20 @@ open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥-elim)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc)
+open import Data.Nat.Base using (ℕ; zero; suc; _<_)
+open import Data.Nat.Properties using (n<1+n; n≤1+n)
+open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 import Data.Fin.Base as Fin
 open import Data.Product.Base using (_×_; _,_)
 open import Relation.Binary.PropositionalEquality.Core
   using (_≡_; refl; sym; trans; cong; subst)
 
-open import Muro.Base using (Mode; run; evid; spec; ok; fail)
+open import Muro.Base using (Mode; run; evid; spec; ok; fail; Qty; affine; reuse; erased)
 open import Muro.Syntax
 open import Muro.Subst using (closed; inst; inst₂; appsFrom)
 open import Muro.Env using (Sig; Def; lookupDef; lookupList; allowedDef)
 open import Muro.Spine using (ctorSpine; ctorSpine-just)
-open import Muro.Check using (whnf; whnfList; uconsWhnf; dataWhnf; fail≢ok)
+open import Muro.Check using (whnf; whnfList; uconsWhnf; dataWhnf; fail≢ok; reuseWhnf; ReuseWhnf; cbn; shared)
 open import Muro.Word using (wordStep)
 open import Muro.Reduction
 
@@ -61,10 +65,10 @@ mEmp-star ⇛*-refl = ⇛*-refl
 mEmp-star {P = P} (⇛*-step d r) =
   ⇛*-step (⇛-mEmp d (⇛-refl P)) (mEmp-star r)
 
-mData-star : ∀ {σ n} {e e′ : Tm n} {P bs}
-  → σ ⊢[ spec ] e ⇛* e′ → σ ⊢[ spec ] mData e P bs ⇛* mData e′ P bs
+mData-star : ∀ {σ n} {e e′ : Tm n} {P ars bs}
+  → σ ⊢[ spec ] e ⇛* e′ → σ ⊢[ spec ] mData e P ars bs ⇛* mData e′ P ars bs
 mData-star ⇛*-refl = ⇛*-refl
-mData-star {P = P} {bs = bs} (⇛*-step d r) =
+mData-star {P = P} {ars = ars} {bs = bs} (⇛*-step d r) =
   ⇛*-step (⇛-mData d (⇛-refl P) (⇛L-refl bs)) (mData-star r)
 
 letp-star : ∀ {σ n} {e e′ : Tm n} {t}
@@ -112,7 +116,7 @@ ucons-go k σ (unf (one) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (one) (
 ucons-go k σ (unf (empty) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (empty) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (dty wi) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (dty wi) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (ctor wi wj) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (ctor wi wj) (lam q1 A1 (var Fin.zero))) v eq
-ucons-go k σ (unf (mData we wP wbs) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mData we wP wbs) (lam q1 A1 (var Fin.zero))) v eq
+ucons-go k σ (unf (mData we wP ars wbs) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mData we wP ars wbs) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (mNat we wP wz ws) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mNat we wP wz ws) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (mEmp we wP) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mEmp we wP) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (mUnit we wP wu) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mUnit we wP wu) (lam q1 A1 (var Fin.zero))) v eq
@@ -149,7 +153,7 @@ ucons-go k σ (unf s (lam q1 A1 (one))) v eq = stay σ (unf s (lam q1 A1 (one)))
 ucons-go k σ (unf s (lam q1 A1 (empty))) v eq = stay σ (unf s (lam q1 A1 (empty))) v eq
 ucons-go k σ (unf s (lam q1 A1 (dty wi))) v eq = stay σ (unf s (lam q1 A1 (dty wi))) v eq
 ucons-go k σ (unf s (lam q1 A1 (ctor wi wj))) v eq = stay σ (unf s (lam q1 A1 (ctor wi wj))) v eq
-ucons-go k σ (unf s (lam q1 A1 (mData we wP wbs))) v eq = stay σ (unf s (lam q1 A1 (mData we wP wbs))) v eq
+ucons-go k σ (unf s (lam q1 A1 (mData we wP ars wbs))) v eq = stay σ (unf s (lam q1 A1 (mData we wP ars wbs))) v eq
 ucons-go k σ (unf s (lam q1 A1 (mNat we wP wz ws))) v eq = stay σ (unf s (lam q1 A1 (mNat we wP wz ws))) v eq
 ucons-go k σ (unf s (lam q1 A1 (mEmp we wP))) v eq = stay σ (unf s (lam q1 A1 (mEmp we wP))) v eq
 ucons-go k σ (unf s (lam q1 A1 (mUnit we wP wu))) v eq = stay σ (unf s (lam q1 A1 (mUnit we wP wu))) v eq
@@ -184,7 +188,7 @@ ucons-go k σ (unf s (one)) v eq = stay σ (unf s (one)) v eq
 ucons-go k σ (unf s (empty)) v eq = stay σ (unf s (empty)) v eq
 ucons-go k σ (unf s (dty wi)) v eq = stay σ (unf s (dty wi)) v eq
 ucons-go k σ (unf s (ctor wi wj)) v eq = stay σ (unf s (ctor wi wj)) v eq
-ucons-go k σ (unf s (mData we wP wbs)) v eq = stay σ (unf s (mData we wP wbs)) v eq
+ucons-go k σ (unf s (mData we wP ars wbs)) v eq = stay σ (unf s (mData we wP ars wbs)) v eq
 ucons-go k σ (unf s (mNat we wP wz ws)) v eq = stay σ (unf s (mNat we wP wz ws)) v eq
 ucons-go k σ (unf s (mEmp we wP)) v eq = stay σ (unf s (mEmp we wP)) v eq
 ucons-go k σ (unf s (mUnit we wP wu)) v eq = stay σ (unf s (mUnit we wP wu)) v eq
@@ -220,7 +224,7 @@ ucons-go k σ (one) v eq = stay σ (one) v eq
 ucons-go k σ (empty) v eq = stay σ (empty) v eq
 ucons-go k σ (dty wi) v eq = stay σ (dty wi) v eq
 ucons-go k σ (ctor wi wj) v eq = stay σ (ctor wi wj) v eq
-ucons-go k σ (mData we wP wbs) v eq = stay σ (mData we wP wbs) v eq
+ucons-go k σ (mData we wP ars wbs) v eq = stay σ (mData we wP ars wbs) v eq
 ucons-go k σ (mNat we wP wz ws) v eq = stay σ (mNat we wP wz ws) v eq
 ucons-go k σ (mEmp we wP) v eq = stay σ (mEmp we wP) v eq
 ucons-go k σ (mUnit we wP wu) v eq = stay σ (mUnit we wP wu) v eq
@@ -289,414 +293,438 @@ word-cong* {σ} {op = op} red = only* (go red)
   go (⇛L*-∷ {a′ = a′} {as = as} ra ras) =
     ow-trans (headOW as ra) (pad a′ (go ras))
 
-whnf-red : ∀ {n} k (σ : Sig) (t v : Tm n)
-  → whnf k σ t ≡ ok v
-  → σ ⊢[ spec ] t ⇛* v
-whnf-red zero σ t v ()
-whnf-red (suc k) σ (app f a) v eq with whnf k σ f in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok (lam q A t) =
-  ⇛*-trans (app-star (whnf-red k σ f (lam q A t) weq))
-    (⇛*-trans (⇛*-one (⇛-β (⇛-refl t) (⇛-refl a)))
-              (whnf-red k σ (inst t a) v eq))
+-- Opaque outside this block so Productive does not unfold the
+-- well-founded `go` proof.
+abstract
+  whnf-red : ∀ {n} k (σ : Sig) (t v : Tm n)
+    → whnf k σ t ≡ ok v
+    → σ ⊢[ spec ] t ⇛* v
+  whnf-red k σ t v eq = go k (<-wellFounded k) σ t v eq
+    where
+    go : ∀ {n} k → Acc _<_ k → (σ : Sig) (t v : Tm n)
+      → whnf k σ t ≡ ok v
+      → σ ⊢[ spec ] t ⇛* v
+    go zero _ σ t v ()
+    go (suc k) (acc rs) σ (app f a) v eq with whnf k σ f in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok (lam q A t) with q
+    go (suc k) (acc rs) σ (app f a) v eq | ok (lam q A t) | reuse with reuseWhnf k σ t a v eq
+    go (suc k) (acc rs) σ (app f a) v eq | ok (lam q A t) | reuse | cbn eq′ =
+      ⇛*-trans (app-star (go k (rs (n<1+n k)) σ f (lam reuse A t) weq))
+        (⇛*-trans (⇛*-one (⇛-β (⇛-refl t) (⇛-refl a)))
+                  (go k (rs (n<1+n k)) σ (inst t a) v eq′))
+    go (suc k) (acc rs) σ (app f a) v eq | ok (lam q A t) | reuse | shared k′ a′ refl aeq beq =
+      ⇛*-trans (app-star (go k (rs (n<1+n k)) σ f (lam reuse A t) weq))
+        (⇛*-trans (⇛*-one (⇛-β (⇛-refl t) (⇛-refl a)))
+          (⇛*-trans (⇛*-inst t (go (suc k′) (rs (n≤1+n (suc (suc k′)))) σ a a′ aeq))
+                    (go k (rs (n<1+n k)) σ (inst t a′) v beq)))
+    go (suc k) (acc rs) σ (app f a) v eq | ok (lam q A t) | affine =
+      ⇛*-trans (app-star (go k (rs (n<1+n k)) σ f (lam affine A t) weq))
+        (⇛*-trans (⇛*-one (⇛-β (⇛-refl t) (⇛-refl a)))
+                  (go k (rs (n<1+n k)) σ (inst t a) v eq))
+    go (suc k) (acc rs) σ (app f a) v eq | ok (lam q A t) | erased =
+      ⇛*-trans (app-star (go k (rs (n<1+n k)) σ f (lam erased A t) weq))
+        (⇛*-trans (⇛*-one (⇛-β (⇛-refl t) (⇛-refl a)))
+                  (go k (rs (n<1+n k)) σ (inst t a) v eq))
 
-whnf-red (suc k) σ (app f a) v eq | ok (var wx) with whnf-red k σ f (var wx) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (typ) with whnf-red k σ f (typ) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (pi wq wA wB) with whnf-red k σ f (pi wq wA wB) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (app wg wb) with whnf-red k σ f (app wg wb) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (nat) with whnf-red k σ f (nat) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (ze) with whnf-red k σ f (ze) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (su wu) with whnf-red k σ f (su wu) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (unit) with whnf-red k σ f (unit) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (one) with whnf-red k σ f (one) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (empty) with whnf-red k σ f (empty) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (dty wi) with whnf-red k σ f (dty wi) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (ctor wi wj) with whnf-red k σ f (ctor wi wj) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (mData we wP wbs) with whnf-red k σ f (mData we wP wbs) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (mNat we wP wz ws) with whnf-red k σ f (mNat we wP wz ws) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (mEmp we wP) with whnf-red k σ f (mEmp we wP) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (mUnit we wP wu) with whnf-red k σ f (mUnit we wP wu) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (idt wA wa wb) with whnf-red k σ f (idt wA wa wb) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (rfl) with whnf-red k σ f (rfl) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (rwt we wP wt) with whnf-red k σ f (rwt we wP wt) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (def wi) with whnf-red k σ f (def wi) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (ann we wA) with whnf-red k σ f (ann we wA) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (prod wA wB) with whnf-red k σ f (prod wA wB) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (pair wa wb) with whnf-red k σ f (pair wa wb) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (letp we wt) with whnf-red k σ f (letp we wt) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (nu wF) with whnf-red k σ f (nu wF) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (unf ws wf) with whnf-red k σ f (unf ws wf) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (ucons we) with whnf-red k σ f (ucons we) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (i64) with whnf-red k σ f (i64) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (f32ty) with whnf-red k σ f (f32ty) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (tensor wd ws) with whnf-red k σ f (tensor wd ws) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (addi wx wy) with whnf-red k σ f (addi wx wy) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (muli wx wy) with whnf-red k σ f (muli wx wy) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (addt wt wu) with whnf-red k σ f (addt wt wu) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (toi64 wt) with whnf-red k σ f (toi64 wt) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (packi wx wy) with whnf-red k σ f (packi wx wy) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (app f a) v eq | ok (word wop wts) with whnf-red k σ f (word wop wts) weq | ok-inj eq
-... | r | refl = app-star r
-whnf-red (suc k) σ (mNat e P z s) v eq with whnf k σ e in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok ze =
-  ⇛*-trans (mNat-star (whnf-red k σ e ze weq))
-    (⇛*-trans (⇛*-one (⇛-ιz (⇛-refl z)))
-              (whnf-red k σ z v eq))
-... | ok (su u) =
-  ⇛*-trans (mNat-star (whnf-red k σ e (su u) weq))
-    (⇛*-trans (⇛*-one (⇛-ιs (⇛-refl u) (⇛-refl s)))
-              (whnf-red k σ (inst s u) v eq))
+    go (suc k) (acc rs) σ (app f a) v eq | ok (var wx) with go k (rs (n<1+n k)) σ f (var wx) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (typ) with go k (rs (n<1+n k)) σ f (typ) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (pi wq wA wB) with go k (rs (n<1+n k)) σ f (pi wq wA wB) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (app wg wb) with go k (rs (n<1+n k)) σ f (app wg wb) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (nat) with go k (rs (n<1+n k)) σ f (nat) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (ze) with go k (rs (n<1+n k)) σ f (ze) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (su wu) with go k (rs (n<1+n k)) σ f (su wu) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (unit) with go k (rs (n<1+n k)) σ f (unit) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (one) with go k (rs (n<1+n k)) σ f (one) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (empty) with go k (rs (n<1+n k)) σ f (empty) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (dty wi) with go k (rs (n<1+n k)) σ f (dty wi) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ f (ctor wi wj) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ f (mData we wP ars wbs) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ f (mNat we wP wz ws) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (mEmp we wP) with go k (rs (n<1+n k)) σ f (mEmp we wP) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (mUnit we wP wu) with go k (rs (n<1+n k)) σ f (mUnit we wP wu) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (idt wA wa wb) with go k (rs (n<1+n k)) σ f (idt wA wa wb) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (rfl) with go k (rs (n<1+n k)) σ f (rfl) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (rwt we wP wt) with go k (rs (n<1+n k)) σ f (rwt we wP wt) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (def wi) with go k (rs (n<1+n k)) σ f (def wi) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (ann we wA) with go k (rs (n<1+n k)) σ f (ann we wA) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (prod wA wB) with go k (rs (n<1+n k)) σ f (prod wA wB) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (pair wa wb) with go k (rs (n<1+n k)) σ f (pair wa wb) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (letp we wt) with go k (rs (n<1+n k)) σ f (letp we wt) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (nu wF) with go k (rs (n<1+n k)) σ f (nu wF) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (unf ws wf) with go k (rs (n<1+n k)) σ f (unf ws wf) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (ucons we) with go k (rs (n<1+n k)) σ f (ucons we) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (i64) with go k (rs (n<1+n k)) σ f (i64) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (f32ty) with go k (rs (n<1+n k)) σ f (f32ty) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (tensor wd ws) with go k (rs (n<1+n k)) σ f (tensor wd ws) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (addi wx wy) with go k (rs (n<1+n k)) σ f (addi wx wy) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (muli wx wy) with go k (rs (n<1+n k)) σ f (muli wx wy) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (addt wt wu) with go k (rs (n<1+n k)) σ f (addt wt wu) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (toi64 wt) with go k (rs (n<1+n k)) σ f (toi64 wt) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (packi wx wy) with go k (rs (n<1+n k)) σ f (packi wx wy) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (app f a) v eq | ok (word wop wts) with go k (rs (n<1+n k)) σ f (word wop wts) weq | ok-inj eq
+    ... | r | refl = app-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq with whnf k σ e in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok ze =
+      ⇛*-trans (mNat-star (go k (rs (n<1+n k)) σ e ze weq))
+        (⇛*-trans (⇛*-one (⇛-ιz (⇛-refl z)))
+                  (go k (rs (n<1+n k)) σ z v eq))
+    ... | ok (su u) =
+      ⇛*-trans (mNat-star (go k (rs (n<1+n k)) σ e (su u) weq))
+        (⇛*-trans (⇛*-one (⇛-ιs (⇛-refl u) (⇛-refl s)))
+                  (go k (rs (n<1+n k)) σ (inst s u) v eq))
 
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (var wx) with whnf-red k σ e (var wx) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (typ) with whnf-red k σ e (typ) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (pi wq wA wB) with whnf-red k σ e (pi wq wA wB) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (lam wq wA wt) with whnf-red k σ e (lam wq wA wt) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (app wg wb) with whnf-red k σ e (app wg wb) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (nat) with whnf-red k σ e (nat) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (unit) with whnf-red k σ e (unit) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (one) with whnf-red k σ e (one) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (empty) with whnf-red k σ e (empty) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (dty wi) with whnf-red k σ e (dty wi) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (ctor wi wj) with whnf-red k σ e (ctor wi wj) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (mData we wP wbs) with whnf-red k σ e (mData we wP wbs) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (mNat we wP wz ws) with whnf-red k σ e (mNat we wP wz ws) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (mEmp we wP) with whnf-red k σ e (mEmp we wP) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (mUnit we wP wu) with whnf-red k σ e (mUnit we wP wu) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (idt wA wa wb) with whnf-red k σ e (idt wA wa wb) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (rfl) with whnf-red k σ e (rfl) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (rwt we wP wt) with whnf-red k σ e (rwt we wP wt) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (def wi) with whnf-red k σ e (def wi) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (ann we wA) with whnf-red k σ e (ann we wA) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (prod wA wB) with whnf-red k σ e (prod wA wB) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (pair wa wb) with whnf-red k σ e (pair wa wb) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (letp we wt) with whnf-red k σ e (letp we wt) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (nu wF) with whnf-red k σ e (nu wF) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (unf ws wf) with whnf-red k σ e (unf ws wf) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (ucons we) with whnf-red k σ e (ucons we) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (i64) with whnf-red k σ e (i64) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (f32ty) with whnf-red k σ e (f32ty) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (tensor wd ws) with whnf-red k σ e (tensor wd ws) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (addi wx wy) with whnf-red k σ e (addi wx wy) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (muli wx wy) with whnf-red k σ e (muli wx wy) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (addt wt wu) with whnf-red k σ e (addt wt wu) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (toi64 wt) with whnf-red k σ e (toi64 wt) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (packi wx wy) with whnf-red k σ e (packi wx wy) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mNat e P z s) v eq | ok (word wop wts) with whnf-red k σ e (word wop wts) weq | ok-inj eq
-... | r | refl = mNat-star r
-whnf-red (suc k) σ (mUnit e P u) v eq with whnf k σ e in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok one =
-  ⇛*-trans (mUnit-star (whnf-red k σ e one weq))
-    (⇛*-trans (⇛*-one (⇛-ιtt (⇛-refl u)))
-              (whnf-red k σ u v eq))
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (var wx) with go k (rs (n<1+n k)) σ e (var wx) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (typ) with go k (rs (n<1+n k)) σ e (typ) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (pi wq wA wB) with go k (rs (n<1+n k)) σ e (pi wq wA wB) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (lam wq wA wt) with go k (rs (n<1+n k)) σ e (lam wq wA wt) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (app wg wb) with go k (rs (n<1+n k)) σ e (app wg wb) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (nat) with go k (rs (n<1+n k)) σ e (nat) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (unit) with go k (rs (n<1+n k)) σ e (unit) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (one) with go k (rs (n<1+n k)) σ e (one) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (empty) with go k (rs (n<1+n k)) σ e (empty) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (dty wi) with go k (rs (n<1+n k)) σ e (dty wi) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ e (ctor wi wj) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ e (mData we wP ars wbs) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ e (mNat we wP wz ws) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mEmp we wP) with go k (rs (n<1+n k)) σ e (mEmp we wP) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mUnit we wP wu) with go k (rs (n<1+n k)) σ e (mUnit we wP wu) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (idt wA wa wb) with go k (rs (n<1+n k)) σ e (idt wA wa wb) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (rfl) with go k (rs (n<1+n k)) σ e (rfl) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (rwt we wP wt) with go k (rs (n<1+n k)) σ e (rwt we wP wt) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (def wi) with go k (rs (n<1+n k)) σ e (def wi) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (ann we wA) with go k (rs (n<1+n k)) σ e (ann we wA) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (prod wA wB) with go k (rs (n<1+n k)) σ e (prod wA wB) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (pair wa wb) with go k (rs (n<1+n k)) σ e (pair wa wb) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (letp we wt) with go k (rs (n<1+n k)) σ e (letp we wt) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (nu wF) with go k (rs (n<1+n k)) σ e (nu wF) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (unf ws wf) with go k (rs (n<1+n k)) σ e (unf ws wf) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (ucons we) with go k (rs (n<1+n k)) σ e (ucons we) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (i64) with go k (rs (n<1+n k)) σ e (i64) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (f32ty) with go k (rs (n<1+n k)) σ e (f32ty) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (tensor wd ws) with go k (rs (n<1+n k)) σ e (tensor wd ws) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (addi wx wy) with go k (rs (n<1+n k)) σ e (addi wx wy) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (muli wx wy) with go k (rs (n<1+n k)) σ e (muli wx wy) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (addt wt wu) with go k (rs (n<1+n k)) σ e (addt wt wu) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (toi64 wt) with go k (rs (n<1+n k)) σ e (toi64 wt) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (packi wx wy) with go k (rs (n<1+n k)) σ e (packi wx wy) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (word wop wts) with go k (rs (n<1+n k)) σ e (word wop wts) weq | ok-inj eq
+    ... | r | refl = mNat-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq with whnf k σ e in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok one =
+      ⇛*-trans (mUnit-star (go k (rs (n<1+n k)) σ e one weq))
+        (⇛*-trans (⇛*-one (⇛-ιtt (⇛-refl u)))
+                  (go k (rs (n<1+n k)) σ u v eq))
 
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (var wx) with whnf-red k σ e (var wx) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (typ) with whnf-red k σ e (typ) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (pi wq wA wB) with whnf-red k σ e (pi wq wA wB) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (lam wq wA wt) with whnf-red k σ e (lam wq wA wt) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (app wg wb) with whnf-red k σ e (app wg wb) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (nat) with whnf-red k σ e (nat) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (ze) with whnf-red k σ e (ze) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (su wu) with whnf-red k σ e (su wu) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (unit) with whnf-red k σ e (unit) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (empty) with whnf-red k σ e (empty) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (dty wi) with whnf-red k σ e (dty wi) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (ctor wi wj) with whnf-red k σ e (ctor wi wj) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (mData we wP wbs) with whnf-red k σ e (mData we wP wbs) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (mNat we wP wz ws) with whnf-red k σ e (mNat we wP wz ws) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (mEmp we wP) with whnf-red k σ e (mEmp we wP) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (mUnit we wP wu) with whnf-red k σ e (mUnit we wP wu) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (idt wA wa wb) with whnf-red k σ e (idt wA wa wb) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (rfl) with whnf-red k σ e (rfl) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (rwt we wP wt) with whnf-red k σ e (rwt we wP wt) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (def wi) with whnf-red k σ e (def wi) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (ann we wA) with whnf-red k σ e (ann we wA) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (prod wA wB) with whnf-red k σ e (prod wA wB) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (pair wa wb) with whnf-red k σ e (pair wa wb) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (letp we wt) with whnf-red k σ e (letp we wt) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (nu wF) with whnf-red k σ e (nu wF) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (unf ws wf) with whnf-red k σ e (unf ws wf) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (ucons we) with whnf-red k σ e (ucons we) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (i64) with whnf-red k σ e (i64) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (f32ty) with whnf-red k σ e (f32ty) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (tensor wd ws) with whnf-red k σ e (tensor wd ws) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (addi wx wy) with whnf-red k σ e (addi wx wy) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (muli wx wy) with whnf-red k σ e (muli wx wy) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (addt wt wu) with whnf-red k σ e (addt wt wu) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (toi64 wt) with whnf-red k σ e (toi64 wt) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (packi wx wy) with whnf-red k σ e (packi wx wy) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mUnit e P u) v eq | ok (word wop wts) with whnf-red k σ e (word wop wts) weq | ok-inj eq
-... | r | refl = mUnit-star r
-whnf-red (suc k) σ (mEmp e P) v eq with whnf k σ e in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok e′ with whnf-red k σ e e′ weq | ok-inj eq
-... | r | refl = mEmp-star r
-whnf-red (suc k) σ (mData e P bs) v eq with whnf k σ e in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok e′ with whnf-red k σ e e′ weq
-... | r with ctorSpine e′ in ceq
-... | nothing with ok-inj eq
-... | refl = mData-star r
-whnf-red (suc k) σ (mData e P bs) v eq | ok e′ | r | just (di , ci , args) with lookupList bs ci in leq
-... | fail _ with ok-inj eq
-... | refl = mData-star r
-whnf-red (suc k) σ (mData e P bs) v eq | ok e′ | r | just (di , ci , args) | ok b
-  with ctorSpine-just ceq
-... | sp =
-  ⇛*-trans (mData-star r)
-    (⇛*-step (⇛-ιdata sp leq (⇛L-refl args) (⇛-refl b))
-             (whnf-red k σ (appsFrom b args) v eq))
-whnf-red (suc k) σ (letp e t) v eq with whnf k σ e in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok (pair a b) =
-  ⇛*-trans (letp-star (whnf-red k σ e (pair a b) weq))
-    (⇛*-trans (⇛*-one (⇛-ιletp (⇛-refl a) (⇛-refl b) (⇛-refl t)))
-              (whnf-red k σ (inst₂ t a b) v eq))
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (var wx) with go k (rs (n<1+n k)) σ e (var wx) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (typ) with go k (rs (n<1+n k)) σ e (typ) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (pi wq wA wB) with go k (rs (n<1+n k)) σ e (pi wq wA wB) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (lam wq wA wt) with go k (rs (n<1+n k)) σ e (lam wq wA wt) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (app wg wb) with go k (rs (n<1+n k)) σ e (app wg wb) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (nat) with go k (rs (n<1+n k)) σ e (nat) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (ze) with go k (rs (n<1+n k)) σ e (ze) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (su wu) with go k (rs (n<1+n k)) σ e (su wu) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (unit) with go k (rs (n<1+n k)) σ e (unit) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (empty) with go k (rs (n<1+n k)) σ e (empty) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (dty wi) with go k (rs (n<1+n k)) σ e (dty wi) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ e (ctor wi wj) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ e (mData we wP ars wbs) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ e (mNat we wP wz ws) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mEmp we wP) with go k (rs (n<1+n k)) σ e (mEmp we wP) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mUnit we wP wu) with go k (rs (n<1+n k)) σ e (mUnit we wP wu) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (idt wA wa wb) with go k (rs (n<1+n k)) σ e (idt wA wa wb) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (rfl) with go k (rs (n<1+n k)) σ e (rfl) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (rwt we wP wt) with go k (rs (n<1+n k)) σ e (rwt we wP wt) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (def wi) with go k (rs (n<1+n k)) σ e (def wi) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (ann we wA) with go k (rs (n<1+n k)) σ e (ann we wA) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (prod wA wB) with go k (rs (n<1+n k)) σ e (prod wA wB) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (pair wa wb) with go k (rs (n<1+n k)) σ e (pair wa wb) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (letp we wt) with go k (rs (n<1+n k)) σ e (letp we wt) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (nu wF) with go k (rs (n<1+n k)) σ e (nu wF) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (unf ws wf) with go k (rs (n<1+n k)) σ e (unf ws wf) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (ucons we) with go k (rs (n<1+n k)) σ e (ucons we) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (i64) with go k (rs (n<1+n k)) σ e (i64) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (f32ty) with go k (rs (n<1+n k)) σ e (f32ty) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (tensor wd ws) with go k (rs (n<1+n k)) σ e (tensor wd ws) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (addi wx wy) with go k (rs (n<1+n k)) σ e (addi wx wy) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (muli wx wy) with go k (rs (n<1+n k)) σ e (muli wx wy) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (addt wt wu) with go k (rs (n<1+n k)) σ e (addt wt wu) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (toi64 wt) with go k (rs (n<1+n k)) σ e (toi64 wt) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (packi wx wy) with go k (rs (n<1+n k)) σ e (packi wx wy) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (word wop wts) with go k (rs (n<1+n k)) σ e (word wop wts) weq | ok-inj eq
+    ... | r | refl = mUnit-star r
+    go (suc k) (acc rs) σ (mEmp e P) v eq with whnf k σ e in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok e′ with go k (rs (n<1+n k)) σ e e′ weq | ok-inj eq
+    ... | r | refl = mEmp-star r
+    go (suc k) (acc rs) σ (mData e P ars bs) v eq with whnf k σ e in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok e′ with go k (rs (n<1+n k)) σ e e′ weq
+    ... | r with ctorSpine e′ in ceq
+    ... | nothing with ok-inj eq
+    ... | refl = mData-star r
+    go (suc k) (acc rs) σ (mData e P ars bs) v eq | ok e′ | r | just (di , ci , args) with lookupList bs ci in leq
+    ... | fail _ with ok-inj eq
+    ... | refl = mData-star r
+    go (suc k) (acc rs) σ (mData e P ars bs) v eq | ok e′ | r | just (di , ci , args) | ok b
+      with ctorSpine-just ceq
+    ... | sp =
+      ⇛*-trans (mData-star r)
+        (⇛*-step (⇛-ιdata sp leq (⇛L-refl args) (⇛-refl b))
+                 (go k (rs (n<1+n k)) σ (appsFrom b args) v eq))
+    go (suc k) (acc rs) σ (letp e t) v eq with whnf k σ e in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok (pair a b) =
+      ⇛*-trans (letp-star (go k (rs (n<1+n k)) σ e (pair a b) weq))
+        (⇛*-trans (⇛*-one (⇛-ιletp (⇛-refl a) (⇛-refl b) (⇛-refl t)))
+                  (go k (rs (n<1+n k)) σ (inst₂ t a b) v eq))
 
-whnf-red (suc k) σ (letp e t) v eq | ok (var wx) with whnf-red k σ e (var wx) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (typ) with whnf-red k σ e (typ) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (pi wq wA wB) with whnf-red k σ e (pi wq wA wB) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (lam wq wA wt) with whnf-red k σ e (lam wq wA wt) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (app wg wb) with whnf-red k σ e (app wg wb) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (nat) with whnf-red k σ e (nat) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (ze) with whnf-red k σ e (ze) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (su wu) with whnf-red k σ e (su wu) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (unit) with whnf-red k σ e (unit) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (one) with whnf-red k σ e (one) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (empty) with whnf-red k σ e (empty) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (dty wi) with whnf-red k σ e (dty wi) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (ctor wi wj) with whnf-red k σ e (ctor wi wj) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (mData we wP wbs) with whnf-red k σ e (mData we wP wbs) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (mNat we wP wz ws) with whnf-red k σ e (mNat we wP wz ws) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (mEmp we wP) with whnf-red k σ e (mEmp we wP) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (mUnit we wP wu) with whnf-red k σ e (mUnit we wP wu) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (idt wA wa wb) with whnf-red k σ e (idt wA wa wb) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (rfl) with whnf-red k σ e (rfl) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (rwt we wP wt) with whnf-red k σ e (rwt we wP wt) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (def wi) with whnf-red k σ e (def wi) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (ann we wA) with whnf-red k σ e (ann we wA) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (prod wA wB) with whnf-red k σ e (prod wA wB) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (letp we wt) with whnf-red k σ e (letp we wt) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (nu wF) with whnf-red k σ e (nu wF) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (unf ws wf) with whnf-red k σ e (unf ws wf) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (ucons we) with whnf-red k σ e (ucons we) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (i64) with whnf-red k σ e (i64) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (f32ty) with whnf-red k σ e (f32ty) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (tensor wd ws) with whnf-red k σ e (tensor wd ws) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (addi wx wy) with whnf-red k σ e (addi wx wy) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (muli wx wy) with whnf-red k σ e (muli wx wy) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (addt wt wu) with whnf-red k σ e (addt wt wu) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (toi64 wt) with whnf-red k σ e (toi64 wt) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (packi wx wy) with whnf-red k σ e (packi wx wy) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (letp e t) v eq | ok (word wop wts) with whnf-red k σ e (word wop wts) weq | ok-inj eq
-... | r | refl = letp-star r
-whnf-red (suc k) σ (def i) v eq with lookupDef σ i in leq
-... | fail _ = byRefl σ (def i) v eq
-... | ok d =
-  ⇛*-step (⇛-δ leq (allowed-spec (Def.dmode d)))
-          (whnf-red k σ (closed (Def.dbody d)) v eq)
-whnf-red (suc k) σ (ann e A) v eq =
-  ⇛*-step (⇛-ann (⇛-refl e)) (whnf-red k σ e v eq)
-whnf-red (suc k) σ (ucons e) v eq with whnf k σ e in weq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok e′ with whnf-red k σ e e′ weq
-... | r = ⇛*-trans (ucons-star r) (ucons-go k σ e′ v eq)
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (var wx) with go k (rs (n<1+n k)) σ e (var wx) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (typ) with go k (rs (n<1+n k)) σ e (typ) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (pi wq wA wB) with go k (rs (n<1+n k)) σ e (pi wq wA wB) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (lam wq wA wt) with go k (rs (n<1+n k)) σ e (lam wq wA wt) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (app wg wb) with go k (rs (n<1+n k)) σ e (app wg wb) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (nat) with go k (rs (n<1+n k)) σ e (nat) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (ze) with go k (rs (n<1+n k)) σ e (ze) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (su wu) with go k (rs (n<1+n k)) σ e (su wu) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (unit) with go k (rs (n<1+n k)) σ e (unit) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (one) with go k (rs (n<1+n k)) σ e (one) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (empty) with go k (rs (n<1+n k)) σ e (empty) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (dty wi) with go k (rs (n<1+n k)) σ e (dty wi) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ e (ctor wi wj) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ e (mData we wP ars wbs) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ e (mNat we wP wz ws) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (mEmp we wP) with go k (rs (n<1+n k)) σ e (mEmp we wP) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (mUnit we wP wu) with go k (rs (n<1+n k)) σ e (mUnit we wP wu) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (idt wA wa wb) with go k (rs (n<1+n k)) σ e (idt wA wa wb) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (rfl) with go k (rs (n<1+n k)) σ e (rfl) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (rwt we wP wt) with go k (rs (n<1+n k)) σ e (rwt we wP wt) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (def wi) with go k (rs (n<1+n k)) σ e (def wi) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (ann we wA) with go k (rs (n<1+n k)) σ e (ann we wA) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (prod wA wB) with go k (rs (n<1+n k)) σ e (prod wA wB) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (letp we wt) with go k (rs (n<1+n k)) σ e (letp we wt) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (nu wF) with go k (rs (n<1+n k)) σ e (nu wF) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (unf ws wf) with go k (rs (n<1+n k)) σ e (unf ws wf) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (ucons we) with go k (rs (n<1+n k)) σ e (ucons we) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (i64) with go k (rs (n<1+n k)) σ e (i64) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (f32ty) with go k (rs (n<1+n k)) σ e (f32ty) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (tensor wd ws) with go k (rs (n<1+n k)) σ e (tensor wd ws) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (addi wx wy) with go k (rs (n<1+n k)) σ e (addi wx wy) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (muli wx wy) with go k (rs (n<1+n k)) σ e (muli wx wy) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (addt wt wu) with go k (rs (n<1+n k)) σ e (addt wt wu) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (toi64 wt) with go k (rs (n<1+n k)) σ e (toi64 wt) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (packi wx wy) with go k (rs (n<1+n k)) σ e (packi wx wy) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (word wop wts) with go k (rs (n<1+n k)) σ e (word wop wts) weq | ok-inj eq
+    ... | r | refl = letp-star r
+    go (suc k) (acc rs) σ (def i) v eq with lookupDef σ i in leq
+    ... | fail _ = byRefl σ (def i) v eq
+    ... | ok d =
+      ⇛*-step (⇛-δ leq (allowed-spec (Def.dmode d)))
+              (go k (rs (n<1+n k)) σ (closed (Def.dbody d)) v eq)
+    go (suc k) (acc rs) σ (ann e A) v eq =
+      ⇛*-step (⇛-ann (⇛-refl e)) (go k (rs (n<1+n k)) σ e v eq)
+    go (suc k) (acc rs) σ (ucons e) v eq with whnf k σ e in weq
+    ... | fail _ = ⊥-elim (fail≢ok eq)
+    ... | ok e′ with go k (rs (n<1+n k)) σ e e′ weq
+    ... | r = ⇛*-trans (ucons-star r) (ucons-go k σ e′ v eq)
 
-whnf-red (suc k) σ (var wx) v eq = byRefl σ (var wx) v eq
-whnf-red (suc k) σ (typ) v eq = byRefl σ (typ) v eq
-whnf-red (suc k) σ (pi wq wA wB) v eq = byRefl σ (pi wq wA wB) v eq
-whnf-red (suc k) σ (lam wq wA wt) v eq = byRefl σ (lam wq wA wt) v eq
-whnf-red (suc k) σ (nat) v eq = byRefl σ (nat) v eq
-whnf-red (suc k) σ (ze) v eq = byRefl σ (ze) v eq
-whnf-red (suc k) σ (su wu) v eq = byRefl σ (su wu) v eq
-whnf-red (suc k) σ (unit) v eq = byRefl σ (unit) v eq
-whnf-red (suc k) σ (one) v eq = byRefl σ (one) v eq
-whnf-red (suc k) σ (empty) v eq = byRefl σ (empty) v eq
-whnf-red (suc k) σ (dty wi) v eq = byRefl σ (dty wi) v eq
-whnf-red (suc k) σ (ctor wi wj) v eq = byRefl σ (ctor wi wj) v eq
-whnf-red (suc k) σ (idt wA wa wb) v eq = byRefl σ (idt wA wa wb) v eq
-whnf-red (suc k) σ (rfl) v eq = byRefl σ (rfl) v eq
-whnf-red (suc k) σ (rwt we wP wt) v eq = byRefl σ (rwt we wP wt) v eq
-whnf-red (suc k) σ (prod wA wB) v eq = byRefl σ (prod wA wB) v eq
-whnf-red (suc k) σ (pair wa wb) v eq = byRefl σ (pair wa wb) v eq
-whnf-red (suc k) σ (nu wF) v eq = byRefl σ (nu wF) v eq
-whnf-red (suc k) σ (unf ws wf) v eq = byRefl σ (unf ws wf) v eq
-whnf-red (suc k) σ (i64) v eq = byRefl σ (i64) v eq
-whnf-red (suc k) σ (f32ty) v eq = byRefl σ (f32ty) v eq
-whnf-red (suc k) σ (tensor wd ws) v eq = byRefl σ (tensor wd ws) v eq
-whnf-red (suc k) σ (addi wx wy) v eq = byRefl σ (addi wx wy) v eq
-whnf-red (suc k) σ (muli wx wy) v eq = byRefl σ (muli wx wy) v eq
-whnf-red (suc k) σ (addt wt wu) v eq = byRefl σ (addt wt wu) v eq
-whnf-red (suc k) σ (toi64 wt) v eq = byRefl σ (toi64 wt) v eq
-whnf-red (suc k) σ (packi wx wy) v eq = byRefl σ (packi wx wy) v eq
-whnf-red {n} (suc k) σ (word op ts) v eq = word-red eq
-  where
-  -- whnfList shares the outer fuel, so each recursive whnf-red is on k.
-  listRed : ∀ {m} {us us′ : List (Tm n)}
-    → whnfList m σ us ≡ ok us′
-    → σ ⊢[ spec ] us ⇛L* us′
-  listRed {zero} {[]} {[]} refl = ⇛L*-[]
-  listRed {zero} {_ ∷ _} ()
-  listRed {suc m} {[]} {[]} refl = ⇛L*-[]
-  listRed {suc m} {u ∷ us} {us′} eq′ with whnf m σ u in teq
-  ... | fail _ = ⊥-elim (fail≢ok eq′)
-  ... | ok u′ with whnfList m σ us in leq
-  ... | fail _ = ⊥-elim (fail≢ok eq′)
-  ... | ok tail rewrite sym (ok-inj eq′) =
-      ⇛L*-∷ (whnf-red m σ u u′ teq) (listRed {m} {us} {tail} leq)
+    go (suc k) (acc rs) σ (var wx) v eq = byRefl σ (var wx) v eq
+    go (suc k) (acc rs) σ (typ) v eq = byRefl σ (typ) v eq
+    go (suc k) (acc rs) σ (pi wq wA wB) v eq = byRefl σ (pi wq wA wB) v eq
+    go (suc k) (acc rs) σ (lam wq wA wt) v eq = byRefl σ (lam wq wA wt) v eq
+    go (suc k) (acc rs) σ (nat) v eq = byRefl σ (nat) v eq
+    go (suc k) (acc rs) σ (ze) v eq = byRefl σ (ze) v eq
+    go (suc k) (acc rs) σ (su wu) v eq = byRefl σ (su wu) v eq
+    go (suc k) (acc rs) σ (unit) v eq = byRefl σ (unit) v eq
+    go (suc k) (acc rs) σ (one) v eq = byRefl σ (one) v eq
+    go (suc k) (acc rs) σ (empty) v eq = byRefl σ (empty) v eq
+    go (suc k) (acc rs) σ (dty wi) v eq = byRefl σ (dty wi) v eq
+    go (suc k) (acc rs) σ (ctor wi wj) v eq = byRefl σ (ctor wi wj) v eq
+    go (suc k) (acc rs) σ (idt wA wa wb) v eq = byRefl σ (idt wA wa wb) v eq
+    go (suc k) (acc rs) σ (rfl) v eq = byRefl σ (rfl) v eq
+    go (suc k) (acc rs) σ (rwt we wP wt) v eq = byRefl σ (rwt we wP wt) v eq
+    go (suc k) (acc rs) σ (prod wA wB) v eq = byRefl σ (prod wA wB) v eq
+    go (suc k) (acc rs) σ (pair wa wb) v eq = byRefl σ (pair wa wb) v eq
+    go (suc k) (acc rs) σ (nu wF) v eq = byRefl σ (nu wF) v eq
+    go (suc k) (acc rs) σ (unf ws wf) v eq = byRefl σ (unf ws wf) v eq
+    go (suc k) (acc rs) σ (i64) v eq = byRefl σ (i64) v eq
+    go (suc k) (acc rs) σ (f32ty) v eq = byRefl σ (f32ty) v eq
+    go (suc k) (acc rs) σ (tensor wd ws) v eq = byRefl σ (tensor wd ws) v eq
+    go (suc k) (acc rs) σ (addi wx wy) v eq = byRefl σ (addi wx wy) v eq
+    go (suc k) (acc rs) σ (muli wx wy) v eq = byRefl σ (muli wx wy) v eq
+    go (suc k) (acc rs) σ (addt wt wu) v eq = byRefl σ (addt wt wu) v eq
+    go (suc k) (acc rs) σ (toi64 wt) v eq = byRefl σ (toi64 wt) v eq
+    go (suc k) (acc rs) σ (packi wx wy) v eq = byRefl σ (packi wx wy) v eq
+    go {n} (suc k) (acc rs) σ (word op ts) v eq = word-red eq
+      where
+      -- whnfList shares the outer fuel, so each recursive go is on that fuel.
+      listRed : ∀ {m} {us us′ : List (Tm n)}
+        → Acc _<_ m
+        → whnfList m σ us ≡ ok us′
+        → σ ⊢[ spec ] us ⇛L* us′
+      listRed {zero} {[]} {[]} _ refl = ⇛L*-[]
+      listRed {zero} {_ ∷ _} _ ()
+      listRed {suc m} {[]} {[]} _ refl = ⇛L*-[]
+      listRed {suc m} {u ∷ us} {us′} (acc rec) eq′ with whnf m σ u in teq
+      ... | fail _ = ⊥-elim (fail≢ok eq′)
+      ... | ok u′ with whnfList m σ us in leq
+      ... | fail _ = ⊥-elim (fail≢ok eq′)
+      ... | ok tail rewrite sym (ok-inj eq′) =
+          ⇛L*-∷ (go m (rec (n<1+n m)) σ u u′ teq) (listRed {m} {us} {tail} (rec (n<1+n m)) leq)
 
-  -- eq′ stays an argument of both withs. A with abstracts its
-  -- scrutinee only from the goal and from the types of arguments, so a
-  -- proof closed over from an outer where would keep the unreduced case.
-  word-red : whnf (suc k) σ (word op ts) ≡ ok v → σ ⊢[ spec ] word op ts ⇛* v
-  word-red eq′ with whnfList k σ ts in leq
-  ... | fail _ = ⊥-elim (fail≢ok eq′)
-  ... | ok ts′ with wordStep op ts′ in seq
-  ... | nothing =
-      subst (λ z → σ ⊢[ spec ] word op ts ⇛* z) (ok-inj eq′)
-        (word-cong* (listRed {k} {ts} {ts′} leq))
-  ... | just r =
-      ⇛*-trans (word-cong* (listRed {k} {ts} {ts′} leq))
-        (⇛*-trans (⇛*-one (⇛-wred (⇛L-refl ts′) seq))
-                  (whnf-red k σ r v eq′))
+      -- eq′ stays an argument of both withs. A with abstracts its
+      -- scrutinee only from the goal and from the types of arguments, so a
+      -- proof closed over from an outer where would keep the unreduced case.
+      word-red : whnf (suc k) σ (word op ts) ≡ ok v → σ ⊢[ spec ] word op ts ⇛* v
+      word-red eq′ with whnfList k σ ts in leq
+      ... | fail _ = ⊥-elim (fail≢ok eq′)
+      ... | ok ts′ with wordStep op ts′ in seq
+      ... | nothing =
+          subst (λ z → σ ⊢[ spec ] word op ts ⇛* z) (ok-inj eq′)
+            (word-cong* (listRed {k} {ts} {ts′} (rs (n<1+n k)) leq))
+      ... | just r =
+          ⇛*-trans (word-cong* (listRed {k} {ts} {ts′} (rs (n<1+n k)) leq))
+            (⇛*-trans (⇛*-one (⇛-wred (⇛L-refl ts′) seq))
+                      (go k (rs (n<1+n k)) σ r v eq′))
 

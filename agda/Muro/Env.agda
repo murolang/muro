@@ -9,7 +9,7 @@ open import Data.Bool.Base using (Bool; true; false; if_then_else_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Fin.Base using (Fin; zero; suc)
 open import Data.List.Base as List using (List; []; _∷_; length)
-open import Data.Nat.Base using (ℕ; zero; suc)
+open import Data.Nat.Base using (ℕ; zero; suc; _∸_)
 open import Data.Product.Base using (_×_; _,_)
 open import Data.String.Base using (String)
 open import Data.Unit.Base using (⊤; tt)
@@ -70,6 +70,19 @@ nparams d = length (DataDecl.pqtys d)
 
 nidxs : DataDecl → ℕ
 nidxs d = length (DataDecl.idxs d)
+
+-- Leading Πs of a constructor telescope. A constructor's field
+-- count is this minus the data type's parameters, matching Elixir
+-- `pi_count` on the residual after instParams.
+piCount : ∀ {n} → Tm n → ℕ
+piCount (pi _ _ B) = suc (piCount B)
+piCount _          = 0
+
+ctorFieldArity : ℕ → Ctor → ℕ
+ctorFieldArity np c = piCount (Ctor.ctype c) ∸ np
+
+ctorFieldArities : DataDecl → List ℕ
+ctorFieldArities d = List.map (ctorFieldArity (nparams d)) (DataDecl.ctors d)
 
 dtyType : ∀ {n} → List Qty → List (Qty × Tm 0) → Tm n
 dtyType [] []              = typ

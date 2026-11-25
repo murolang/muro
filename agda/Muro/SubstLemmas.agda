@@ -52,7 +52,7 @@ mutual
   ren-ext h empty = refl
   ren-ext h (dty i) = refl
   ren-ext h (ctor i j) = refl
-  ren-ext h (mData e P bs)
+  ren-ext h (mData e P ars bs)
     rewrite ren-ext h e | ren-ext (lift-ext h) P | renList-ext h bs = refl
   ren-ext h (mNat e P z s)
     rewrite ren-ext h e | ren-ext (lift-ext h) P | ren-ext h z
@@ -103,7 +103,7 @@ mutual
   sub-ext h empty = refl
   sub-ext h (dty i) = refl
   sub-ext h (ctor i j) = refl
-  sub-ext h (mData e P bs)
+  sub-ext h (mData e P ars bs)
     rewrite sub-ext h e | sub-ext (lifts-ext h) P | subList-ext h bs = refl
   sub-ext h (mNat e P z s)
     rewrite sub-ext h e | sub-ext (lifts-ext h) P | sub-ext h z
@@ -161,7 +161,7 @@ mutual
   ren-id empty = refl
   ren-id (dty i) = refl
   ren-id (ctor i j) = refl
-  ren-id (mData e P bs)
+  ren-id (mData e P ars bs)
     rewrite ren-id e | ren-ext lift-id P | ren-id P | renList-id bs = refl
   ren-id (mNat e P z s)
     rewrite ren-id e | ren-ext lift-id P | ren-id P | ren-id z
@@ -221,7 +221,7 @@ mutual
   ren-ren ρ ρ′ empty = refl
   ren-ren ρ ρ′ (dty i) = refl
   ren-ren ρ ρ′ (ctor i j) = refl
-  ren-ren ρ ρ′ (mData e P bs)
+  ren-ren ρ ρ′ (mData e P ars bs)
     rewrite ren-ren ρ ρ′ e | ren-ren (lift ρ) (lift ρ′) P
           | ren-ext (lift-∘ ρ ρ′) P | renList-ren ρ ρ′ bs = refl
   ren-ren ρ ρ′ (mNat e P z s)
@@ -291,7 +291,7 @@ mutual
   sub-ren σ ρ empty = refl
   sub-ren σ ρ (dty i) = refl
   sub-ren σ ρ (ctor i j) = refl
-  sub-ren σ ρ (mData e P bs)
+  sub-ren σ ρ (mData e P ars bs)
     rewrite sub-ren σ ρ e | sub-ren (lifts σ) (lift ρ) P
           | sub-ext (lifts-lift σ ρ) P | subList-ren σ ρ bs = refl
   sub-ren σ ρ (mNat e P z s)
@@ -362,7 +362,7 @@ mutual
   ren-sub ρ σ empty = refl
   ren-sub ρ σ (dty i) = refl
   ren-sub ρ σ (ctor i j) = refl
-  ren-sub ρ σ (mData e P bs)
+  ren-sub ρ σ (mData e P ars bs)
     rewrite ren-sub ρ σ e | ren-sub (lift ρ) (lifts σ) P
           | sub-ext (lift-lifts ρ σ) P | renList-sub ρ σ bs = refl
   ren-sub ρ σ (mNat e P z s)
@@ -433,7 +433,7 @@ mutual
   sub-sub σ τ empty = refl
   sub-sub σ τ (dty i) = refl
   sub-sub σ τ (ctor i j) = refl
-  sub-sub σ τ (mData e P bs)
+  sub-sub σ τ (mData e P ars bs)
     rewrite sub-sub σ τ e | sub-sub (lifts σ) (lifts τ) P
           | sub-ext (lifts-lifts σ τ) P | subList-sub σ τ bs = refl
   sub-sub σ τ (mNat e P z s)
@@ -506,7 +506,7 @@ mutual
   ren-is-sub ρ empty = refl
   ren-is-sub ρ (dty i) = refl
   ren-is-sub ρ (ctor i j) = refl
-  ren-is-sub ρ (mData e P bs)
+  ren-is-sub ρ (mData e P ars bs)
     rewrite ren-is-sub ρ e | ren-is-sub (lift ρ) P | sub-ext (lift-var ρ) P
           | renList-is-sub ρ bs = refl
   ren-is-sub ρ (mNat e P z s)
@@ -683,8 +683,8 @@ mutual
   renM-sound ρ? ρ h empty refl = refl
   renM-sound ρ? ρ h (dty i) refl = refl
   renM-sound ρ? ρ h (ctor i j) refl = refl
-  renM-sound ρ? ρ h (mData e P bs) eq with renM ρ? e in ee | renM (liftM ρ?) P in eP | renMList ρ? bs in ebs
-  renM-sound ρ? ρ h (mData e P bs) refl | ok e′ | ok P′ | ok bs′ rewrite (renM-sound ρ? ρ h e ee) | (renM-sound (liftM ρ?) (lift ρ) (liftM-inv ρ? ρ h) P eP) | (renMList-sound ρ? ρ h bs ebs) = refl
+  renM-sound ρ? ρ h (mData e P ars bs) eq with renM ρ? e in ee | renM (liftM ρ?) P in eP | renMList ρ? bs in ebs
+  renM-sound ρ? ρ h (mData e P ars bs) refl | ok e′ | ok P′ | ok bs′ rewrite (renM-sound ρ? ρ h e ee) | (renM-sound (liftM ρ?) (lift ρ) (liftM-inv ρ? ρ h) P eP) | (renMList-sound ρ? ρ h bs ebs) = refl
   renM-sound ρ? ρ h (mNat e P z s) eq with renM ρ? e in ee | renM (liftM ρ?) P in eP | renM ρ? z in ez | renM (liftM ρ?) s in es
   renM-sound ρ? ρ h (mNat e P z s) refl | ok e′ | ok P′ | ok z′ | ok s′ rewrite (renM-sound ρ? ρ h e ee) | (renM-sound (liftM ρ?) (lift ρ) (liftM-inv ρ? ρ h) P eP) | (renM-sound ρ? ρ h z ez) | (renM-sound (liftM ρ?) (lift ρ) (liftM-inv ρ? ρ h) s es) = refl
   renM-sound ρ? ρ h (mEmp e P) eq with renM ρ? e in ee | renM (liftM ρ?) P in eP

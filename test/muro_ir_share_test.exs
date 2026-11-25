@@ -487,8 +487,28 @@ defmodule Muro.IRShareTest do
              {:match, lit(0), [{:arm, "a", [], stream}, {:arm, "b", [], {:uncons, stream}}]}
            ) == 2
 
+    # A missing callee costs 0, so a hit of 1 is the followed body,
+    # not a hard-coded name.
+    assert heavy([], cnt("s")) == 0
+    assert Muro.IR.Share.path_work([], cnt("s")) == 0
+
     # A call to count is followed through its bfold body, not hard-coded.
     assert heavy(image([]), cnt("s")) == 1
+    assert Muro.IR.Share.path_work(image([]), cnt("s")) == 1
+
+    # Follow-through of a callee whose body is two folds is 2, not 1.
+    two =
+      run(
+        "two",
+        [{"s", :slice}],
+        add(
+          {:bfold, "step0", [], lit(0), {:var, "s"}},
+          {:bfold, "step1", [], lit(0), {:var, "s"}}
+        )
+      )
+
+    assert heavy([two], {:call, "two", [var: "s"]}) == 2
+    assert Muro.IR.Share.path_work([two], {:call, "two", [var: "s"]}) == 2
 
     # A run with no fold, stream, or uncons, and none in what it calls,
     # is outside the heavy set: the call costs nothing.
@@ -499,6 +519,25 @@ defmodule Muro.IRShareTest do
     # same max(body, 1) floor as work/2, even when the body walks to 0.
     erased = run("erased", [], {:let, "x", :erased, lit(0), lit(1)})
     assert heavy([erased], {:call, "erased", []}) == 1
+    assert Muro.IR.Share.path_work([erased], {:call, "erased", []}) == 1
+  end
+
+  test "a self-recursive heavy run breaks the cycle at :busy -> 1" do
+    # loop s = addi (loop s) (fold s). The recursive call is busy, so it
+    # costs 1, plus the fold, so a call of loop is 2. Measured as a
+    # term, the body is that call (2) plus the fold again (1).
+    loop =
+      run(
+        "loop",
+        [{"s", :slice}],
+        add({:call, "loop", [var: "s"]}, {:bfold, "step0", [], lit(0), {:var, "s"}})
+      )
+
+    call = {:call, "loop", [var: "s"]}
+    assert heavy([loop], call) == 2
+    assert Muro.IR.Share.path_work([loop], call) == 2
+    assert heavy([loop], loop.body) == 3
+    assert Muro.IR.Share.path_work([loop], loop.body) == 3
   end
 
   test "a generated step that would grow is not inlined into and draws nothing" do
