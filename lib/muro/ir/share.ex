@@ -35,7 +35,8 @@ defmodule Muro.IR.Share do
   which runs inline does not depend on the order of the list; a run
   whose inlining would pass what is left is shared as elaborated. A run
   that fits keeps its inlined body only when a hoist took place in it
-  and its worst path does no more heavy work than its elaborated body
+  and its worst path does no more heavy work (folds, streams, and
+  `uncons`, followed through calls) than its elaborated body
   shared without inlining;
   otherwise it keeps that one and draws nothing. Inlined bodies do not depend on that order
   either. A generated fold or stream step is never inlined into and

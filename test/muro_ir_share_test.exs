@@ -447,7 +447,7 @@ defmodule Muro.IRShareTest do
     assert {:let, _, :u64, {:call, "count", [var: "t"]}, _} = out
   end
 
-  test "inlining never folds more than inline: false on the worst path" do
+  test "inlining never does more heavy work than inline: false on the worst path" do
     pick = fn x ->
       {:match, {:var, "p"}, [{:arm, "yes", [], cnt(x)}, {:arm, "no", [], lit(7)}]}
     end
@@ -587,31 +587,49 @@ defmodule Muro.IRShareTest do
 
   # Heavy work on the worst path through `t`, each call expanded through
   # the bodies in `fs`: folds, streams, and uncons, as in Share.work/2.
-  defp folds(fs, {:call, "count", args}), do: 1 + folds(fs, args)
+  # A run that reaches itself counts one unit there, the same
+  # `:busy -> 1` cycle break as `work/2`.
+  defp folds(fs, t), do: folds(fs, t, MapSet.new())
 
-  defp folds(fs, {:call, name, args}) do
-    case Enum.find(fs, &(&1.name == name and not Map.get(&1, :generated, false))) do
-      nil -> folds(fs, args)
-      f -> folds(fs, f.body) + folds(fs, args)
-    end
+  defp folds(fs, {:call, "count", args}, busy), do: 1 + folds(fs, args, busy)
+
+  defp folds(fs, {:call, name, args}, busy) do
+    own =
+      case Enum.find(fs, &(&1.name == name and not Map.get(&1, :generated, false))) do
+        nil ->
+          0
+
+        f ->
+          if MapSet.member?(busy, name) do
+            1
+          else
+            folds(fs, f.body, MapSet.put(busy, name))
+          end
+      end
+
+    own + folds(fs, args, busy)
   end
 
-  defp folds(fs, {:match, s, arms}),
+  defp folds(fs, {:match, s, arms}, busy),
     do:
-      folds(fs, s) +
-        (arms |> Enum.map(fn {:arm, _, _, tm} -> folds(fs, tm) end) |> Enum.max(fn -> 0 end))
+      folds(fs, s, busy) +
+        (arms
+         |> Enum.map(fn {:arm, _, _, tm} -> folds(fs, tm, busy) end)
+         |> Enum.max(fn -> 0 end))
 
-  defp folds(fs, {:bfold, _, caps, z, bytes}),
-    do: 1 + folds(fs, Enum.map(caps, &elem(&1, 1))) + folds(fs, z) + folds(fs, bytes)
+  defp folds(fs, {:bfold, _, caps, z, bytes}, busy),
+    do:
+      1 + folds(fs, Enum.map(caps, &elem(&1, 1)), busy) + folds(fs, z, busy) +
+        folds(fs, bytes, busy)
 
-  defp folds(fs, {:stream, seed, caps, _step}),
-    do: 1 + folds(fs, seed) + folds(fs, Enum.map(caps, &elem(&1, 1)))
+  defp folds(fs, {:stream, seed, caps, _step}, busy),
+    do: 1 + folds(fs, seed, busy) + folds(fs, Enum.map(caps, &elem(&1, 1)), busy)
 
-  defp folds(fs, {:uncons, stream}), do: 1 + folds(fs, stream)
+  defp folds(fs, {:uncons, stream}, busy), do: 1 + folds(fs, stream, busy)
 
-  defp folds(fs, t) when is_tuple(t), do: folds(fs, Tuple.to_list(t))
-  defp folds(fs, l) when is_list(l), do: l |> Enum.map(&folds(fs, &1)) |> Enum.sum()
-  defp folds(_fs, _), do: 0
+  defp folds(fs, t, busy) when is_tuple(t), do: folds(fs, Tuple.to_list(t), busy)
+  defp folds(fs, l, busy) when is_list(l), do: l |> Enum.map(&folds(fs, &1, busy)) |> Enum.sum()
+  defp folds(_fs, _, _busy), do: 0
 
   # Fresh names renumbered in order of first appearance.
   defp normal(t) do
