@@ -29,5 +29,7 @@ defmodule Muro.Synth.WideCertTest do
     refute result.book =~ "def cert-leaf-"
     refute result.book =~ "def hold-"
     assert result.book =~ "rewrite"
+    assert result.book =~ "foldr"
+    refute result.book =~ "def squeeze"
   end
 end

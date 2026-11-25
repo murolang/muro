@@ -70,6 +70,7 @@ defmodule Muro.Synth.Book do
       Process.delete(:muro_synth_prefers)
       Process.delete(:muro_synth_choice)
       Process.delete(:muro_synth_rank_step)
+      Process.delete(:muro_synth_canon)
     end
   end
 

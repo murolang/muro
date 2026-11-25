@@ -98,6 +98,8 @@ defmodule Muro.Synth.Cert do
             {:skip, reason}
 
           {:ok, vocab} ->
+            install_canon(host)
+
             case classify(host) do
               {:error, reason} ->
                 {:skip, reason}
@@ -269,7 +271,24 @@ defmodule Muro.Synth.Cert do
 
   defp canon_state(pool, raw) do
     key = state_key(raw)
-    Enum.find(pool, raw, &(state_key(&1) == key))
+
+    case Process.get(:muro_synth_canon) do
+      table when is_map(table) -> Map.get(table, key, raw)
+      _ -> Enum.find(pool, raw, &(state_key(&1) == key))
+    end
+  end
+
+  # `next/3` is called once per action per state. The pool scan is the
+  # same key every time; the table is that scan, built once per render.
+  defp install_canon(host) do
+    case state_pool(host) do
+      nil ->
+        Process.delete(:muro_synth_canon)
+
+      pool ->
+        table = Map.new(Enum.reverse(pool), &{state_key(&1), &1})
+        Process.put(:muro_synth_canon, table)
+    end
   end
 
   defp constructors(host, data) do
@@ -1587,16 +1606,15 @@ defmodule Muro.Synth.Cert do
   end
 
   # One closed equation per state per depth up to the transient.
-  # Depth 0 is `refl`. A later depth unfolds `solve` once, then rewrites
-  # one successor at a time. The motive names a single `max`, and the
-  # remaining actions stay a `max-list`, so conversion does not unfold a
-  # wide nest of `solve`. The tail inducts on `n` the same way and calls
-  # each successor's tail at the predecessor, so a cycle still descends.
+  # Depth 0 is `refl`. A later depth unfolds `solve` once. Each successor
+  # is then a one-step bridge to a closed numeral, and one lemma turns
+  # that list into `max-list`. The per-state proof does not unfold `step`.
+  # The tail inducts on `n` the same way.
   defp shallow_form(host, vocab, orbit, taken) do
     t = orbit.transient
     states = orbit.states
     {suc_eq, taken} = Muro.Synth.Book.reserve("solve-suc-eq", taken)
-    {pack, taken} = squeeze_names(taken)
+    {pack, taken} = squeeze_names(host, taken)
 
     {levels, by_k, taken} =
       Enum.reduce(0..t, {[], %{}, taken}, fn k, {texts, by_k, taken} ->
@@ -1695,20 +1713,29 @@ defmodule Muro.Synth.Cert do
         )
       end)
 
-    text = [solve_suc_def(suc_eq, vocab), squeeze_defs(pack, vocab) | levels] ++ tail_text
+    text = [solve_suc_def(suc_eq, vocab), maxes_defs(pack, vocab) | levels] ++ tail_text
     {text, solves, taken}
   end
 
-  defp squeeze_names(taken) do
-    {max_same, taken} = Muro.Synth.Book.reserve("max-same", taken)
-    {max_bot, taken} = Muro.Synth.Book.reserve("max-bot", taken)
-    {rest_eq, taken} = Muro.Synth.Book.reserve("rest-eq", taken)
-    {squeeze, taken} = Muro.Synth.Book.reserve("squeeze", taken)
-    {%{max_same: max_same, max_bot: max_bot, rest_eq: rest_eq, squeeze: squeeze}, taken}
+  defp squeeze_names(host, taken) do
+    {max_nats, taken} = Muro.Synth.Book.reserve("max-nats", taken)
+    {bounds, taken} = Muro.Synth.Book.reserve("bounds", taken)
+    {maxes, taken} = Muro.Synth.Book.reserve("maxes", taken)
+    # `Names.current/1` is the one preferred binder for a base. A second
+    # call is that same name, and the tuple would use it once per action.
+    {binders, taken} =
+      Enum.map_reduce(host.actions, taken, fn _, taken ->
+        Muro.Synth.Book.reserve("hop", taken)
+      end)
+
+    z = Names.current("z")
+    w = Names.current("w")
+
+    {%{max_nats: max_nats, bounds: bounds, maxes: maxes, binders: binders, z: z, w: w}, taken}
   end
 
   # `{solve s (suc k) ≡ max-list (map (solve ∘ step) all-actions)}` by the
-  # clause of `solve`. One unfold, then `peel_rows` rewrites each action.
+  # clause of `solve`. The bridges and `maxes` finish the numeral.
   defp solve_suc_def(name, vocab) do
     s = Names.current("s")
     k = Names.current("k")
@@ -1731,44 +1758,39 @@ defmodule Muro.Synth.Cert do
     finish_peel(state, nat_arg(prev), goal, vocab, suc_eq, rows, pack)
   end
 
-  # Every successor carries the same constant, so one rewrite of the
-  # first action and a list induction (`squeeze`) finish the max.
-  # A mixed constant still peels one action at a time; that chain is a
-  # closed numeral, which reduces.
+  # One bridge per action, then `maxes`. A motive that still contained
+  # `max-list` of `step` would unfold every remaining action, because
+  # `maxN` matches on both arguments. The bridge's motive is `{z ≡ c}`.
   defp finish_peel(state, k, goal, vocab, suc_eq, rows, pack) do
-    uniform? = rows != [] and Enum.all?(rows, fn {_eq, const, _action} -> const == goal end)
-
-    if uniform? do
-      squeeze_peel(state, k, goal, vocab, suc_eq, rows, pack)
-    else
-      unfold_peel(state, k, goal, vocab, suc_eq, rows)
-    end
+    numeral_chain(state, k, goal, vocab, suc_eq, rows, pack)
   end
 
-  defp squeeze_peel(state, k, goal, vocab, suc_eq, [{head_eq, _const, _action} | rest], pack) do
+  defp numeral_chain(state, k, goal, vocab, suc_eq, rows, pack) do
     spell = atom_src(Term.spell(state))
-    z = Names.current("z")
-    goal_p = paren(goal)
+    reward = vocab.reward
+    z = pack.z
+    w = pack.w
+    consts = Enum.map(rows, fn {_lemma, const, _action} -> const end)
+    binders = Enum.take(pack.binders, length(rows))
+    tuple = proof_tuple(binders)
 
-    {after_head, rest_term} =
-      case rest do
-        [] ->
-          {"#{pack.max_bot} #{goal_p}", vocab.bottom}
-
-        _ ->
-          actions = Enum.map(rest, &elem(&1, 2))
-          tuple = proof_tuple(Enum.map(rest, &elem(&1, 0)))
-
-          {"#{pack.squeeze} (#{cons_list(actions)}) #{spell} #{k} #{goal_p} #{tuple}",
-           max_list_of(actions, spell, k)}
-      end
-
+    core = """
+    rewrite #{suc_eq} #{spell} #{k} motive (λ #{w} → {#{w} ≡ #{goal} : #{reward}}) in
+    rewrite (#{pack.maxes} all-actions (#{const_list(consts)}) #{spell} #{k} #{tuple}) motive (λ #{z} → {#{z} ≡ #{goal} : #{reward}}) in
+    refl\
     """
-    rewrite #{suc_eq} #{spell} #{k} motive (λ w → {w ≡ #{goal} : #{vocab.reward}}) in
-    rewrite #{head_eq} motive (λ #{z} → {#{vocab.max} #{z} #{paren(rest_term)} ≡ #{goal} : #{vocab.reward}}) in
-    #{after_head}
-    """
-    |> String.trim_trailing()
+
+    rows
+    |> Enum.zip(binders)
+    |> Enum.reduce(core, fn {{lemma, const, action}, binder}, acc ->
+      ty = "{solve (fst (step #{spell} #{Term.spell(action)})) #{k} ≡ #{const} : #{reward}}"
+      arg = "rewrite #{lemma} motive (λ #{z} → {#{z} ≡ #{const} : #{reward}}) in refl"
+
+      """
+      ((λ (#{binder} : #{ty}) →
+      #{acc}) (#{arg}))\
+      """
+    end)
   end
 
   defp proof_tuple([]), do: "tt"
@@ -1778,101 +1800,68 @@ defmodule Muro.Synth.Cert do
     if inner == "tt", do: "(#{eq}, tt)", else: "(#{eq}, #{inner})"
   end
 
-  defp squeeze_defs(pack, vocab) do
-    n = Names.current("n")
-    p = Names.current("p")
+  defp const_list([]), do: "nil"
+
+  defp const_list(consts) do
+    Enum.reduce(Enum.reverse(consts), "nil", fn const, acc ->
+      "cons #{paren(const)} (#{acc})"
+    end)
+    |> String.replace(" (nil)", " nil")
+  end
+
+  defp maxes_defs(pack, vocab) do
+    ns = Names.current("ns")
     s = Names.current("s")
     k = Names.current("k")
-    c = Names.current("c")
     xs = Names.current("xs")
     h = Names.current("h")
     rest = Names.current("r")
+    c = Names.current("c")
+    cs = Names.current("cs")
     e = Names.current("e")
+    hh = Names.current("hh")
+    hr = Names.current("hr")
+    z = pack.z
     max = vocab.max
     reward = vocab.reward
-    same = pack.max_same
-    bot = pack.max_bot
-    req = pack.rest_eq
-    sq = pack.squeeze
+    bottom = vocab.bottom
+    mn = pack.max_nats
+    bd = pack.bounds
+    mx = pack.maxes
+    image = "max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k})"
 
     """
-    def #{same} : evidence Π (#{n} : Nat) → {#{max} #{n} #{n} ≡ #{n} : #{reward}} :=
-      λ (#{n} : Nat) →
-        match #{n} motive (λ (x : Nat) → {#{max} x x ≡ x : #{reward}})
-          | 0 => refl
-          | suc #{p} => rewrite #{same} #{p} motive (λ z → {suc z ≡ suc #{p} : #{reward}}) in refl
-    def #{bot} : evidence Π (#{n} : Nat) → {#{max} #{n} 0 ≡ #{n} : #{reward}} :=
-      λ (#{n} : Nat) →
-        match #{n} motive (λ (x : Nat) → {#{max} x 0 ≡ x : #{reward}})
-          | 0 => refl
-          | suc u => refl
-    def #{req} : spec Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{c} : Nat) → Π (#{xs} : List Action) → Type :=
-      λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{c} : Nat) → λ (#{xs} : List Action) →
+    def #{mn} : run Π (#{ns} : List #{reward}) → #{reward} :=
+      λ (#{ns} : List #{reward}) → foldr #{reward} #{reward} max #{bottom} #{ns}
+    def #{bd} : spec Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{xs} : List Action) → Π (#{ns} : List #{reward}) → Type :=
+      λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{xs} : List Action) → λ (#{ns} : List #{reward}) →
         match #{xs} motive (λ _ → Type)
-          | nil => Unit
-          | cons #{h} #{rest} => {solve (fst (step #{s} #{h})) #{k} ≡ #{c} : #{reward}} × #{req} #{s} #{k} #{c} #{rest}
-    def #{sq} : evidence Π (#{xs} : List Action) → Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{c} : Nat) → Π (#{e} : #{req} #{s} #{k} #{c} #{xs}) → {#{max} #{c} (max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k}) #{xs})) ≡ #{c} : #{reward}} :=
+          | nil =>
+              (match #{ns} motive (λ _ → Type)
+                | nil => Unit
+                | cons #{c} #{cs} => Empty)
+          | cons #{h} #{rest} =>
+              (match #{ns} motive (λ _ → Type)
+                | nil => Empty
+                | cons #{c} #{cs} => {solve (fst (step #{s} #{h})) #{k} ≡ #{c} : #{reward}} × #{bd} #{s} #{k} #{rest} #{cs})
+    def #{mx} : evidence Π (#{xs} : List Action) → Π (#{ns} : List #{reward}) → Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{e} : #{bd} #{s} #{k} #{xs} #{ns}) → {#{image} #{xs}) ≡ #{mn} #{ns} : #{reward}} :=
       λ (#{xs} : List Action) →
-        match #{xs} motive (λ (ys : List Action) → Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{c} : Nat) → Π (q : #{req} #{s} #{k} #{c} ys) → {#{max} #{c} (max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k}) ys)) ≡ #{c} : #{reward}})
-          | nil => λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{c} : Nat) → λ (u : Unit) → #{bot} #{c}
-          | cons #{h} #{rest} => λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{c} : Nat) → λ (q : {solve (fst (step #{s} #{h})) #{k} ≡ #{c} : #{reward}} × #{req} #{s} #{k} #{c} #{rest}) →
-              let (hh, hr) = q in
-              rewrite hh motive (λ z → {#{max} #{c} (#{max} z (max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k}) #{rest}))) ≡ #{c} : #{reward}}) in
-              rewrite #{sq} #{rest} #{s} #{k} #{c} hr motive (λ z → {#{max} #{c} z ≡ #{c} : #{reward}}) in
-              #{same} #{c}
+        match #{xs} motive (λ (ys : List Action) → Π (#{ns} : List #{reward}) → Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{e} : #{bd} #{s} #{k} ys #{ns}) → {#{image} ys) ≡ #{mn} #{ns} : #{reward}})
+          | nil =>
+              λ (#{ns} : List #{reward}) → λ (+ #{s} : State) → λ (+ #{k} : Nat) →
+                (match #{ns} motive (λ (ms : List #{reward}) → Π (#{e} : #{bd} #{s} #{k} nil ms) → {#{image} nil) ≡ #{mn} ms : #{reward}})
+                  | nil => λ (#{e} : Unit) → refl
+                  | cons #{c} #{cs} => λ (#{e} : Empty) → matchEmpty #{e} motive (λ _ → {#{image} nil) ≡ #{mn} (cons #{c} #{cs}) : #{reward}}))
+          | cons #{h} #{rest} =>
+              λ (#{ns} : List #{reward}) → λ (+ #{s} : State) → λ (+ #{k} : Nat) →
+                (match #{ns} motive (λ (ms : List #{reward}) → Π (#{e} : #{bd} #{s} #{k} (cons #{h} #{rest}) ms) → {#{image} (cons #{h} #{rest})) ≡ #{mn} ms : #{reward}})
+                  | nil => λ (#{e} : Empty) → matchEmpty #{e} motive (λ _ → {#{image} (cons #{h} #{rest})) ≡ #{mn} nil : #{reward}})
+                  | cons #{c} #{cs} => λ (#{e} : {solve (fst (step #{s} #{h})) #{k} ≡ #{c} : #{reward}} × #{bd} #{s} #{k} #{rest} #{cs}) →
+                      let (#{hh}, #{hr}) = #{e} in
+                      rewrite #{hh} motive (λ #{z} → {#{max} #{z} (#{image} #{rest})) ≡ #{max} #{c} (#{mn} #{cs}) : #{reward}}) in
+                      rewrite #{mx} #{rest} #{cs} #{s} #{k} #{hr} motive (λ #{z} → {#{max} #{c} #{z} ≡ #{max} #{c} (#{mn} #{cs}) : #{reward}}) in
+                      refl)
     """
-  end
-
-  defp unfold_peel(state, k, goal, vocab, suc_eq, rows) do
-    spell = atom_src(Term.spell(state))
-    chain = peel_rows(rows, spell, k, goal, vocab, [])
-
-    """
-    rewrite #{suc_eq} #{spell} #{k} motive (λ w → {w ≡ #{goal} : #{vocab.reward}}) in
-    #{chain}
-    """
-    |> String.trim_trailing()
-  end
-
-  defp peel_rows([], _spell, _k, _goal, _vocab, _prefix), do: "refl"
-
-  defp peel_rows([{eq, const, _action} | rest], spell, k, goal, vocab, prefix) do
-    inner = peel_rows(rest, spell, k, goal, vocab, prefix ++ [const])
-
-    rest_term =
-      case rest do
-        [] -> vocab.bottom
-        _ -> max_list_of(Enum.map(rest, &elem(&1, 2)), spell, k)
-      end
-
-    z = Names.current("z")
-
-    nest =
-      Enum.reduce(Enum.reverse(prefix), "#{vocab.max} #{z} #{paren(rest_term)}", fn n, acc ->
-        "#{vocab.max} #{paren(n)} #{paren(acc)}"
-      end)
-
-    """
-    rewrite #{eq} motive (λ #{z} → {#{nest} ≡ #{goal} : #{vocab.reward}}) in
-    #{inner}
-    """
-    |> String.trim_trailing()
-  end
-
-  defp max_list_of(actions, state_spell, k) do
-    "max-list (map Action Reward (λ (a : Action) → solve (fst (step #{state_spell} a)) #{k}) (#{cons_list(actions)}))"
-  end
-
-  defp cons_list(actions) do
-    Enum.reduce(Enum.reverse(actions), "nil", fn action, acc ->
-      term = Term.spell(action)
-
-      if acc == "nil" do
-        "cons #{term} nil"
-      else
-        "cons #{term} (#{acc})"
-      end
-    end)
   end
 
   defp form_text_orbit(host, vocab, orbit, taken) do
