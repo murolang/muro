@@ -91,7 +91,11 @@ defmodule Muro.IRShareTest do
     {:ok, dir: dir, book: book, funs: funs}
   end
 
-  defp body(funs, name), do: Enum.find(funs, &(&1.name == name)).body
+  defp body(funs, name),
+    do: Enum.find(funs, &(&1.name == name and not Map.get(&1, :generated, false))).body
+
+  defp body_gen(funs, name),
+    do: Enum.find(funs, &(&1.name == name and Map.get(&1, :generated, false))).body
 
   defp calls(t, name) do
     own = if match?({:call, ^name, _}, t), do: 1, else: 0
@@ -260,66 +264,75 @@ defmodule Muro.IRShareTest do
     end
   end
 
+  # A toolchain that is missing skips its test, and ExUnit reports the
+  # skip with this reason. Under CI (`CI` set) the test runs and fails.
+  @rustc System.find_executable("rustc") ||
+           (fn p -> if File.regular?(p), do: p end).(
+             Path.join(System.user_home!(), ".cargo/bin/rustc")
+           )
   @tag :rust
+  if is_nil(@rustc) and is_nil(System.get_env("CI")), do: @tag(skip: "rustc is not on PATH")
+
   test "the shared Rust computes twice and viaWrap", %{book: book, dir: dir} do
-    rustc = System.find_executable("rustc") || Path.join(System.user_home!(), ".cargo/bin/rustc")
+    rustc = @rustc
+    assert rustc, "rustc is not on PATH and CI is set"
+    sub = Path.join(dir, "rs")
+    File.mkdir_p!(sub)
+    {:ok, src} = Muro.Emit.Rust.render(book, "shared")
+    File.write!(Path.join(sub, "shared.rs"), src)
 
-    if File.regular?(rustc) do
-      sub = Path.join(dir, "rs")
-      File.mkdir_p!(sub)
-      {:ok, src} = Muro.Emit.Rust.render(book, "shared")
-      File.write!(Path.join(sub, "shared.rs"), src)
+    File.write!(Path.join(sub, "main.rs"), """
+    mod shared;
+    fn main() {
+        for s in ["abc", "", "hello, world"] {
+            let b = s.as_bytes();
+            let sl = shared::muro__slice_of(b.as_ptr(), b.len());
+            println!("{} {}", shared::twice(sl), shared::viaWrap(sl));
+        }
+    }
+    """)
 
-      File.write!(Path.join(sub, "main.rs"), """
-      mod shared;
-      fn main() {
-          for s in ["abc", "", "hello, world"] {
-              let b = s.as_bytes();
-              let sl = shared::muro__slice_of(b.as_ptr(), b.len());
-              println!("{} {}", shared::twice(sl), shared::viaWrap(sl));
-          }
-      }
-      """)
+    {out, 0} =
+      System.cmd(rustc, ~w(--edition 2021 -A warnings main.rs -o main_rs),
+        cd: sub,
+        stderr_to_stdout: true
+      )
 
-      {out, 0} =
-        System.cmd(rustc, ~w(--edition 2021 -A warnings main.rs -o main_rs),
-          cd: sub,
-          stderr_to_stdout: true
-        )
-
-      assert out == ""
-      assert {"6 33\n0 0\n24 132\n", 0} = System.cmd(Path.join(sub, "main_rs"), [])
-    end
+    assert out == ""
+    assert {"6 33\n0 0\n24 132\n", 0} = System.cmd(Path.join(sub, "main_rs"), [])
   end
 
+  @zig System.find_executable("zig")
   @tag :zig
+  if is_nil(@zig) and is_nil(System.get_env("CI")), do: @tag(skip: "zig is not on PATH")
+
   test "the shared Zig computes twice and viaWrap", %{book: book, dir: dir} do
-    if zig = System.find_executable("zig") do
-      sub = Path.join(dir, "zig")
-      File.mkdir_p!(sub)
-      {:ok, src} = Muro.Emit.Zig.render(book, "shared")
-      File.write!(Path.join(sub, "shared.zig"), src)
+    zig = @zig
+    assert zig, "zig is not on PATH and CI is set"
+    sub = Path.join(dir, "zig")
+    File.mkdir_p!(sub)
+    {:ok, src} = Muro.Emit.Zig.render(book, "shared")
+    File.write!(Path.join(sub, "shared.zig"), src)
 
-      File.write!(Path.join(sub, "main.zig"), """
-      const std = @import("std");
-      const shared = @import("shared.zig");
-      pub fn main() !void {
-          const a = std.heap.page_allocator;
-          const out = std.fs.File.stdout();
-          for ([_][]const u8{ "abc", "", "hello, world" }) |s| {
-              const sl = shared.muro__slice_of(s.ptr, s.len);
-              var buf: [64]u8 = undefined;
-              const line = try std.fmt.bufPrint(&buf, "{d} {d}\\n", .{ try shared.twice(a, sl), try shared.viaWrap(a, sl) });
-              try out.writeAll(line);
-          }
-      }
-      """)
+    File.write!(Path.join(sub, "main.zig"), """
+    const std = @import("std");
+    const shared = @import("shared.zig");
+    pub fn main() !void {
+        const a = std.heap.page_allocator;
+        const out = std.fs.File.stdout();
+        for ([_][]const u8{ "abc", "", "hello, world" }) |s| {
+            const sl = shared.muro__slice_of(s.ptr, s.len);
+            var buf: [64]u8 = undefined;
+            const line = try std.fmt.bufPrint(&buf, "{d} {d}\\n", .{ try shared.twice(a, sl), try shared.viaWrap(a, sl) });
+            try out.writeAll(line);
+        }
+    }
+    """)
 
-      assert {"6 33\n0 0\n24 132\n", 0} =
-               System.cmd(zig, ~w(run main.zig --global-cache-dir) ++ [Path.join(sub, ".zcache")],
-                 cd: sub
-               )
-    end
+    assert {"6 33\n0 0\n24 132\n", 0} =
+             System.cmd(zig, ~w(run main.zig --global-cache-dir) ++ [Path.join(sub, ".zcache")],
+               cd: sub
+             )
   end
 
   test "the Zig emitter calls the fold once in twice", %{book: book} do
@@ -432,6 +445,49 @@ defmodule Muro.IRShareTest do
     assert calls(out, "wrap") == 1
     assert calls(out, "count") == 2
     assert {:let, _, :u64, {:call, "count", [var: "t"]}, _} = out
+  end
+
+  test "inlining never folds more than inline: false on the worst path" do
+    pick = fn x ->
+      {:match, {:var, "p"}, [{:arm, "yes", [], cnt(x)}, {:arm, "no", [], lit(7)}]}
+    end
+
+    pc = run("pickCount", [{"p", :pick}, {"s", :slice}], pick.("s"))
+    call_pc = {:call, "pickCount", [var: "p", var: "s"]}
+
+    shapes = [
+      # Inlining both pickCounts leaves two count s, each under its own
+      # yes arm; count t is hoisted either way.
+      add(add(call_pc, call_pc), add(cnt("t"), cnt("t"))),
+      # Same, with the repeat that makes some hoist succeed on the other
+      # side.
+      add(add(cnt("t"), cnt("t")), add(call_pc, add(call_pc, call_pc)))
+    ]
+
+    for b <- shapes do
+      f = run("f", [{"p", :pick}, {"s", :slice}, {"t", :slice}], b)
+      funs = image([pc, f])
+      plain = Muro.IR.Share.funs(funs, inline: false)
+      full = Muro.IR.Share.funs(funs)
+      assert folds(full, body(full, "f")) <= folds(plain, body(plain, "f"))
+      assert folds(plain, body(plain, "f")) == 2
+      assert calls(body(full, "f"), "pickCount") == 1
+    end
+  end
+
+  test "a generated step that would grow is not inlined into and draws nothing" do
+    fat = run("fat", [{"s", :slice}], add(add(cnt("s"), lit(1)), add(lit(2), lit(3))))
+    body = add(add({:call, "fat", [var: "s"]}, cnt("s")), cnt("s"))
+    step = Map.put(run("a0", [{"s", :slice}], body), :generated, true)
+    g = run("g", [{"s", :slice}], body)
+    one = Muro.IR.Share.size(fat.body) - Muro.IR.Share.size({:call, "fat", [var: "s"]})
+
+    out = Muro.IR.Share.funs(image([fat, step, g]), grow_max: one)
+    # The step keeps calling fat and still shares count s; g has the whole
+    # budget.
+    assert calls(body_gen(out, "a0"), "fat") == 1
+    assert calls(body_gen(out, "a0"), "count") == 1
+    assert calls(body(out, "g"), "fat") == 0
   end
 
   test "the image grows by at most grow_max nodes, smallest growth first" do

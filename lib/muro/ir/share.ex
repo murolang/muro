@@ -33,9 +33,10 @@ defmodule Muro.IR.Share do
   every copy a hoist later removes, which is why the default is twice
   the image and not once. Runs draw on it smallest growth first, then by name, so
   which runs inline does not depend on the order of the list; a run
-  whose inlining would pass what is left, or whose inlined body has
-  nothing to hoist, is shared as elaborated, so inlining never shares
-  less than `inline: false`. Inlined bodies do not depend on that order
+  whose inlining would pass what is left is shared as elaborated. A run
+  that fits keeps its inlined body only when its worst path does no
+  more heavy work than its elaborated body shared without inlining;
+  otherwise it keeps that one and draws nothing. Inlined bodies do not depend on that order
   either. A generated fold or stream step is never inlined into and
   draws nothing on the budget; it is still shared.
 
@@ -90,7 +91,8 @@ defmodule Muro.IR.Share do
         by_name: by_name,
         counter: counter,
         taken: taken,
-        memo: :ets.new(:share, [:set, :private])
+        memo: :ets.new(:share, [:set, :private]),
+        work: :ets.new(:share_work, [:set, :private])
       }
 
       try do
@@ -99,6 +101,7 @@ defmodule Muro.IR.Share do
       after
         :ets.delete(ctx.memo)
         :ets.delete(ctx.fresh)
+        :ets.delete(ctx.work)
       end
     else
       funs
@@ -189,8 +192,11 @@ defmodule Muro.IR.Share do
   # Runs draw in order of that growth, smallest first, then by name, so
   # who gets the budget does not depend on the order of `funs`; a run
   # whose growth does not fit what is left is shared as elaborated, and
-  # its inlined body is never shared. A run whose inlined body shares
-  # nothing draws nothing and is shared as elaborated.
+  # its inlined body is never shared. A run that fits is shared both
+  # ways, inlined and as elaborated, and keeps the inlined body only
+  # when its worst path does no more heavy work (`work/2`) than the
+  # elaborated one does once shared; otherwise it keeps that one and
+  # draws nothing.
   defp optimize_all(funs, ctx, inline?) do
     plans =
       for {fun, i} <- Enum.with_index(funs), known?(fun.body) do
@@ -209,16 +215,19 @@ defmodule Muro.IR.Share do
     |> Enum.reduce(%{}, fn {i, fun, body, grow}, acc ->
       res =
         if body != fun.body and grow <= :counters.get(ctx.budget, 1) do
-          case shared(body, ctx) do
-            {:ok, out} ->
-              :counters.sub(ctx.budget, 1, max(grow, 0))
-              {:ok, out}
+          plain = shared(fun.body, ctx)
 
-            # The inlined body has nothing to hoist: drop it, draw
-            # nothing, and share the run as elaborated, so inlining never
-            # shares less than `inline: false`.
-            :skip ->
-              shared(fun.body, ctx)
+          # The inlined body is kept only when some hoist took place in
+          # it and its worst path folds no more than the elaborated
+          # body's, shared as `inline: false` shares it. Otherwise that
+          # body is kept and nothing is drawn, so on every path this run
+          # does no more heavy work than with `inline: false`.
+          with {:ok, out} <- shared(body, ctx),
+               true <- work(out, ctx) <= work(shared_body(plain, fun), ctx) do
+            :counters.sub(ctx.budget, 1, max(grow, 0))
+            {:ok, out}
+          else
+            _ -> plain
           end
         else
           shared(fun.body, ctx)
@@ -229,6 +238,57 @@ defmodule Muro.IR.Share do
         :skip -> acc
       end
     end)
+  end
+
+  defp shared_body({:ok, out}, _fun), do: out
+  defp shared_body(:skip, fun), do: fun.body
+
+  # Heavy work on the worst path through `t`: each fold, stream, or
+  # `uncons` it evaluates, and each call of a run, counted through that
+  # run's elaborated body. A match takes its scrutinee and its costliest
+  # arm. A variable costs nothing, so a shared call is counted once.
+  defp work({:call, name, args}, ctx) do
+    own =
+      case Map.get(ctx.by_name, name) do
+        %{body: b} -> if MapSet.member?(ctx.heavy, name), do: run_work(name, b, ctx), else: 0
+        nil -> 0
+      end
+
+    own + Enum.reduce(args, 0, &(&2 + work(&1, ctx)))
+  end
+
+  defp work({:match, s, arms}, ctx) do
+    worst = arms |> Enum.map(fn {:arm, _, _, tm} -> work(tm, ctx) end) |> Enum.max(fn -> 0 end)
+    work(s, ctx) + worst
+  end
+
+  defp work(t, ctx) do
+    own =
+      case t do
+        {:bfold, _, _, _, _} -> 1
+        {:stream, _, _, _} -> 1
+        {:uncons, _} -> 1
+        _ -> 0
+      end
+
+    own + Enum.reduce(children(t), 0, &(&2 + work(&1, ctx)))
+  end
+
+  # A run that reaches itself counts one unit there.
+  defp run_work(name, body, ctx) do
+    case :ets.lookup(ctx.work, name) do
+      [{_, :busy}] ->
+        1
+
+      [{_, n}] ->
+        n
+
+      [] ->
+        :ets.insert(ctx.work, {name, :busy})
+        n = if known?(body), do: max(work(body, ctx), 1), else: 1
+        :ets.insert(ctx.work, {name, n})
+        n
+    end
   end
 
   defp shared(body, ctx) do
