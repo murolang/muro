@@ -950,11 +950,15 @@ defmodule Muro.IRShareTest do
     assert calls(body(off, "f"), "shell") == 0
   end
 
-  test "dup_max keeps a run a call, and one internal copy is inlined when it is the only site" do
+  # `fat` is above `dup_max: 7`. Inlining it pulls its `count s` onto a
+  # caller that already folds `s`, so the worst path folds once instead
+  # of twice. The size cap does not block that, exported or not.
+  test "a run above dup_max is inlined when that shares the caller's fold" do
     fat = run("fat", [{"s", :slice}], add(add(cnt("s"), lit(1)), add(lit(2), lit(3))))
+    assert Muro.IR.Share.size(fat.body) > 7
     caller = run("f", [{"s", :slice}], add(add({:call, "fat", [var: "s"]}, cnt("s")), cnt("s")))
     funs = image([fat, caller])
-    assert calls(body(Muro.IR.Share.funs(funs, dup_max: 7), "f"), "fat") == 1
+    assert calls(body(Muro.IR.Share.funs(funs, dup_max: 7), "f"), "fat") == 0
     assert calls(body(Muro.IR.Share.funs(funs), "f"), "fat") == 0
 
     wide = pad(add(cnt("s"), cnt("s")), 90)
@@ -969,6 +973,70 @@ defmodule Muro.IRShareTest do
     out = Muro.IR.Share.funs(fs, grow_max: 100_000)
     assert calls(body(out, "once"), "wide") == 0
     assert calls(body(out, "twice"), "wide") == 1
+
+    assert normal(body(out, "once")) ==
+             normal(body(Muro.IR.Share.funs(Enum.reverse(fs), grow_max: 100_000), "once"))
+  end
+
+  test "a large run is inlined at every site when that lowers worst-path work" do
+    wide = pad(add(cnt("s"), cnt("s")), 90)
+    assert Muro.IR.Share.size(wide) > 160
+
+    caller =
+      run(
+        "f",
+        [{"s", :slice}],
+        add(add({:call, "wide", [var: "s"]}, {:call, "wide", [var: "s"]}), cnt("s"))
+      )
+
+    for export <- [true, false] do
+      big = Map.put(run("wide", [{"s", :slice}], wide), :export, export)
+
+      for fs <- [image([big, caller]), image([caller, big])] do
+        out = Muro.IR.Share.funs(fs, grow_max: 100_000)
+        assert calls(body(out, "f"), "wide") == 0, inspect(export)
+        assert calls(body(out, "f"), "count") == 1, inspect(export)
+        plain = Muro.IR.Share.funs(fs, inline: false)
+
+        assert Muro.IR.Share.path_work(out, body(out, "f")) <
+                 Muro.IR.Share.path_work(plain, body(plain, "f"))
+
+        rev = Muro.IR.Share.funs(Enum.reverse(fs), grow_max: 100_000)
+        assert normal(body(out, "f")) == normal(body(rev, "f"))
+        assert normal(body(out, "wide")) == normal(body(rev, "wide"))
+      end
+    end
+  end
+
+  test "a large run stays a call when inlining it saves no heavy work" do
+    wide = pad(add(cnt("s"), cnt("s")), 90)
+    assert Muro.IR.Share.size(wide) > 160
+    big = run("wide", [{"s", :slice}], wide)
+    alone = run("f", [{"s", :slice}], {:call, "wide", [var: "s"]})
+    out = Muro.IR.Share.funs(image([big, alone]), grow_max: 100_000)
+    assert calls(body(out, "f"), "wide") == 1
+
+    # An internal run the caller names once used to be copied for that
+    # reason alone. The copy only repeats a fold `wide` already hoists.
+    internal = Map.put(big, :export, false)
+    one = Muro.IR.Share.funs(image([internal, alone]), grow_max: 100_000)
+    assert calls(body(one, "f"), "wide") == 1
+
+    fat = pad(add(cnt("t"), cnt("t")), 90)
+
+    caller =
+      run(
+        "g",
+        [{"s", :slice}, {"t", :slice}],
+        add(add({:call, "wide", [var: "s"]}, cnt("s")), {:call, "fat", [var: "t"]})
+      )
+
+    both = image([big, run("fat", [{"t", :slice}], fat), caller])
+    merged = Muro.IR.Share.funs(both, grow_max: 100_000)
+    assert calls(body(merged, "g"), "wide") == 0
+    assert calls(body(merged, "g"), "fat") == 1
+    assert calls(body(merged, "g"), "count") == 1
+    assert calls(body(merged, "fat"), "count") == 1
   end
 
   test "a known nonzero end drops the fold, and spec: false keeps it", %{dir: dir} do

@@ -42,17 +42,24 @@ defmodule Muro.IR.Share do
   either. A generated fold or stream step is never inlined into and
   draws nothing on the budget; it is still shared.
 
-  Size decides a copy. The size is the body after the calls inside it
-  that this pass would inline, so a thin wrapper of a large run counts
-  as that run. A body bigger than `dup_max` nodes that is exported
-  stays a call, so a caller does not carry a second copy of it. A body
-  of that size that is not exported is inlined at the first site in
-  the term when the caller names it once and that shares a call, and
-  the later sites stay calls. A comparison that only returns a
-  constructor, at most `inline_small` nodes, is inlined at a match
-  scrutinee when that match commutes onto the comparison. A body of
-  at most `dup_max` nodes that known arguments shrink below the call
-  is inlined there.
+  Size decides a copy that does not change the work. The size is the
+  body after the calls inside it that this pass would inline, so a thin
+  wrapper of a large run counts as that run. A body of at most
+  `dup_max` nodes is inlined when its expansion holds a repeated call
+  in the caller's names, or known arguments shrink it below the call.
+  A body bigger than `dup_max` nodes, exported or not, stays a call
+  when copying it does not lower the caller's worst-path heavy work,
+  and is inlined at every such site when the copy does. That work is
+  each fold, stream, and `uncons`, followed through a call into the
+  run after this same pass, so a run that only shares a fold with
+  itself is not copied into its callers: the callee already hoists
+  that fold, and the call costs the same as the copy. A repeated call
+  that does not fold, stream, or uncons does not by itself justify the
+  copy. The folds are the work this measure can see; call overhead and
+  the size of the body in the instruction cache are not. The copy is
+  still bounded by `inline_max` and by `grow_max`. A comparison that
+  only returns a constructor, at most `inline_small` nodes, is inlined
+  at a match scrutinee when that match commutes onto the comparison.
 
   Known values. A match whose scrutinee is already a constructor, a
   word, or a comparison fixed by an enclosing arm keeps the arm that
@@ -94,9 +101,10 @@ defmodule Muro.IR.Share do
   `inline_max:` (nodes per inlined callee), `grow_max:` (nodes the
   whole image may grow by inlining, smallest growth first),
   `cost: false` (the previous inlining), `spec: false` (keep every
-  match arm), `dup_max:` (nodes of the inlined body; a larger exported
-  run stays a call), or `inline_small:` (nodes; a comparison of that
-  size may be inlined at a match scrutinee).
+  match arm), `dup_max:` (nodes of the inlined body; a larger run stays
+  a call unless inlining it lowers the caller's worst-path heavy work),
+  or `inline_small:` (nodes; a comparison of that size may be inlined
+  at a match scrutinee).
   """
   def funs(funs, opts \\ []) when is_list(funs) do
     if Keyword.get(opts, :share, true) do
@@ -130,6 +138,13 @@ defmodule Muro.IR.Share do
         taken: taken,
         memo: :ets.new(:share, [:set, :private]),
         work: :ets.new(:share_work, [:set, :private]),
+        chosen: :ets.new(:share_chosen, [:set, :private]),
+        costs: :ets.new(:share_cost, [:set, :private]),
+        did_save: :ets.new(:share_save, [:bag, :private]),
+        gens: :counters.new(1, []),
+        save_gen: 0,
+        save: false,
+        save_block: MapSet.new(),
         cost: Keyword.get(opts, :cost, true),
         spec: Keyword.get(opts, :spec, true),
         dup_max: Keyword.get(opts, :dup_max, @dup_max),
@@ -143,6 +158,9 @@ defmodule Muro.IR.Share do
         :ets.delete(ctx.memo)
         :ets.delete(ctx.fresh)
         :ets.delete(ctx.work)
+        :ets.delete(ctx.chosen)
+        :ets.delete(ctx.costs)
+        :ets.delete(ctx.did_save)
       end
     else
       funs
@@ -253,6 +271,8 @@ defmodule Muro.IR.Share do
   # first, then by name. A run that fits keeps the candidate when a
   # hoist took place, or the body shrank, and its worst path does no
   # more heavy work than the elaborated body shared without inlining.
+  # A body larger than `dup_max` is a candidate only when the copy
+  # lowers that work against the callee after this same pass.
   defp optimize_all(funs, ctx, inline?) do
     plans =
       for {fun, i} <- Enum.with_index(funs), known?(fun.body) do
@@ -401,6 +421,70 @@ defmodule Muro.IR.Share do
     end
   end
 
+  # `work/2` charged at the body this pass emits for the callee. A heavy
+  # run still floors at one, and a cycle still counts one, so the two
+  # measures meet on a body that does not call.
+  defp work_at({:call, name, args}, ctx) do
+    own =
+      case Map.get(ctx.by_name, name) do
+        %{} -> if MapSet.member?(ctx.heavy, name), do: chosen_cost(name, ctx), else: 0
+        nil -> 0
+      end
+
+    own + Enum.reduce(args, 0, &(&2 + work_at(&1, ctx)))
+  end
+
+  defp work_at({:match, s, arms}, ctx) do
+    worst =
+      arms |> Enum.map(fn {:arm, _, _, tm} -> work_at(tm, ctx) end) |> Enum.max(fn -> 0 end)
+
+    work_at(s, ctx) + worst
+  end
+
+  defp work_at(t, ctx) do
+    own =
+      case t do
+        {:bfold, _, _, _, _} -> 1
+        {:stream, _, _, _} -> 1
+        {:uncons, _} -> 1
+        _ -> 0
+      end
+
+    own + Enum.reduce(children(t), 0, &(&2 + work_at(&1, ctx)))
+  end
+
+  defp chosen_cost(name, ctx) do
+    case :ets.lookup(ctx.costs, name) do
+      [{_, n}] when is_integer(n) ->
+        n
+
+      [{_, :busy}] ->
+        1
+
+      [] ->
+        case :ets.lookup(ctx.chosen, name) do
+          [{_, :busy}] ->
+            1
+
+          _ ->
+            :ets.insert(ctx.costs, {name, :busy})
+
+            n =
+              case Map.get(ctx.by_name, name) do
+                %{body: b} = fun ->
+                  shared = share(inline_run(fun, ctx), ctx)
+                  if known?(b), do: max(work_at(shared, ctx), 1), else: 1
+
+                nil ->
+                  1
+              end
+
+            :ets.insert(ctx.costs, {name, n})
+            n
+        end
+    end
+  end
+
   defp shared(body, ctx) do
     before = :counters.get(ctx.hoists, 1)
     out = share(body, ctx)
@@ -408,6 +492,22 @@ defmodule Muro.IR.Share do
   end
 
   defp inline_run(fun, ctx) do
+    case :ets.lookup(ctx.chosen, fun.name) do
+      [{_, :busy}] ->
+        fun.body
+
+      [{_, body}] ->
+        body
+
+      [] ->
+        :ets.insert(ctx.chosen, {fun.name, :busy})
+        body = inline_run1(fun, ctx)
+        :ets.insert(ctx.chosen, {fun.name, body})
+        body
+    end
+  end
+
+  defp inline_run1(fun, ctx) do
     scope = stable_names(fun)
     lays = Map.new(fun.params)
     full = propagate(inlined_body(fun, ctx, MapSet.new()), lays, ctx)
@@ -415,8 +515,7 @@ defmodule Muro.IR.Share do
     want = %{scope: scope, wanted: wanted, sites: site_counts(fun.body)}
 
     if ctx.cost do
-      {body, _} = pass(fun.body, lays, %{}, want, ctx, MapSet.new([fun.name]), %{}, :term, true)
-      body
+      choose_inline(fun, lays, want, ctx)
     else
       body =
         if MapSet.size(wanted) == 0,
@@ -425,6 +524,128 @@ defmodule Muro.IR.Share do
 
       if ctx.spec, do: spec_only_tm(body, lays, ctx), else: body
     end
+  end
+
+  # A callee above `dup_max` is copied only when that copy lowers the
+  # worst-path heavy work of this run. The call is charged at the
+  # callee's cost after the callee's own pass, so a fold the callee
+  # already hoists is not a saving. Small callees take one pass.
+  defp choose_inline(fun, lays, want, ctx) do
+    if may_save?(fun.body, ctx, MapSet.new([fun.name])) do
+      choose_save(fun, lays, want, ctx)
+    else
+      {body, _} = run_pass(fun, lays, want, %{ctx | save: false, save_block: MapSet.new()})
+      body
+    end
+  end
+
+  defp choose_save(fun, lays, want, ctx) do
+    off = %{ctx | save: false, save_block: MapSet.new()}
+    {capped, _} = run_pass(fun, lays, want, off)
+    cw = emitted(capped, ctx)
+    {saved, gen} = run_pass(fun, lays, want, %{ctx | save: true, save_block: MapSet.new()})
+    names = save_names(ctx, gen)
+    sw = if names == [], do: cw, else: emitted(saved, ctx)
+
+    if names != [] and sw < cw do
+      tighten(fun, lays, want, ctx, names, saved, sw, cw, capped)
+    else
+      capped
+    end
+  end
+
+  # Drop a large copy that the joint inline does not need. Refusing it
+  # must not raise the worst path, and on a tie it must not grow the
+  # body. Names are sorted so the choice does not follow book order.
+  # The capped pass has already filled the cost table, so a trial does
+  # not choose a callee's body again.
+  defp tighten(fun, lays, want, ctx, names, saved, sw, cw, capped) do
+    {block, _bw, _} =
+      Enum.reduce(Enum.sort(names), {MapSet.new(), sw, size(saved)}, fn name, {block, bw, bs} ->
+        trial_block = MapSet.put(block, name)
+
+        {trial, _} =
+          run_pass(fun, lays, want, %{ctx | save: true, save_block: trial_block})
+
+        tw = emitted(trial, ctx)
+        ts = size(trial)
+
+        if tw < bw or (tw == bw and ts <= bs) do
+          {trial_block, tw, ts}
+        else
+          {block, bw, bs}
+        end
+      end)
+
+    cond do
+      MapSet.size(block) == 0 ->
+        saved
+
+      true ->
+        {body, _} = run_pass(fun, lays, want, %{ctx | save: true, save_block: block})
+        if emitted(body, ctx) < cw, do: body, else: capped
+    end
+  end
+
+  defp run_pass(fun, lays, want, ctx) do
+    gen = next_gen(ctx)
+
+    {body, _} =
+      pass(
+        fun.body,
+        lays,
+        %{},
+        want,
+        %{ctx | save_gen: gen},
+        MapSet.new([fun.name]),
+        %{},
+        :term,
+        true
+      )
+
+    {body, gen}
+  end
+
+  defp next_gen(ctx) do
+    :counters.add(ctx.gens, 1, 1)
+    :counters.get(ctx.gens, 1)
+  end
+
+  defp save_names(ctx, gen) do
+    ctx.did_save
+    |> :ets.lookup(gen)
+    |> Enum.map(fn {_gen, name} -> name end)
+    |> Enum.uniq()
+  end
+
+  defp may_save?(t, ctx, seen) do
+    case t do
+      {:call, name, args} ->
+        large_callee?(name, ctx, seen) or Enum.any?(args, &may_save?(&1, ctx, seen))
+
+      other ->
+        Enum.any?(children(other), &may_save?(&1, ctx, seen))
+    end
+  end
+
+  defp large_callee?(name, ctx, seen) do
+    case Map.get(ctx.by_name, name) do
+      %{} = callee ->
+        not MapSet.member?(seen, name) and expanded_size(callee, ctx, seen) > ctx.dup_max
+
+      _ ->
+        false
+    end
+  end
+
+  # Worst-path heavy work of the term this pass will emit. A call costs
+  # the callee's body after the callee's own inlines and hoist, not the
+  # elaborated body: that one still holds the folds the callee shares
+  # with itself.
+  defp emitted(t, ctx) do
+    t
+    |> share(ctx)
+    |> work_at(ctx)
   end
 
   defp spec_only(fun, ctx) do
@@ -785,8 +1006,7 @@ defmodule Muro.IR.Share do
 
   # One left-to-right walk. `inl` is false when only specialisation
   # runs. `pos` is `:scrut` for the scrutinee of a match, so a small
-  # comparison there can be inlined. `copied` counts a large internal
-  # run already spliced into this term.
+  # comparison there can be inlined.
   defp pass(t, lays, facts, want, ctx, seen, copied, pos, inl) do
     case t do
       {:call, name, args} ->
@@ -813,20 +1033,20 @@ defmodule Muro.IR.Share do
     if not inl do
       {call, copied}
     else
-      case decide(name, args, lays, facts, want, ctx, seen, copied) do
+      case decide(name, args, lays, facts, want, ctx, seen) do
         :no -> {call, copied}
         mode -> splice(mode, name, args, lays, facts, want, ctx, seen, copied)
       end
     end
   end
 
-  defp decide(name, args, lays, facts, want, ctx, seen, copied) do
+  defp decide(name, args, lays, facts, want, ctx, seen) do
     callee = Map.get(ctx.by_name, name)
 
     cond do
       heavy_here?(name, args, lays, want, ctx, seen) -> :heavy
       shrink_here?(callee, args, facts, ctx, seen) -> :shrink
-      once_here?(name, args, lays, want, ctx, seen, copied) -> :once
+      save_here?(name, args, lays, want, ctx, seen) -> :save
       true -> :no
     end
   end
@@ -862,20 +1082,19 @@ defmodule Muro.IR.Share do
       (map_size(facts) > 0 or Enum.any?(args, &known_arg?(&1, facts)))
   end
 
-  # One copy of a large internal run, and only when the caller names it
-  # once. A second copy would do the callee's work and still call it.
-  defp once_here?(name, args, lays, want, ctx, seen, copied) do
-    case Map.get(ctx.by_name, name) do
-      %{} = callee ->
-        sz = expanded_size(callee, ctx, seen)
+  # Above `dup_max` the copy has to pay for itself in worst-path work.
+  # `choose_save/4` is what checks the saving; this only admits the splice
+  # on the pass that is allowed to try it.
+  defp save_here?(name, args, lays, want, ctx, seen) do
+    ctx.save and not MapSet.member?(ctx.save_block, name) and
+      case Map.get(ctx.by_name, name) do
+        %{} = callee ->
+          expanded_size(callee, ctx, seen) > ctx.dup_max and
+            wanted_hit?(name, args, lays, want, ctx, seen)
 
-        not exported?(callee) and Map.get(copied, name, 0) == 0 and
-          Map.get(want.sites, name, 0) == 1 and sz > ctx.dup_max and
-          wanted_hit?(name, args, lays, want, ctx, seen)
-
-      _ ->
-        false
-    end
+        _ ->
+          false
+      end
   end
 
   defp wanted_hit?(name, args, lays, want, ctx, seen) do
@@ -905,8 +1124,6 @@ defmodule Muro.IR.Share do
     end
   end
 
-  defp exported?(callee), do: Map.get(callee, :export, true)
-
   defp expanded_size(callee, ctx, seen), do: size(inlined_body(callee, ctx, seen))
 
   defp known_arg?({:wrd, _, {:lit, _, n}, []}, _facts) when is_integer(n), do: true
@@ -928,8 +1145,9 @@ defmodule Muro.IR.Share do
       :shrink ->
         if size(out) < size(call), do: {out, copied2}, else: {call, copied}
 
-      :once ->
-        {out, Map.update(copied2, name, 1, &(&1 + 1))}
+      :save ->
+        :ets.insert(ctx.did_save, {ctx.save_gen, name})
+        {out, copied2}
 
       :heavy ->
         {out, copied2}
