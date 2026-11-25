@@ -24,8 +24,9 @@ defmodule Mix.Tasks.Muro.Init do
   and runs `mix muro.gen --check`. An existing workflow file is left
   in place.
 
-  The task prints a note. `muro skills add` writes the commands for
-  this project into `AGENTS.md`. The task does not write that file.
+  The task prints a note. `muro skills add` writes the agent index into
+  `AGENTS.md` and the skills under `.agents/skills/`. The task does not
+  write those files.
 
   The manifest and the workflow are documented in `Muro.Init`.
   """

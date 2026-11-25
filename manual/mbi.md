@@ -7,7 +7,7 @@ summary: muro emit --backend mbi writes exactly one exported run, with its binde
 
 # MBI images
 
-In brief: `--backend mbi` writes `<stem>.mbi` beside the book only when the book has exactly one exported `run` and that body erases. The file is the image muro-beam loads. It is not Erlang BEAM bytecode. The binder grades stay. A run the entry calls is a closed definition in the image. Data, a pair, a word, or a stream is refused. A refusal writes nothing, and an image already at that path stays byte for byte. Writing the file is not acceptance. muro-beam checks the image again. This backend is not a manifest target. `--backend beam` is refused.
+In brief: `--backend mbi` writes `<stem>.mbi` beside the book only when the book has exactly one exported `run` and that body erases. The file is the image muro-beam loads. It is not Erlang BEAM bytecode. The binder grades stay. A run the entry calls is a closed definition in the image. Data, a pair, a word, or a stream is refused. A refusal writes nothing, and an image already at that path stays byte for byte. Writing the file is not acceptance. muro-beam checks the image again. A manifest entry may use `kind: :mbi` (or a top-level `backend` of `mbi`): it names a `.mbi` target, may omit the module, and is written without a gen header. `--backend beam` is refused.
 
 ```
 mix muro.emit path.muro --backend mbi

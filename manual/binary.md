@@ -2,7 +2,7 @@
 title: The executable
 slug: binary
 order: 16
-summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, and assembly, init, and muro skills add.
+summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, assembly, OTP, and MBI, init, and muro skills add.
 ---
 
 # The executable
@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.22.29-macos-aarch64
-muro-0.22.29-macos-x86_64
-muro-0.22.29-linux-x86_64
-muro-0.22.29-linux-aarch64
+muro-0.22.30-macos-aarch64
+muro-0.22.30-macos-x86_64
+muro-0.22.30-linux-x86_64
+muro-0.22.30-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,14 +25,14 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.22.29
+mise use -g github:murolang/muro@0.22.30
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.22.29
+mise use -g github:murolang/muro@0.22.30
 ```
 
 `mise install muro` from the mise registry follows once the assets exist. When a merge lands on main, the `Hex and tag` job in CI starts after the Elixir job on that commit succeeds. It publishes that `mix.exs` version to Hex if it is not already there, and pushes the annotated tag `vX.Y.Z` if it is missing. It does not wait for Agda or muro_visor. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. When this commit published the version or created the tag, the Release workflow builds the four files, smokes the Linux binary in a container with no Elixir and no Erlang, and attaches the assets to the GitHub release only after that smoke succeeds. A failed smoke publishes no binaries. The Hex package is already on Hex by then, and its dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
@@ -49,7 +49,7 @@ prints `Muro v` and the version, the same line as `mix muro --version`.
 
 ```
 muro check path.muro
-muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|fsm|exunit|pytest|rust-test] [--node NAME] [--imports] [--prefix TEXT] [--impl MODULE]
+muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|js|mbi|fsm|exunit|pytest|rust-test] [--node NAME] [--imports] [--prefix TEXT] [--impl MODULE]
 muro gen
 muro gen --check
 muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
@@ -88,7 +88,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.22.29"
+muro = "0.22.30"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 
@@ -101,11 +101,11 @@ git = "https://example.com/rounding.git"
 tag = "v1"
 ```
 
-`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `js`, `fsm`, `exunit`, `pytest`, or `rust-test`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
+`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, or `rust-test`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
 
 `book` and `target` are required. Paths are relative to the project root. A book or a target outside the project is refused, a missing book is refused, and a duplicate target is refused. The errors name the entry index, as they do for `muro.exs`.
 
-`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, `asm`, `js`, `pytest`, or `rust-test` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). A `js` target ends with `.mjs`, and the declaration file is written beside it (`src/rounding.mjs` also reserves `src/rounding.d.ts`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. The `pytest` target ends with `.py`. `impl` on that entry is a Python module name (`"host.rounding"`). A `rust-test` target ends with `.rs`, and `impl` on that entry is a Rust path (`"crate::rounding"`). `imports` is a boolean and is valid on `exunit`, `pytest`, and `rust-test`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
+`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `pytest`, or `rust-test` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). A `js` target ends with `.mjs`, and the declaration file is written beside it (`src/rounding.mjs` also reserves `src/rounding.d.ts`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. An `otp` target ends with `.ex`. An `mbi` target ends with `.mbi`. The `pytest` target ends with `.py`. `impl` on that entry is a Python module name (`"host.rounding"`). A `rust-test` target ends with `.rs`, and `impl` on that entry is a Rust path (`"crate::rounding"`). `imports` is a boolean and is valid on `exunit`, `pytest`, and `rust-test`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
 
 `muro_deps` is the same set of packages as `muro_deps:` in `muro.exs`. Each name is a table:
 
@@ -134,21 +134,23 @@ In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children 
 
 ## gen
 
-`muro gen` and `mix muro.gen` write `elixir`, `exunit`, `pytest`, `rust-test`, `fsm`, `c`, `rust`, `zig`, `asm`, and `js` targets. In `muro.exs` the native entries, a pytest entry, and a Rust test entry may omit the module:
+`muro gen` and `mix muro.gen` write `elixir`, `exunit`, `pytest`, `rust-test`, `fsm`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, and `mbi` targets. In `muro.exs` the native entries, an otp entry, an mbi entry, a pytest entry, and a Rust test entry may omit the module:
 
 ```
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 {"muro/rounding.muro", "src/rounding.zig", [kind: :zig]}
 {"muro/rounding.muro", "src/rounding.c", [kind: :c]}
 {"muro/rounding.muro", "src/rounding.s", [kind: :asm]}
+{"muro/ping.muro", "lib/ping_otp.ex", [kind: :otp]}
 {"muro/rounding.muro", "src/rounding.mjs", [kind: :js]}
+{"muro/one.muro", "src/one.mbi", [kind: :mbi]}
 {"muro/rounding.muro", "test/rounding_test.py", [kind: :pytest]}
 {"muro/rounding.muro", "test/rounding_test.rs", [kind: :rust_test]}
 ```
 
 A missing `kind:` in `muro.exs` is still `:elixir`.
 
-The header is the same two lines and the same hashes as an Elixir target. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for these kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
+The header is the same two lines and the same hashes as an Elixir target, except an `:mbi` image, which is written without a gen header: `muro gen --check` compares the image bytes. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`, so the body hash is the sha256 of the emitter's text. An `:otp` target is a `.ex` file and is formatted the same way as an Elixir target. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
 
 ## init
 
@@ -161,7 +163,7 @@ The header is the same two lines and the same hashes as an Elixir target. A C so
 | `CMakeLists.txt`, `meson.build`, or a `Makefile`, and neither `mix.exs` nor `Cargo.toml` | `muro.toml` and `muro/` | c |
 | none of these | `muro.toml` with `modules = []`, and `muro/` | none |
 
-`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `zig`, `asm`, `js`, `fsm`, `exunit`, `pytest`, or `rust-test`.
+`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, or `rust-test`.
 
 `--cargo-metadata` on a directory with `Cargo.toml` appends `[package.metadata.muro]` and writes `muro/`. It does not write `muro.toml`. Without a `Cargo.toml` it exits 1 and writes nothing.
 
@@ -169,7 +171,7 @@ The header is the same two lines and the same hashes as an Elixir target. A C so
 
 `mix muro.init` still refuses to overwrite `muro.exs` or a `:muro` key. It prints a note. The note says generated files are not edited by hand, and it points at `muro skills add`.
 
-It does not write `AGENTS.md`.
+It does not write `AGENTS.md` or the skill files.
 
 `--ci github` writes `.github/workflows/muro.yml` only when that file is absent. On the executable, the job installs `muro-<version>-linux-x86_64` at the pinned version and runs `muro gen --check`. On `mix muro.init --ci github`, the job installs the archive and runs `mix muro.gen --check`, as [Committed modules](gen.md) describes. An existing workflow file is left in place. When the manifest is new and the workflow file exists, init exits 1 and names `.github/workflows/muro.yml`. When the manifest already exists, init prints the diff and does not add a workflow.
 
@@ -179,8 +181,10 @@ It does not write `AGENTS.md`.
 muro skills add
 ```
 
-writes the agent section into `AGENTS.md`, and into `CLAUDE.md` when that file already exists. It creates `AGENTS.md` when `AGENTS.md` is missing. It never creates `CLAUDE.md`. It touches nothing outside its block.
+writes the agent index into `AGENTS.md`, and into `CLAUDE.md` when that file already exists, and writes the agent skills under `.agents/skills/`. It creates `AGENTS.md` when `AGENTS.md` is missing. It never creates `CLAUDE.md`. It does not write `.cursor/skills` or `.claude/skills`. Those trees are left to the editor. Copy or symlink the `muro-*` skill folders there if the editor only loads them from that path.
 
-The block is delimited by `<!-- muro:begin -->` and `<!-- muro:end -->`. A marker counts only as a whole line. A trailing carriage return is allowed, so a CRLF file is recognised. A mention of either marker inside a sentence is not a marker. A rerun replaces the lines between the markers and nothing else, keeps the file's line endings, and the file is byte-identical. A file with no markers gets the block appended, in those same line endings. A file with unbalanced markers is refused with `<file>:<line>: unbalanced muro marker`, and neither file is written.
+The index block is delimited by `<!-- muro:begin -->` and `<!-- muro:end -->`. A marker counts only as a whole line. A trailing carriage return is allowed, so a CRLF file is recognised. A mention of either marker inside a sentence is not a marker. A rerun replaces the lines between the markers and nothing else, keeps the file's line endings, overwrites the skill files with the same bytes, and the files are byte-identical. A file with no markers gets the block appended, in those same line endings. A file with unbalanced markers is refused with `<file>:<line>: unbalanced muro marker`, and neither the agent files nor the skills are written.
 
-The wording comes from [For agents](for-agents.md) at build time, so the executable carries it. That file is part of the Hex package, so compiling the package, or an archive built from it, reads the same source. The wording is the same for every backend. The commands and the example anchor are filled from the manifest's `backend`, or from the backend `muro init` would detect. The block states the two jobs (spec and evidence; `run` is what is emitted), the wall, the commands for this project (`muro check`, `muro emit` or `muro gen`, and `muro gen --check`), that every binder is typed and every motive is written, that generated files are not edited by hand, and a pointer to the nearest example in [Examples](examples.md).
+The wording comes from marked sections of the manual at build time, so the executable carries it. [For agents](for-agents.md), [Committed modules](gen.md), and [Synthesis](synth.md) are part of the Hex package, so compiling the package, or an archive built from it, reads the same source. The index is filled from the project: the running version, the commands (including `muro synth`, `muro fill`, `muro mutate`, `muro deps.get`, and `muro check --fuel`), and the nearest bundled example. The skills themselves are self-contained. They link to https://muro-lang.dev/docs rather than to `manual/` paths that a user project does not have. Three small example books (`half_ok.muro`, `nats.muro`, `meet.muro`) are written under `.agents/skills/muro-book/examples/`.
+
+The index is under 8 KiB. It states the two jobs and the wall, lists every emit backend (`elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, `rust-test`), points at the six skills (`muro-book`, `muro-check`, `muro-emit`, `muro-gen`, `muro-synth`, `muro-contracts`), and records that the synthesized PredProg is itself the certified term, not the Finder's ranking. Skill bodies are distilled from the manual; they do not dump the emit or limits pages.

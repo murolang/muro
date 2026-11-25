@@ -125,6 +125,7 @@ defmodule Muro.CliHelpTest do
     assert text =~ "muro help <command>"
     assert text =~ "out of fuel is not acceptance"
     assert text =~ "muro skills add"
+    assert text =~ ".agents/skills"
     assert text =~ "IF YOU ARE AN AGENT"
     assert text =~ "GETTING STARTED"
     assert text =~ "EXAMPLES"
@@ -233,8 +234,22 @@ defmodule Muro.CliHelpTest do
     assert gen =~ "--check"
     assert gen =~ "https://muro-lang.dev/docs/gen"
     assert gen =~ "book hash" or gen =~ "body hash" or gen =~ "header"
+    gen_plain = String.replace(gen, ~r/\s+/, " ")
+    assert gen_plain =~ "muro.toml or [package.metadata.muro] is the default kind"
+    assert gen_plain =~ "a missing kind on an entry still defaults to elixir"
+    assert gen_plain =~ "mbi image is written without a gen header"
 
-    assert Muro.CLI.Init.help() =~ "https://muro-lang.dev/docs/binary"
+    mix_gen = Mix.Task.moduledoc(Mix.Tasks.Muro.Gen) |> String.replace(~r/\s+/, " ")
+    assert mix_gen =~ "formats an Elixir, ExUnit, FSM, or OTP target"
+    assert mix_gen =~ "adds the header except on an `:mbi` image"
+
+    assert mix_gen =~
+             "Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`"
+
+    init = Muro.CLI.Init.help()
+    assert init =~ "https://muro-lang.dev/docs/binary"
+    init_plain = String.replace(init, ~r/\s+/, " ")
+    assert init_plain =~ "does not write AGENTS.md or the skill files"
     assert Muro.CLI.Skills.help() =~ "https://muro-lang.dev/docs/binary"
     assert Muro.CLI.Deps.help() =~ "https://muro-lang.dev/docs/packages"
     mutate = Muro.CLI.Mutate.help()

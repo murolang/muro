@@ -83,7 +83,11 @@ defmodule Muro.Emit.Otp do
   The module is that stem plus `Otp` (`PingOtp`).
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
-    render_book(book, stem)
+    if stem == "" do
+      {:error, "otp: empty module stem"}
+    else
+      render_book(book, stem)
+    end
   end
 
   defp render_book(book, stem) do

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.30
+
+`muro skills add` now writes a short agent index and a set of skill files, generated from marked sections of the manual.
+
+The command still splices a delimited block into `AGENTS.md`, and into `CLAUDE.md` only when that file already exists. It never creates `CLAUDE.md`. The block is now an index of under 8 KiB: the wall, the project's commands (including `synth`, `fill`, `mutate`, `deps.get`, and `--fuel`), every emit backend, the running version, and pointers to the skills. The skills themselves live under `.agents/skills/muro-book`, `muro-check`, `muro-emit`, `muro-gen`, `muro-synth`, and `muro-contracts`. Each `SKILL.md` is distilled from the manual at compile time, so there is no second hand-maintained tree. The files are self-contained, link to https://muro-lang.dev/docs, and ship three small example books (`half_ok.muro`, `nats.muro`, `meet.muro`) under the book skill. The synth skill states that the synthesized PredProg is itself the certified term, never the Finder's ranking. The command does not write `.cursor/skills` or `.claude/skills`. A rerun is byte-identical. Skill frontmatter quotes every description, so a colon in the text is valid YAML.
+
+`muro init --backend` now accepts `otp` and `mbi`, and a manifest may use those names as the top-level `backend` or as a module `kind`. An `:otp` entry is a `.ex` target and may omit the module. An `:mbi` entry is a `.mbi` image, written without a gen header.
+
+### Package
+
+- Version 0.22.30.
+
 ## 0.22.29
 
 Agda `Check.whnf` shares a reusable beta argument the same way Elixir `whnf_app` does (Option 1 of #283).
