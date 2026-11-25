@@ -1493,11 +1493,11 @@ defmodule Muro.Synth.Cert do
     extra? = extra_periodic?(host, oracle, states, actions, arms, orbit)
 
     {below, taken, below_obs, below_names} =
-      below_periodic(host, arms, states, actions, orbit, solves, primary, taken)
+      below_periodic(host, arms, states, actions, orbit, solves, vocab, primary, taken)
 
     {more_below, taken, more_below_obs, more_below_names} =
       if extra? do
-        below_periodic(host, arms, states, actions, orbit, solves, :action, taken)
+        below_periodic(host, arms, states, actions, orbit, solves, vocab, :action, taken)
       else
         {[], taken, [], %{}}
       end
@@ -2058,45 +2058,210 @@ defmodule Muro.Synth.Cert do
     """
   end
 
-  defp below_periodic(host, arms, states, actions, orbit, solves, kind, taken) do
+  defp below_periodic(host, arms, states, actions, orbit, solves, vocab, kind, taken) do
     pairs = proof_pairs(host, arms, states, actions, kind)
+    {stream_text, stream, taken} = le_stream_setup(kind, orbit, vocab, taken)
 
-    Enum.reduce(pairs, {[], taken, [], %{}}, fn {state, left, right}, {text, taken, obs, names} ->
-      base = "cert-below-#{kind}-#{Term.label(state)}-#{Term.spell(left)}-#{Term.spell(right)}"
-      {name, taken} = Muro.Synth.Book.reserve(base, taken)
-      arm = deciding(host, arms, state)
-      ob = obligation(name, state, left, right, arm.name, bit_at(host, arm, state))
+    {text, taken, obs, names} =
+      Enum.reduce(pairs, {[], taken, [], %{}}, fn {state, left, right},
+                                                  {text, taken, obs, names} ->
+        base = "cert-below-#{kind}-#{Term.label(state)}-#{Term.spell(left)}-#{Term.spell(right)}"
+        {name, taken} = Muro.Synth.Book.reserve(base, taken)
+        arm = deciding(host, arms, state)
+        ob = obligation(name, state, left, right, arm.name, bit_at(host, arm, state))
 
-      {prelude, body, taken, more} =
-        form_below(host, kind, state, left, right, orbit, solves, name, taken, ob)
+        {prelude, body, taken, more} =
+          form_below(host, kind, state, left, right, orbit, solves, stream, name, taken, ob)
 
-      lemma = evidence_def(name, below_type(host, kind, state, left, right), body)
-      {text ++ prelude ++ [lemma], taken, obs ++ more, Map.put(names, {state, left, right}, name)}
-    end)
+        lemma = evidence_def(name, below_type(host, kind, state, left, right), body)
+
+        {text ++ prelude ++ [lemma], taken, obs ++ more,
+         Map.put(names, {state, left, right}, name)}
+      end)
+
+    {stream_text ++ text, taken, obs, names}
   end
 
-  defp form_below(host, :action, state, left, right, orbit, solves, _name, taken, ob) do
-    if next(host, state, left) == next(host, state, right) do
-      {[], action_form_body(host, state, left, right, nil), taken, [ob]}
+  # One lemma for `le` of two solve streams. Each pair calls it. The
+  # per-pair nest would repeat the same rewrites once per cell.
+  defp le_stream_setup(:action, orbit, vocab, taken) do
+    if orbit.period == 1 and is_map(Process.get(:muro_synth_concrete)) do
+      {name, taken} = Muro.Synth.Book.reserve("le-stream", taken)
+      {[le_stream_def(name, vocab, orbit.transient)], name, taken}
     else
-      tag = "action-#{Term.label(state)}-#{Term.spell(left)}-#{Term.spell(right)}"
-      {le_name, taken} = Muro.Synth.Book.reserve("cert-le-#{tag}", taken)
-      le_ob = %{ob | name: le_name}
-      next_l = next(host, state, left)
-      next_r = next(host, state, right)
-
-      {prelude, le_body, taken, le_obs} =
-        compare_of(le_name, next_l, next_r, orbit, solves, taken, le_ob, tag)
-
-      le_ty =
-        "Π (#{Names.current("n")} : Nat) → le (solve #{Term.spell(next_l)} #{Names.current("n")}) (solve #{Term.spell(next_r)} #{Names.current("n")})"
-
-      defs = prelude ++ [evidence_def(le_name, le_ty, le_body)]
-      {defs, action_form_body(host, state, left, right, le_name), taken, le_obs ++ [ob]}
+      {[], nil, taken}
     end
   end
 
-  defp form_below(host, :successor, state, left, right, orbit, solves, name, taken, ob) do
+  defp le_stream_setup(_kind, _orbit, _vocab, taken), do: {[], nil, taken}
+
+  defp le_stream_def(name, vocab, t) do
+    s = Names.current("s")
+    r = Names.current("r")
+    n = Names.current("n")
+    reward = vocab.reward
+    groups = stream_groups(t, s, r, reward)
+    pis = Enum.map_join(groups, " → ", & &1.pi)
+    lams = Enum.map_join(groups, " → ", & &1.lam)
+
+    type =
+      "Π (+ #{s} : State) → Π (+ #{r} : State) → #{pis} → Π (#{n} : Nat) → le (solve #{s} #{n}) (solve #{r} #{n})"
+
+    body = """
+    λ (+ #{s} : State) → λ (+ #{r} : State) → #{lams} → λ (#{n} : Nat) →
+      #{stream_nest(groups, s, r, n, 0)}
+    """
+
+    evidence_def(name, type, body)
+  end
+
+  defp stream_groups(t, s, r, reward) do
+    prefix =
+      Enum.map(0..(t - 1), fn k ->
+        c = Names.current("c#{k}")
+        d = Names.current("d#{k}")
+        p = Names.current("p#{k}")
+        q = Names.current("q#{k}")
+        o = Names.current("o#{k}")
+        idx = nat_arg(k)
+        eq_l = "{solve #{s} #{idx} ≡ #{c} : #{reward}}"
+        eq_r = "{solve #{r} #{idx} ≡ #{d} : #{reward}}"
+
+        %{
+          tail: false,
+          c: c,
+          p: p,
+          q: q,
+          o: o,
+          idx: idx,
+          pi:
+            "Π (+ #{c} : #{reward}) → Π (+ #{d} : #{reward}) → Π (#{p} : #{eq_l}) → Π (#{q} : #{eq_r}) → Π (#{o} : le #{c} #{d})",
+          lam:
+            "λ (+ #{c} : #{reward}) → λ (+ #{d} : #{reward}) → λ (#{p} : #{eq_l}) → λ (#{q} : #{eq_r}) → λ (#{o} : le #{c} #{d})"
+        }
+      end)
+
+    c = Names.current("ct")
+    d = Names.current("dt")
+    p = Names.current("pt")
+    q = Names.current("qt")
+    o = Names.current("ot")
+    j = Names.current("j")
+    shifted = shift_term(j, t)
+    tail_l = "Π (+ #{j} : Nat) → {solve #{s} #{shifted} ≡ #{c} : #{reward}}"
+    tail_r = "Π (+ #{j} : Nat) → {solve #{r} #{shifted} ≡ #{d} : #{reward}}"
+
+    prefix ++
+      [
+        %{
+          tail: true,
+          c: c,
+          p: p,
+          q: q,
+          o: o,
+          pi:
+            "Π (+ #{c} : #{reward}) → Π (+ #{d} : #{reward}) → Π (#{p} : #{tail_l}) → Π (#{q} : #{tail_r}) → Π (#{o} : le #{c} #{d})",
+          lam:
+            "λ (+ #{c} : #{reward}) → λ (+ #{d} : #{reward}) → λ (#{p} : #{tail_l}) → λ (#{q} : #{tail_r}) → λ (#{o} : le #{c} #{d})"
+        }
+      ]
+  end
+
+  defp stream_nest(groups, s, r, var, depth) do
+    last = length(groups) - 1
+    group = Enum.at(groups, depth)
+
+    if depth == last do
+      idx = shift_term(var, last)
+      z = Names.current("z")
+
+      """
+      rewrite (#{group.p} #{var}) motive (λ #{z} → le #{z} (solve #{r} #{idx})) in
+      rewrite (#{group.q} #{var}) motive (λ #{z} → le #{group.c} #{z}) in #{group.o}\
+      """
+      |> String.trim_trailing()
+    else
+      nxt = if depth == last - 1, do: Names.current("m"), else: fresh_local("k#{depth}")
+      k = Names.current("k")
+      idx = shift_term(k, depth)
+      z = Names.current("z")
+
+      """
+      (match #{var} motive (λ (#{k} : Nat) → le (solve #{s} #{idx}) (solve #{r} #{idx}))
+        | 0 => rewrite #{group.p} motive (λ #{z} → le #{z} (solve #{r} #{group.idx})) in
+      rewrite #{group.q} motive (λ #{z} → le #{group.c} #{z}) in #{group.o}
+        | suc #{nxt} =>
+            #{stream_nest(groups, s, r, nxt, depth + 1)})
+      """
+    end
+  end
+
+  defp le_stream_call(name, left, right, orbit, solves) do
+    t = orbit.transient
+
+    prefix =
+      Enum.flat_map(0..(t - 1), fn k ->
+        {lname, lval} = concrete_cell(Process.get(:muro_synth_concrete), left, k)
+        {rname, rval} = concrete_cell(Process.get(:muro_synth_concrete), right, k)
+        [spell_nat(lval), spell_nat(rval), lname, rname, "tt"]
+      end)
+
+    tail = [
+      spell_nat(at(orbit, t)[left]),
+      spell_nat(at(orbit, t)[right]),
+      solve_name(solves, left),
+      solve_name(solves, right),
+      "tt"
+    ]
+
+    args = [Term.spell(left), Term.spell(right)] ++ prefix ++ tail
+    Enum.join([name | Enum.map(args, &paren_arg/1)], " ")
+  end
+
+  defp solve_name(solves, state) do
+    case Map.fetch(solves, state) do
+      {:ok, name} ->
+        name
+
+      :error ->
+        spell = Term.spell(state)
+        {_key, name} = Enum.find(solves, fn {key, _} -> Term.spell(key) == spell end)
+        name
+    end
+  end
+
+  defp paren_arg(arg) do
+    if String.contains?(arg, " ") and not String.starts_with?(arg, "("), do: "(#{arg})", else: arg
+  end
+
+  defp form_below(host, :action, state, left, right, orbit, solves, stream, _name, taken, ob) do
+    if next(host, state, left) == next(host, state, right) do
+      {[], action_form_body(host, state, left, right, nil), taken, [ob]}
+    else
+      next_l = next(host, state, left)
+      next_r = next(host, state, right)
+
+      if is_binary(stream) do
+        call = le_stream_call(stream, next_l, next_r, orbit, solves)
+        {[], action_form_body(host, state, left, right, call), taken, [ob]}
+      else
+        tag = "action-#{Term.label(state)}-#{Term.spell(left)}-#{Term.spell(right)}"
+        {le_name, taken} = Muro.Synth.Book.reserve("cert-le-#{tag}", taken)
+        le_ob = %{ob | name: le_name}
+
+        {prelude, le_body, taken, le_obs} =
+          compare_of(le_name, next_l, next_r, orbit, solves, taken, le_ob, tag)
+
+        le_ty =
+          "Π (#{Names.current("n")} : Nat) → le (solve #{Term.spell(next_l)} #{Names.current("n")}) (solve #{Term.spell(next_r)} #{Names.current("n")})"
+
+        defs = prelude ++ [evidence_def(le_name, le_ty, le_body)]
+        {defs, action_form_body(host, state, left, right, le_name), taken, le_obs ++ [ob]}
+      end
+    end
+  end
+
+  defp form_below(host, :successor, state, left, right, orbit, solves, _stream, name, taken, ob) do
     tag = "successor-#{Term.label(state)}-#{Term.spell(left)}-#{Term.spell(right)}"
     next_l = next(host, state, left)
     next_r = next(host, state, right)

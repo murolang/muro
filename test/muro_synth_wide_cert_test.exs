@@ -23,6 +23,7 @@ defmodule Muro.Synth.WideCertTest do
     assert result.book =~ "-- wide cover"
     assert result.book =~ "def cert-arm-action-"
     assert [_one] = Regex.scan(~r/^def cert-arm-action-/m, result.book)
+    assert [_one] = Regex.scan(~r/^def le-stream /m, result.book)
     assert result.book =~ "def cert-miss-action"
     assert result.book =~ "def cert-same-action"
     refute result.book =~ "def cert-leaf-"
