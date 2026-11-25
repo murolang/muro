@@ -89,13 +89,15 @@ defmodule Muro.Emit.Zig do
 
   @doc """
   Render `book` as one Zig source file for a stem such as `half_ok`.
+  `opts` may hold the `Muro.IR.Share.funs/2` options `share:`, `inline:`,
+  `inline_max:`, and `grow_max:`.
   """
-  def render(book, stem) when is_list(book) and is_binary(stem) do
+  def render(book, stem, opts \\ []) when is_list(book) and is_binary(stem) and is_list(opts) do
     case IR.elaborate(book) do
       {:ok, funs} ->
         with :ok <- Emit.refuse_may_fail(book),
              :ok <- Emit.refuse_unboxed_opt(book, funs) do
-          compile(book, funs, stem)
+          compile(book, Muro.IR.Share.funs(funs, Muro.IR.Share.opts(opts)), stem)
         end
 
       {:error, reason} ->

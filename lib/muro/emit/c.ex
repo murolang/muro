@@ -283,7 +283,12 @@ defmodule Muro.Emit.C do
          {:ok, funs} <- IR.elaborate(book) do
       nm = name_map(book, prefix)
 
-      case compile_funs(funs, book, nm, prefix) do
+      case compile_funs(
+             Muro.IR.Share.funs(funs, Muro.IR.Share.opts(opts)),
+             book,
+             nm,
+             prefix
+           ) do
         {:ok, sigs, texts, extras} ->
           runs = Emit.run_defs(book)
           bytes? = bytes_image?(funs) or data_field_bytes?(book)
@@ -762,18 +767,20 @@ defmodule Muro.Emit.C do
       sl = g("slice")
       call = Enum.join(cexs ++ [b, rest, acc], ", ")
 
-      loop = """
-      #{cty}#{acc} = #{ez};
-      #{sl} #{cur} = #{es};
-      while (#{cur}.n > 0) {
-        uint8_t #{b} = #{cur}.p[0];
-        #{sl} #{rest} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};
-        #{acc} = #{fold_cname(step)}(#{call});
-        #{cur} = #{rest};
-      }
-      """
+      with {:ok, {stop, st}} <- fold_stop(step, acc, lay, env, st) do
+        loop = """
+        #{cty}#{acc} = #{ez};
+        #{sl} #{cur} = #{es};
+        while (#{cur}.n > 0) {
+        #{stop}  uint8_t #{b} = #{cur}.p[0];
+          #{sl} #{rest} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};
+          #{acc} = #{fold_cname(step)}(#{call});
+          #{cur} = #{rest};
+        }
+        """
 
-      {:ok, {squash([cpre, pz, ps, loop]), acc, lay, st}}
+        {:ok, {squash([cpre, pz, ps, loop]), acc, lay, st}}
+      end
     end
   end
 
@@ -2532,6 +2539,20 @@ defmodule Muro.Emit.C do
     |> case do
       {:ok, pres, exprs, st} -> {:ok, {squash(pres), exprs, st}}
       err -> err
+    end
+  end
+
+  # Once the step returns its accumulator unchanged for every octet,
+  # the rest of the fold is the identity, so the loop stops there.
+  # `Muro.IR.Share.stop/2` finds that test. A step it cannot read
+  # gets no test, and the loop walks every octet as before.
+  defp fold_stop(step, acc, lay, env, st) do
+    with %{} = fun <- Map.get(st.steps_by_name, step),
+         {:ok, v, test} <- Muro.IR.Share.stop(fun, st.funs),
+         {:ok, {pre, ex, _lay, st}} <- emit_ir(test, [{v, acc, lay} | env], st, "uint64_t ") do
+      {:ok, {indent(squash([pre, "if (#{ex}) break;"]), 2) <> "\n", st}}
+    else
+      _ -> {:ok, {"", st}}
     end
   end
 

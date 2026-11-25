@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.31
+
+C, Rust, and Zig compute a repeated pure call once.
+
+`Muro.IR.Share` runs after `Muro.IR.elaborate/1` and before those emitters print. A call that every path through a term evaluates, and that appears there more than once, is bound once at the top of that term; a call only some paths make is not moved above the branch. An arm that aborts counts as a path, so a call the other arms make is not bound above a match with such an arm. A call of a run that folds, or that calls one that does, is first inlined under fresh names when that exposes such a repeated call in the caller's own names (a name the caller binds once, so a shadowed name is not the caller's), so wrappers such as `framedEnd s = framedEndSt (scan s) s` share their `scan s` with the caller's. Inlining grows the whole image by at most twice its own size (`grow_max:`), counted before any hoist, so inlining at most triples it; that budget counts inlining only, not the `let` a hoist adds. Runs draw on it smallest growth first, then by name, so which runs inline does not depend on the order runs are listed; a run past what is left is shared as elaborated. A run that fits keeps its inlined body only when some hoist took place in it and its worst path does no more heavy work (folds, streams, and `uncons`, counted through each call) than the elaborated body shared as `inline: false` shares it; otherwise it is shared as elaborated and draws nothing. A generated fold or stream step is never inlined into and draws nothing on the budget. The inlining memo is keyed by the runs it may still inline, so each inlined body does not depend on that order either. C, Rust, and Zig pass `share:`, `inline:`, `inline_max:`, and `grow_max:` through. A run with nothing to share prints as before. Every run is still emitted with the same signature. The emitted program computes the checked term; only the number of times a pure call runs changes. Elixir and OTP emit from the checked term, not this image, and do not take the pass yet.
+
+A C fold whose step returns its accumulator unchanged once a test on that accumulator holds stops at that octet. muro-http's `scan` no longer walks a pipelined tail or a body once the header block is done.
+
+On muro-http's step book (`c/muro-hello-book`, 4 workers, keep-alive GET), the header scans per request go from 11 to 3 and the `crlfEnd` folds from 19 to 5, and throughput at -O2 goes from about 62k to about 129k requests per second (the handwritten `c/step.c` server is about 239k). `step_slice.c` grows from 420 KB to 636 KB, and its object text from 146 KB to 220 KB. `c/test_step_slice` still agrees with `c/step.c`.
+
+### Manual
+
+- Emit: Shared calls. C fold early stop.
+
+### Package
+
+- Version 0.22.31.
+
 ## 0.22.30
 
 `muro skills add` now writes a short agent index and a set of skill files, generated from marked sections of the manual.
@@ -39,6 +57,7 @@ Generated synthesis books no longer use fixed binders that can shadow an environ
 ### Package
 
 - Version 0.22.28.
+
 
 ## 0.22.27
 
