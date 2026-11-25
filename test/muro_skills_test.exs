@@ -351,6 +351,7 @@ defmodule Muro.SkillsTest do
     gen = File.read!(Path.join(dir, ".agents/skills/muro-gen/SKILL.md"))
     assert gen =~ "muro.toml"
     assert gen =~ "a missing `kind` on an entry still defaults to `:elixir`"
+    assert gen =~ "does not write `AGENTS.md` or the skill files"
 
     for {name, source} <- [
           {"half_ok.muro", "examples/half_ok.muro"},

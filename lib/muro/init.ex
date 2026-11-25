@@ -15,8 +15,9 @@ defmodule Muro.Init do
   The version is the one in the manifest. `--force` skips the install
   question.
 
-  Init prints a note for the project's agent instructions. It does
-  not write that file.
+  Init prints a note. `muro skills add` writes the agent index into
+  `AGENTS.md` and the skills under `.agents/skills/`. Init does not
+  write those files.
   """
 
   @elixir "1.20.4"
@@ -133,7 +134,8 @@ defmodule Muro.Init do
 
   @doc """
   The note init prints. The caller pastes it into the project's
-  agent instructions. Init does not write that file.
+  agent instructions. Init does not write `AGENTS.md` or the skill
+  files.
   """
   def note do
     """

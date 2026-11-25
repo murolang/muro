@@ -28,7 +28,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Mutation](https://muro-lang.dev/docs/mutate): `mix muro.mutate` reports which evidence fails when a `run` definition changes.
 - [Visual explorer](https://muro-lang.dev/docs/explorer): `muro_visor` draws a checked book. `muro ui path.muro` prints how to install it. The compiler does not start the explorer.
 - [Committed modules](https://muro-lang.dev/docs/gen): A manifest names each book, module, and target. `mix muro.gen` writes the module. `mix muro.gen --check` fails when the file and the book disagree.
-- [The executable](https://muro-lang.dev/docs/binary): The self-contained `muro` binary, `muro.toml`, gen for C, Rust, Zig, and assembly, init, and `muro skills add`.
+- [The executable](https://muro-lang.dev/docs/binary): The self-contained `muro` binary, `muro.toml`, gen for C, Rust, Zig, JavaScript, assembly, OTP, and MBI, init, and `muro skills add`.
 - [Host representations](https://muro-lang.dev/docs/repr): A repr states the host shape of a data type. Emit writes strict decode and encode. Decode returns `{:ok, value, table}`. Encode takes that table.
 - [Packages](https://muro-lang.dev/docs/packages): Import a book from a git or Hex package at the version `muro.lock` records. `mix muro.deps.get` fetches `muro_deps/` and writes the lock.
 - [Library](https://muro-lang.dev/docs/library): The ordinary library, imported as `std:`. Bool, excluded middle, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.

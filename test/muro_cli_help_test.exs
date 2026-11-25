@@ -125,6 +125,7 @@ defmodule Muro.CliHelpTest do
     assert text =~ "muro help <command>"
     assert text =~ "out of fuel is not acceptance"
     assert text =~ "muro skills add"
+    assert text =~ ".agents/skills"
     assert text =~ "IF YOU ARE AN AGENT"
     assert text =~ "GETTING STARTED"
     assert text =~ "EXAMPLES"
