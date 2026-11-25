@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.32
+
+Synthesis shares one step table and one trace table across the cover.
+
+`Host.open` remembers `step` of each state and action. Feature discovery keeps the truth vector of a spec it has already evaluated, and a later candidate compares against that vector. `trace`, `successor`, and `coind-homo` remember the best trace and the solved value of each state at each depth, and they read the same step results. The labels, the silent pairs, and the ties stay the ones a fresh table at every comparison would produce. The checker still decides the homomorphism. The search tables are not evidence.
+
+A cover of more than 1500 state-action-action cells, other than a placement state, certifies with one arm per state. Empty rankings and equal actions share two lemmas. `solve` at depth 0 is `refl`. A later depth unfolds `solve` once, then rewrites one action at a time: the motive names a single `max`, and the actions still to come stay a `max-list`. When every successor carries the same constant, the rest of that max is one list induction. The tail inducts on `n` the same way. The checker still decides. A smaller cover is unchanged.
+
+### Manual
+
+- Synthesis: one shared step table and one shared trace table. A cover of more than 1500 cells certifies by one arm per state.
+
+### Package
+
+- Version 0.22.32.
+
 ## 0.22.31
 
 C, Rust, and Zig compute a repeated pure call once.

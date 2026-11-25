@@ -22,6 +22,43 @@ defmodule Muro.Synth.Oracle do
   end
 
   def observe(host, oracle, blind) do
+    # Search memo only. One table of best traces, one of solved values,
+    # and one of `step` results, for every comparison in this call.
+    # `Loop.run/2` deletes the same keys. The checker does not read them.
+    # A fresh table at each comparison ranks the same actions. The tables
+    # are re-read after a recursive call stores its own entries.
+    Process.put(:muro_oracle_best, %{})
+    Process.put(:muro_oracle_solve, %{})
+    Process.put(:muro_oracle_step, %{})
+
+    try do
+      observe_body(host, oracle, blind)
+    after
+      clear_shared()
+    end
+  end
+
+  @doc false
+  def observe_separated(host, oracle, blind \\ [])
+
+  def observe_separated(_host, oracle, _blind) when oracle not in @names do
+    {:error, :usage, "unknown oracle #{oracle}"}
+  end
+
+  # The per-comparison table. Tests use it to check that the shared
+  # tables rank the same actions, including a tie and a silent pair.
+  def observe_separated(host, oracle, blind) do
+    clear_shared()
+    observe_body(host, oracle, blind)
+  end
+
+  defp clear_shared do
+    Process.delete(:muro_oracle_best)
+    Process.delete(:muro_oracle_solve)
+    Process.delete(:muro_oracle_step)
+  end
+
+  defp observe_body(host, oracle, blind) do
     case blind -- host.actions do
       [] ->
         cover = cover(host)
@@ -291,13 +328,13 @@ defmodule Muro.Synth.Oracle do
   end
 
   defp prefix(host, "coind-homo", state, action, n) do
-    {next, reward} = host.step.(state, action)
+    {next, reward} = stepped(host, state, action)
     {rest, _memo} = values(host, next, max(n - 1, 0))
     [reward | rest]
   end
 
   defp prefix(host, "successor", state, action, n) do
-    {next, _reward} = host.step.(state, action)
+    {next, _reward} = stepped(host, state, action)
     {rest, _memo} = values(host, next, n)
     rest
   end
@@ -313,25 +350,40 @@ defmodule Muro.Synth.Oracle do
   defp solve(host, state, k, memo) do
     key = {state, k}
 
-    case Map.fetch(memo, key) do
+    case shared_fetch(:muro_oracle_solve, key) do
       {:ok, value} ->
         {value, memo}
 
-      :error ->
-        {rewards, memo} =
-          Enum.map_reduce(host.actions, memo, fn action, memo ->
-            {next, reward} = host.step.(state, action)
+      :miss ->
+        {value, memo} = solve_fold(host, state, k, memo)
+        shared_put(:muro_oracle_solve, key, value)
+        {value, memo}
 
-            if k == 0 do
-              {reward, memo}
-            else
-              solve(host, next, k - 1, memo)
-            end
-          end)
+      :off ->
+        case Map.fetch(memo, key) do
+          {:ok, value} ->
+            {value, memo}
 
-        value = maximum(host, rewards)
-        {value, Map.put(memo, key, value)}
+          :error ->
+            {value, memo} = solve_fold(host, state, k, memo)
+            {value, Map.put(memo, key, value)}
+        end
     end
+  end
+
+  defp solve_fold(host, state, k, memo) do
+    {rewards, memo} =
+      Enum.map_reduce(host.actions, memo, fn action, memo ->
+        {next, reward} = stepped(host, state, action)
+
+        if k == 0 do
+          {reward, memo}
+        else
+          solve(host, next, k - 1, memo)
+        end
+      end)
+
+    {maximum(host, rewards), memo}
   end
 
   # An unordered pair has no maximum. Picking either reward would make a
@@ -370,7 +422,7 @@ defmodule Muro.Synth.Oracle do
     if is_list(blind) and action in blind do
       {:hidden, memo}
     else
-      {next, reward} = host.step.(state, action)
+      {next, reward} = stepped(host, state, action)
       {rest, memo} = best_trace(host, next, k, blind, memo)
 
       case rest do
@@ -385,19 +437,71 @@ defmodule Muro.Synth.Oracle do
   defp best_trace(host, state, k, blind, memo) do
     key = {:best, state, k}
 
-    case Map.fetch(memo, key) do
+    case shared_fetch(:muro_oracle_best, key) do
       {:ok, value} ->
         {value, memo}
 
-      :error ->
-        {traces, memo} =
-          Enum.map_reduce(host.actions, memo, fn action, memo ->
-            trace(host, state, action, k - 1, blind, memo)
-          end)
+      :miss ->
+        {value, memo} = best_fold(host, state, k, blind, memo)
+        shared_put(:muro_oracle_best, key, value)
+        {value, memo}
 
-        value = Enum.reduce(traces, &trace_max(host, &1, &2))
-        {value, Map.put(memo, key, value)}
+      :off ->
+        case Map.fetch(memo, key) do
+          {:ok, value} ->
+            {value, memo}
+
+          :error ->
+            {value, memo} = best_fold(host, state, k, blind, memo)
+            {value, Map.put(memo, key, value)}
+        end
     end
+  end
+
+  defp best_fold(host, state, k, blind, memo) do
+    {traces, memo} =
+      Enum.map_reduce(host.actions, memo, fn action, memo ->
+        trace(host, state, action, k - 1, blind, memo)
+      end)
+
+    {Enum.reduce(traces, &trace_max(host, &1, &2)), memo}
+  end
+
+  # `step` is pure. The shared table stores the pair `step` returned.
+  # The separated path calls `step` every time, as before.
+  defp stepped(host, state, action) do
+    key = {state, action}
+
+    case shared_fetch(:muro_oracle_step, key) do
+      {:ok, pair} ->
+        pair
+
+      :miss ->
+        pair = host.step.(state, action)
+        shared_put(:muro_oracle_step, key, pair)
+        pair
+
+      :off ->
+        host.step.(state, action)
+    end
+  end
+
+  defp shared_fetch(name, key) do
+    case Process.get(name) do
+      table when is_map(table) ->
+        case Map.fetch(table, key) do
+          {:ok, value} -> {:ok, value}
+          :error -> :miss
+        end
+
+      _ ->
+        :off
+    end
+  end
+
+  defp shared_put(name, key, value) do
+    table = Process.get(name, %{})
+    Process.put(name, Map.put(table, key, value))
   end
 
   defp trace_max(host, current, candidate) do

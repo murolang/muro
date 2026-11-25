@@ -21,13 +21,18 @@ defmodule Muro.Synth.Loop do
   because of either bound has not established `sufficient-cegis`.
   """
   def run(path, opts \\ []) when is_binary(path) and is_list(opts) do
-    # Search memo only. The checker does not read this key.
+    # Search memos only. The checker does not read these keys.
     Process.delete(:muro_synth_reaches)
+    Process.put(:muro_synth_steps, %{})
 
     try do
       run_checked(path, opts)
     after
       Process.delete(:muro_synth_reaches)
+      Process.delete(:muro_synth_steps)
+      Process.delete(:muro_oracle_best)
+      Process.delete(:muro_oracle_solve)
+      Process.delete(:muro_oracle_step)
       Process.delete(:muro_synth_open_ms)
       Process.delete(:muro_synth_reach_ms)
       Process.delete(:muro_synth_cover)

@@ -21,6 +21,48 @@ defmodule Muro.Synth.Cert do
   def target("successor"), do: "CoinductiveHomomorphism"
   def target(_oracle), do: "CoindHomo"
 
+  # queens4 is 18 × 4 × 4 = 288 and stays on the per-leaf book.
+  # A placement state is ClassCert, including queens8, and is not this.
+  @wide_cells 1500
+
+  @doc false
+  def wide_host?(host) do
+    not placement_state?(host) and cell_count(host) > @wide_cells
+  end
+
+  defp placement_state?(host) do
+    case Enum.find(host.book, &(Map.get(&1, :kind) == :data and &1.name == "State")) do
+      %{ctors: ctors} -> Enum.map(ctors, & &1.name) == ["ongoing", "dead", "solved"]
+      _ -> false
+    end
+  end
+
+  defp cell_count(host) do
+    actions = length(host.actions || [])
+
+    n =
+      cond do
+        is_list(host[:inhabitants]) and host.inhabitants != [] ->
+          length(host.inhabitants)
+
+        is_list(host[:all_states]) and host.all_states != [] ->
+          length(host.all_states)
+
+        true ->
+          case Enum.find(host.book, &(Map.get(&1, :kind) == :data and &1.name == "State")) do
+            %{ctors: ctors} -> length(ctors)
+            _ -> 0
+          end
+      end
+
+    n * actions * actions
+  end
+
+  defp wide?(states, actions) do
+    Process.get(:muro_synth_wide) == true and
+      length(states) * length(actions) * length(actions) > @wide_cells
+  end
+
   @doc """
   The certificate text, or a reason it was not generated.
 
@@ -442,7 +484,8 @@ defmodule Muro.Synth.Cert do
   # An earlier successor is its right-hand side inside a later rewrite,
   # because that outer rewrite is read at its right-hand side. The current
   # successor is `z` everywhere it occurs. A later one is still `solve`.
-  defp rewrite_chain(steps, solves, rhs, vocab, shown, fresh) do
+  defp rewrite_chain(steps, solves, rhs, vocab, shown, fresh, spell_apply \\ nil) do
+    spell_apply = spell_apply || fn lemma -> "#{lemma} #{Names.current("m")}" end
     order = Enum.uniq(steps)
     last = length(order) - 1
 
@@ -453,7 +496,7 @@ defmodule Muro.Synth.Cert do
       lemma = Map.fetch!(solves, state)
 
       """
-      rewrite #{lemma} #{Names.current("m")} motive (λ #{Names.current("z")} → {#{nest} ≡ #{rhs} : #{vocab.reward}}) in
+      rewrite #{spell_apply.(lemma)} motive (λ #{Names.current("z")} → {#{nest} ≡ #{rhs} : #{vocab.reward}}) in
       #{acc}\
       """
       |> String.trim_trailing()
@@ -567,6 +610,14 @@ defmodule Muro.Synth.Cert do
   end
 
   defp leaf_lemmas(host, arms, states, actions, rank, kind, below, taken) do
+    if wide?(states, actions) do
+      wide_leaves(host, arms, states, actions, rank, kind, below, taken)
+    else
+      leaf_defs(host, arms, states, actions, rank, kind, below, taken)
+    end
+  end
+
+  defp leaf_defs(host, arms, states, actions, rank, kind, below, taken) do
     cells =
       for state <- states, left <- actions, right <- actions do
         {state, left, right}
@@ -588,6 +639,64 @@ defmodule Muro.Synth.Cert do
       ob = obligation(name, state, left, right, arm.name, bit)
       {text ++ [lemma], taken, obs ++ [ob], Map.put(names, {state, left, right}, name)}
     end)
+  end
+
+  # One expression per cell, not one definition. `cert-miss` and
+  # `cert-same` are the empty ranking and the equal-action diagonal.
+  # A preferring pair still names its pointwise lemma.
+  defp wide_leaves(host, arms, states, actions, _rank, kind, below, taken) do
+    {miss, taken} = Muro.Synth.Book.reserve("cert-miss-#{kind}", taken)
+    {same, taken} = Muro.Synth.Book.reserve("cert-same-#{kind}", taken)
+
+    cells =
+      for state <- states, left <- actions, right <- actions do
+        {state, left, right}
+      end
+
+    exprs =
+      Map.new(cells, fn {state, left, right} ->
+        winner = chosen(host, arms, state)
+
+        expr =
+          cond do
+            not unit?(winner, left, right) ->
+              "#{miss} #{atom_src(Term.spell(state))} #{Term.spell(left)} #{Term.spell(right)}"
+
+            left == right ->
+              "#{same} #{atom_src(Term.spell(state))} #{Term.spell(left)}"
+
+            not needs_below?(host, kind, state, left, right) ->
+              dom_refl(kind, host, state, left)
+
+            true ->
+              tabulate(kind, host, state, left, right, Map.fetch!(below, {state, left, right}))
+          end
+
+        {{state, left, right}, nest_cell(expr)}
+      end)
+
+    {["-- wide cover\n", wide_helpers(kind, miss, same)], taken, [], exprs}
+  end
+
+  defp nest_cell(expr) do
+    if String.contains?(expr, "\n"), do: "(\n#{expr})", else: expr
+  end
+
+  defp wide_helpers(kind, miss, same) do
+    fun = stream_fun(kind)
+    s = Names.current("s")
+    a = Names.current("a")
+    b = Names.current("b")
+    r = Names.current("r")
+
+    """
+    def #{miss} : evidence Π (+ #{s} : State) → Π (+ #{a} : Action) → Π (+ #{b} : Action) → Π (#{r} : Empty) → Dom Reward le (#{fun} #{s} #{a}) (#{fun} #{s} #{b}) :=
+      λ (+ #{s} : State) → λ (+ #{a} : Action) → λ (+ #{b} : Action) → λ (#{r} : Empty) →
+        matchEmpty #{r} motive (λ _ → Dom Reward le (#{fun} #{s} #{a}) (#{fun} #{s} #{b}))
+    def #{same} : evidence Π (+ #{s} : State) → Π (+ #{a} : Action) → Π (#{r} : Unit) → Dom Reward le (#{fun} #{s} #{a}) (#{fun} #{s} #{a}) :=
+      λ (+ #{s} : State) → λ (+ #{a} : Action) → λ (#{r} : Unit) →
+        dom-refl Reward le le-refl (#{fun} #{s} #{a})
+    """
   end
 
   defp leaf_type(kind, rank, state, left, right) do
@@ -716,16 +825,16 @@ defmodule Muro.Synth.Cert do
     if cover_only?(host) do
       seal_cover(host, bound, arms, actions, rank, states, proofs, taken)
     else
-      {:ok, seal_closed(host, bound, arms, actions, rank, states, proofs)}
+      {:ok, seal_closed(host, bound, arms, actions, rank, states, proofs, taken)}
     end
   end
 
-  defp seal_closed(host, bound, arms, actions, rank, states, proofs) do
+  defp seal_closed(host, bound, arms, actions, rank, states, proofs, taken) do
     texts = Enum.map(proofs, fn {_name, _target, _kind, _leaves, text} -> text end)
 
-    bodies =
-      Enum.map(proofs, fn {name, target, kind, leaves, _text} ->
-        preserves_text(host, name, target, states, actions, rank, kind, leaves)
+    {bodies, _taken} =
+      Enum.map_reduce(proofs, taken, fn {name, target, kind, leaves, _text}, taken ->
+        preserves_text(host, name, target, states, actions, rank, kind, leaves, taken)
       end)
 
     [rank_text(bound, arms, actions, rank) | texts] ++ bodies
@@ -746,9 +855,9 @@ defmodule Muro.Synth.Cert do
       {name, target, kind, leaves, _text} = proof
       {miss, taken} = Muro.Synth.Book.reserve("cert-cover-miss", taken)
 
-      case preserves_cover(host, name, target, states, actions, rank, kind, leaves, miss) do
+      case preserves_cover(host, name, target, states, actions, rank, kind, leaves, miss, taken) do
         :open -> {:halt, :open}
-        {:ok, body} -> {:cont, {:ok, acc ++ [cover_miss(miss, kind), body], taken}}
+        {:ok, body, taken} -> {:cont, {:ok, acc ++ [cover_miss(miss, kind), body], taken}}
       end
     end)
     |> case do
@@ -781,9 +890,50 @@ defmodule Muro.Synth.Cert do
     end
   end
 
-  defp preserves_cover(host, name, target, states, actions, rank, kind, leaves, miss_name) do
+  defp preserves_cover(host, name, target, states, actions, rank, kind, leaves, miss_name, taken) do
+    if wide?(states, actions) do
+      wide_preserves_cover(
+        host,
+        name,
+        target,
+        states,
+        actions,
+        rank,
+        kind,
+        leaves,
+        miss_name,
+        taken
+      )
+    else
+      preserves_cover_cells(
+        host,
+        name,
+        target,
+        states,
+        actions,
+        rank,
+        kind,
+        leaves,
+        miss_name,
+        taken
+      )
+    end
+  end
+
+  defp preserves_cover_cells(
+         host,
+         name,
+         target,
+         states,
+         actions,
+         rank,
+         kind,
+         leaves,
+         miss_name,
+         taken
+       ) do
     fun = stream_fun(kind)
-    by_spell = Map.new(states, &{&1.spell, &1})
+    by_spell = Map.new(states, &{Term.spell(&1), &1})
 
     typed = fn src ->
       safe = atom_src(src)
@@ -810,8 +960,56 @@ defmodule Muro.Synth.Cert do
          def #{name} : evidence #{target} #{rank} :=
            λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) →
              #{body}
-         """}
+         """, taken}
     end
+  end
+
+  defp wide_preserves_cover(
+         host,
+         name,
+         target,
+         states,
+         actions,
+         rank,
+         kind,
+         leaves,
+         miss_name,
+         taken
+       ) do
+    fun = stream_fun(kind)
+    by_spell = Map.new(states, &{Term.spell(&1), &1})
+    {arm_text, calls, taken} = wide_arm_bundle(states, actions, rank, kind, leaves, taken)
+
+    typed = fn src ->
+      safe = atom_src(src)
+
+      "Π (#{Names.current("r")} : #{rank} #{safe} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{safe} #{Names.current("a")}) (#{fun} #{safe} #{Names.current("b")})"
+    end
+
+    case Term.cover_match(
+           host.schema,
+           Names.current("s"),
+           states,
+           typed,
+           fn spell -> Map.fetch!(calls, Map.fetch!(by_spell, spell)) end,
+           fn src ->
+             "#{miss_name} #{atom_src(src)} #{Names.current("a")} #{Names.current("b")}"
+           end
+         ) do
+      :open ->
+        :open
+
+      {:ok, body} ->
+        {:ok, arm_text ++ [preserves_def(name, target, rank, body)], taken}
+    end
+  end
+
+  defp preserves_def(name, target, rank, body) do
+    """
+    def #{name} : evidence #{target} #{rank} :=
+      λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) →
+        #{body}
+    """
   end
 
   # The branch is this helper applied to the state term. The state
@@ -892,12 +1090,82 @@ defmodule Muro.Synth.Cert do
     """
   end
 
-  defp preserves_text(host, name, target, states, actions, rank, kind, leaves) do
-    if Enum.any?(states, &match?(%Term{}, &1)) do
-      preserves_structured(host, name, target, states, actions, rank, kind, leaves)
+  defp preserves_text(host, name, target, states, actions, rank, kind, leaves, taken) do
+    if wide?(states, actions) do
+      wide_preserves_split(host, name, target, states, actions, rank, kind, leaves, taken)
     else
-      preserves_closed(name, target, states, actions, rank, kind, leaves)
+      text =
+        if Enum.any?(states, &match?(%Term{}, &1)) do
+          preserves_structured(host, name, target, states, actions, rank, kind, leaves)
+        else
+          preserves_closed(name, target, states, actions, rank, kind, leaves)
+        end
+
+      {text, taken}
     end
+  end
+
+  defp wide_preserves_split(host, name, target, states, actions, rank, kind, leaves, taken) do
+    {arm_text, calls, taken} = wide_arm_bundle(states, actions, rank, kind, leaves, taken)
+    fun = stream_fun(kind)
+
+    text =
+      if Enum.any?(states, &match?(%Term{}, &1)) do
+        by_spell = Map.new(states, &{&1.spell, &1})
+
+        body =
+          Term.exhaust(
+            host.schema,
+            Names.current("s"),
+            fn src ->
+              "Π (#{Names.current("r")} : #{rank} #{src} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{src} #{Names.current("a")}) (#{fun} #{src} #{Names.current("b")})"
+            end,
+            fn spell -> Map.fetch!(calls, Map.fetch!(by_spell, spell)) end,
+            bound_binders()
+          )
+
+        arm_text ++ [preserves_def(name, target, rank, body)]
+      else
+        branches =
+          Enum.map_join(states, "\n", fn state ->
+            "| #{Term.spell(state)} => #{Map.fetch!(calls, state)}"
+          end)
+
+        arm_text ++
+          [
+            """
+            def #{name} : evidence #{target} #{rank} :=
+              λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) →
+                match #{Names.current("s")} motive (λ (#{Names.current("x")} : State) → Π (#{Names.current("r")} : #{rank} #{Names.current("x")} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{Names.current("x")} #{Names.current("a")}) (#{fun} #{Names.current("x")} #{Names.current("b")}))
+            #{branches}
+            """
+          ]
+      end
+
+    {text, taken}
+  end
+
+  defp wide_arm_bundle(states, actions, rank, kind, leaves, taken) do
+    fun = stream_fun(kind)
+
+    {rows, taken} =
+      Enum.map_reduce(states, taken, fn state, taken ->
+        {arm, taken} = Muro.Synth.Book.reserve("cert-arm-#{kind}-#{Term.label(state)}", taken)
+        spell = atom_src(Term.spell(state))
+        body = action_nest(state, actions, rank, kind, leaves)
+
+        defn = """
+        def #{arm} : evidence Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Π (#{Names.current("r")} : #{rank} #{spell} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{spell} #{Names.current("a")}) (#{fun} #{spell} #{Names.current("b")}) :=
+          λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
+            #{body}
+        """
+
+        {{state, "#{arm} #{Names.current("a")} #{Names.current("b")}", defn}, taken}
+      end)
+
+    text = Enum.map(rows, &elem(&1, 2))
+    calls = Map.new(rows, fn {state, call, _defn} -> {state, call} end)
+    {text, calls, taken}
   end
 
   defp preserves_closed(name, target, states, actions, rank, kind, leaves) do
@@ -1084,6 +1352,303 @@ defmodule Muro.Synth.Cert do
   end
 
   defp form_text(host, vocab, orbit, taken) do
+    if wide?(orbit.states, host.actions) and orbit.period == 1 do
+      shallow_form(host, vocab, orbit, taken)
+    else
+      form_text_orbit(host, vocab, orbit, taken)
+    end
+  end
+
+  # One closed equation per state per depth up to the transient.
+  # Depth 0 is `refl`. A later depth unfolds `solve` once, then rewrites
+  # one successor at a time. The motive names a single `max`, and the
+  # remaining actions stay a `max-list`, so conversion does not unfold a
+  # wide nest of `solve`. The tail inducts on `n` the same way and calls
+  # each successor's tail at the predecessor, so a cycle still descends.
+  defp shallow_form(host, vocab, orbit, taken) do
+    t = orbit.transient
+    states = orbit.states
+    {suc_eq, taken} = Muro.Synth.Book.reserve("solve-suc-eq", taken)
+    {pack, taken} = squeeze_names(taken)
+
+    {levels, by_k, taken} =
+      Enum.reduce(0..t, {[], %{}, taken}, fn k, {texts, by_k, taken} ->
+        prev_names =
+          if k == 0 do
+            %{}
+          else
+            Map.new(by_k[k - 1], fn {state, {name, _value}} -> {state, name} end)
+          end
+
+        {rows, taken} =
+          Enum.map_reduce(states, taken, fn state, taken ->
+            {name, taken} =
+              Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}-#{k}", taken)
+
+            value = at(orbit, k)[state]
+
+            body =
+              if k == 0 do
+                "refl"
+              else
+                step_peel(
+                  host,
+                  state,
+                  k - 1,
+                  prev_names,
+                  spell_nat(value),
+                  vocab,
+                  suc_eq,
+                  pack,
+                  fn succ ->
+                    at(orbit, k - 1)[succ]
+                  end
+                )
+              end
+
+            defn =
+              evidence_def(
+                name,
+                "{solve #{Term.spell(state)} #{nat_arg(k)} ≡ #{spell_nat(value)} : #{vocab.reward}}",
+                body
+              )
+
+            {{state, name, value, defn}, taken}
+          end)
+
+        named = Map.new(rows, fn {state, name, value, _defn} -> {state, {name, value}} end)
+        {texts ++ Enum.map(rows, &elem(&1, 3)), Map.put(by_k, k, named), taken}
+      end)
+
+    Process.put(
+      :muro_synth_concrete,
+      Map.new(states, fn state ->
+        {state, Map.new(0..t, fn k -> {k, Map.fetch!(by_k[k], state)} end)}
+      end)
+    )
+
+    named_at = fn state, k -> elem(Map.fetch!(by_k[k], state), 0) end
+
+    {tails, taken} =
+      Enum.map_reduce(states, taken, fn state, taken ->
+        {name, taken} = Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}", taken)
+        {{state, name}, taken}
+      end)
+
+    solves = Map.new(tails)
+
+    tail_text =
+      Enum.map(states, fn state ->
+        const = spell_nat(at(orbit, t)[state])
+        n = Names.current("n")
+        m = Names.current("m")
+
+        rows =
+          Enum.map(host.actions, fn action ->
+            succ = next(host, state, action)
+            {"#{solves[succ]} #{m}", spell_nat(at(orbit, t)[succ]), action}
+          end)
+
+        chain = finish_peel(state, shift_term(m, t), const, vocab, suc_eq, rows, pack)
+
+        goal = fn var ->
+          "solve #{Term.spell(state)} #{shift_term(var, t)} ≡ #{const} : #{vocab.reward}"
+        end
+
+        evidence_def(
+          solves[state],
+          "Π (+ #{n} : Nat) → {#{goal.(n)}}",
+          """
+          λ (+ #{n} : Nat) →
+            match #{n} motive (λ (#{Names.current("k")} : Nat) → {#{goal.(Names.current("k"))}})
+              | 0 => #{named_at.(state, t)}
+              | suc #{m} =>
+                  #{chain}
+          """
+        )
+      end)
+
+    text = [solve_suc_def(suc_eq, vocab), squeeze_defs(pack, vocab) | levels] ++ tail_text
+    {text, solves, taken}
+  end
+
+  defp squeeze_names(taken) do
+    {max_same, taken} = Muro.Synth.Book.reserve("max-same", taken)
+    {max_bot, taken} = Muro.Synth.Book.reserve("max-bot", taken)
+    {rest_eq, taken} = Muro.Synth.Book.reserve("rest-eq", taken)
+    {squeeze, taken} = Muro.Synth.Book.reserve("squeeze", taken)
+    {%{max_same: max_same, max_bot: max_bot, rest_eq: rest_eq, squeeze: squeeze}, taken}
+  end
+
+  # `{solve s (suc k) ≡ max-list (map (solve ∘ step) all-actions)}` by the
+  # clause of `solve`. One unfold, then `peel_rows` rewrites each action.
+  defp solve_suc_def(name, vocab) do
+    s = Names.current("s")
+    k = Names.current("k")
+    a = Names.current("a")
+
+    evidence_def(
+      name,
+      "Π (+ #{s} : State) → Π (#{k} : Nat) → {solve #{s} (suc #{k}) ≡ max-list (map Action Reward (λ (#{a} : Action) → solve (fst (step #{s} #{a})) #{k}) all-actions) : #{vocab.reward}}",
+      "λ (+ #{s} : State) → λ (#{k} : Nat) → refl"
+    )
+  end
+
+  defp step_peel(host, state, prev, lemmas, goal, vocab, suc_eq, pack, value_of) do
+    rows =
+      Enum.map(host.actions, fn action ->
+        succ = next(host, state, action)
+        {Map.fetch!(lemmas, succ), spell_nat(value_of.(succ)), action}
+      end)
+
+    finish_peel(state, nat_arg(prev), goal, vocab, suc_eq, rows, pack)
+  end
+
+  # Every successor carries the same constant, so one rewrite of the
+  # first action and a list induction (`squeeze`) finish the max.
+  # A mixed constant still peels one action at a time; that chain is a
+  # closed numeral, which reduces.
+  defp finish_peel(state, k, goal, vocab, suc_eq, rows, pack) do
+    uniform? = rows != [] and Enum.all?(rows, fn {_eq, const, _action} -> const == goal end)
+
+    if uniform? do
+      squeeze_peel(state, k, goal, vocab, suc_eq, rows, pack)
+    else
+      unfold_peel(state, k, goal, vocab, suc_eq, rows)
+    end
+  end
+
+  defp squeeze_peel(state, k, goal, vocab, suc_eq, [{head_eq, _const, _action} | rest], pack) do
+    spell = atom_src(Term.spell(state))
+    z = Names.current("z")
+    goal_p = paren(goal)
+
+    {after_head, rest_term} =
+      case rest do
+        [] ->
+          {"#{pack.max_bot} #{goal_p}", vocab.bottom}
+
+        _ ->
+          actions = Enum.map(rest, &elem(&1, 2))
+          tuple = proof_tuple(Enum.map(rest, &elem(&1, 0)))
+
+          {"#{pack.squeeze} (#{cons_list(actions)}) #{spell} #{k} #{goal_p} #{tuple}",
+           max_list_of(actions, spell, k)}
+      end
+
+    """
+    rewrite #{suc_eq} #{spell} #{k} motive (λ w → {w ≡ #{goal} : #{vocab.reward}}) in
+    rewrite #{head_eq} motive (λ #{z} → {#{vocab.max} #{z} #{paren(rest_term)} ≡ #{goal} : #{vocab.reward}}) in
+    #{after_head}
+    """
+    |> String.trim_trailing()
+  end
+
+  defp proof_tuple([]), do: "tt"
+
+  defp proof_tuple([eq | rest]) do
+    inner = proof_tuple(rest)
+    if inner == "tt", do: "(#{eq}, tt)", else: "(#{eq}, #{inner})"
+  end
+
+  defp squeeze_defs(pack, vocab) do
+    n = Names.current("n")
+    p = Names.current("p")
+    s = Names.current("s")
+    k = Names.current("k")
+    c = Names.current("c")
+    xs = Names.current("xs")
+    h = Names.current("h")
+    rest = Names.current("r")
+    e = Names.current("e")
+    max = vocab.max
+    reward = vocab.reward
+    same = pack.max_same
+    bot = pack.max_bot
+    req = pack.rest_eq
+    sq = pack.squeeze
+
+    """
+    def #{same} : evidence Π (#{n} : Nat) → {#{max} #{n} #{n} ≡ #{n} : #{reward}} :=
+      λ (#{n} : Nat) →
+        match #{n} motive (λ (x : Nat) → {#{max} x x ≡ x : #{reward}})
+          | 0 => refl
+          | suc #{p} => rewrite #{same} #{p} motive (λ z → {suc z ≡ suc #{p} : #{reward}}) in refl
+    def #{bot} : evidence Π (#{n} : Nat) → {#{max} #{n} 0 ≡ #{n} : #{reward}} :=
+      λ (#{n} : Nat) →
+        match #{n} motive (λ (x : Nat) → {#{max} x 0 ≡ x : #{reward}})
+          | 0 => refl
+          | suc u => refl
+    def #{req} : spec Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{c} : Nat) → Π (#{xs} : List Action) → Type :=
+      λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{c} : Nat) → λ (#{xs} : List Action) →
+        match #{xs} motive (λ _ → Type)
+          | nil => Unit
+          | cons #{h} #{rest} => {solve (fst (step #{s} #{h})) #{k} ≡ #{c} : #{reward}} × #{req} #{s} #{k} #{c} #{rest}
+    def #{sq} : evidence Π (#{xs} : List Action) → Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{c} : Nat) → Π (#{e} : #{req} #{s} #{k} #{c} #{xs}) → {#{max} #{c} (max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k}) #{xs})) ≡ #{c} : #{reward}} :=
+      λ (#{xs} : List Action) →
+        match #{xs} motive (λ (ys : List Action) → Π (+ #{s} : State) → Π (+ #{k} : Nat) → Π (#{c} : Nat) → Π (q : #{req} #{s} #{k} #{c} ys) → {#{max} #{c} (max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k}) ys)) ≡ #{c} : #{reward}})
+          | nil => λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{c} : Nat) → λ (u : Unit) → #{bot} #{c}
+          | cons #{h} #{rest} => λ (+ #{s} : State) → λ (+ #{k} : Nat) → λ (#{c} : Nat) → λ (q : {solve (fst (step #{s} #{h})) #{k} ≡ #{c} : #{reward}} × #{req} #{s} #{k} #{c} #{rest}) →
+              let (hh, hr) = q in
+              rewrite hh motive (λ z → {#{max} #{c} (#{max} z (max-list (map Action Reward (λ (a : Action) → solve (fst (step #{s} a)) #{k}) #{rest}))) ≡ #{c} : #{reward}}) in
+              rewrite #{sq} #{rest} #{s} #{k} #{c} hr motive (λ z → {#{max} #{c} z ≡ #{c} : #{reward}}) in
+              #{same} #{c}
+    """
+  end
+
+  defp unfold_peel(state, k, goal, vocab, suc_eq, rows) do
+    spell = atom_src(Term.spell(state))
+    chain = peel_rows(rows, spell, k, goal, vocab, [])
+
+    """
+    rewrite #{suc_eq} #{spell} #{k} motive (λ w → {w ≡ #{goal} : #{vocab.reward}}) in
+    #{chain}
+    """
+    |> String.trim_trailing()
+  end
+
+  defp peel_rows([], _spell, _k, _goal, _vocab, _prefix), do: "refl"
+
+  defp peel_rows([{eq, const, _action} | rest], spell, k, goal, vocab, prefix) do
+    inner = peel_rows(rest, spell, k, goal, vocab, prefix ++ [const])
+
+    rest_term =
+      case rest do
+        [] -> vocab.bottom
+        _ -> max_list_of(Enum.map(rest, &elem(&1, 2)), spell, k)
+      end
+
+    z = Names.current("z")
+
+    nest =
+      Enum.reduce(Enum.reverse(prefix), "#{vocab.max} #{z} #{paren(rest_term)}", fn n, acc ->
+        "#{vocab.max} #{paren(n)} #{paren(acc)}"
+      end)
+
+    """
+    rewrite #{eq} motive (λ #{z} → {#{nest} ≡ #{goal} : #{vocab.reward}}) in
+    #{inner}
+    """
+    |> String.trim_trailing()
+  end
+
+  defp max_list_of(actions, state_spell, k) do
+    "max-list (map Action Reward (λ (a : Action) → solve (fst (step #{state_spell} a)) #{k}) (#{cons_list(actions)}))"
+  end
+
+  defp cons_list(actions) do
+    Enum.reduce(Enum.reverse(actions), "nil", fn action, acc ->
+      term = Term.spell(action)
+
+      if acc == "nil" do
+        "cons #{term} nil"
+      else
+        "cons #{term} (#{acc})"
+      end
+    end)
+  end
+
+  defp form_text_orbit(host, vocab, orbit, taken) do
     {plans, taken} =
       Enum.map_reduce(orbit.states, taken, fn state, taken ->
         plan_state(orbit, state, taken)
@@ -1372,6 +1937,40 @@ defmodule Muro.Synth.Cert do
     end
   end
 
+  defp const_zero(left, right, depth) do
+    case Process.get(:muro_synth_concrete) do
+      table when is_map(table) ->
+        {lname, lval} = concrete_cell(table, left, depth)
+        {rname, _rval} = concrete_cell(table, right, depth)
+        shown = spell_nat(lval)
+        idx = nat_arg(depth)
+
+        """
+        rewrite #{lname} motive (λ #{Names.current("z")} → le #{Names.current("z")} (solve #{Term.spell(right)} #{idx})) in
+        rewrite #{rname} motive (λ #{Names.current("z")} → le #{paren(shown)} #{Names.current("z")}) in tt\
+        """
+        |> String.trim_trailing()
+
+      _ ->
+        "tt"
+    end
+  end
+
+  defp concrete_cell(table, state, depth) do
+    row =
+      case Map.fetch(table, state) do
+        {:ok, row} ->
+          row
+
+        :error ->
+          spell = Term.spell(state)
+          {_key, row} = Enum.find(table, fn {key, _row} -> Term.spell(key) == spell end)
+          row
+      end
+
+    Map.fetch!(row, depth)
+  end
+
   defp const_nest(left, right, solves, const_left, t, var, depth) when depth == t do
     idx = shift_term(var, t)
     shown = spell_nat(const_left)
@@ -1389,7 +1988,7 @@ defmodule Muro.Synth.Cert do
 
     """
     (match #{var} motive (λ (#{Names.current("k")} : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
-      | 0 => tt
+      | 0 => #{const_zero(left, right, depth)}
       | suc #{nxt} =>
           #{const_nest(left, right, solves, const_left, t, nxt, depth + 1)})
     """

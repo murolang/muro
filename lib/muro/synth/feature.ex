@@ -476,19 +476,25 @@ defmodule Muro.Synth.Feature do
   # atom of the version space. Keep the earlier one. A stem column is
   # exempt when `keep_stems?` is set: dropping it would make `selfp`
   # and `otherp` read that action as false.
+  # The vector is the bits of one spec on the cover. It depends only on
+  # `step` and the spec, so a later candidate compares against the vectors
+  # already stored. Re-evaluating a kept spec would repeat the same bits.
+  # The earlier spec stays. A stem column stays when `keep_stems?` is set,
+  # even when its vector matches an earlier one.
   defp drop_equivalent(specs, states, eval, keep_stems? \\ false) do
-    Enum.reduce(specs, [], fn spec, kept ->
-      vector = Enum.map(states, &eval.(spec, &1))
+    {kept, _vectors} =
+      Enum.reduce(specs, {[], []}, fn spec, {kept, vectors} ->
+        vector = Enum.map(states, &eval.(spec, &1))
+        duplicate? = Enum.any?(vectors, &(&1 == vector))
 
-      duplicate? =
-        Enum.any?(kept, fn other -> Enum.map(states, &eval.(other, &1)) == vector end)
+        if duplicate? and not (keep_stems? and family_spec?(spec)) do
+          {kept, vectors}
+        else
+          {[spec | kept], [vector | vectors]}
+        end
+      end)
 
-      if duplicate? and not (keep_stems? and family_spec?(spec)) do
-        kept
-      else
-        kept ++ [spec]
-      end
-    end)
+    Enum.reverse(kept)
   end
 
   defp taken_names(book), do: Muro.Synth.Names.reserved(book)

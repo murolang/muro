@@ -1,0 +1,104 @@
+-- Four positions and twenty actions. 4 × 20 × 20 = 1600 cells, so the
+-- certificate is the wide cover: one arm per state, shared miss and
+-- same lemmas, and one-step solve equations. `go` walks toward `tok 0`.
+-- `a02` swaps `tok 1` with `tok 2`. Every other action stays. The sink
+-- pays 1. The state graph has a cycle, and the value still settles.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  tok : Π (i : Nat) → State
+
+data Action : Type where
+  go : Action
+  a02 : Action
+  a03 : Action
+  a04 : Action
+  a05 : Action
+  a06 : Action
+  a07 : Action
+  a08 : Action
+  a09 : Action
+  a10 : Action
+  a11 : Action
+  a12 : Action
+  a13 : Action
+  a14 : Action
+  a15 : Action
+  a16 : Action
+  a17 : Action
+  a18 : Action
+  a19 : Action
+  a20 : Action
+
+def Reward : spec Type := Nat
+
+def progress : run Π (i : Nat) → State × Reward :=
+  λ (i : Nat) →
+    match i motive (λ _ → State × Reward)
+      | 0 => (tok 0, suc 0)
+      | suc i1 =>
+          (match i1 motive (λ _ → State × Reward)
+            | 0 => (tok 0, 0)
+            | suc i2 =>
+                (match i2 motive (λ _ → State × Reward)
+                  | 0 => (tok 0, 0)
+                  | suc _ => (tok (suc (suc 0)), 0)))
+
+def swap : run Π (i : Nat) → State × Reward :=
+  λ (i : Nat) →
+    match i motive (λ _ → State × Reward)
+      | 0 => (tok 0, suc 0)
+      | suc i1 =>
+          (match i1 motive (λ _ → State × Reward)
+            | 0 => (tok (suc (suc 0)), 0)
+            | suc i2 =>
+                (match i2 motive (λ _ → State × Reward)
+                  | 0 => (tok (suc 0), 0)
+                  | suc _ => (tok (suc (suc (suc 0))), 0)))
+
+def pay : run Π (i : Nat) → State × Reward :=
+  λ (i : Nat) →
+    match i motive (λ _ → State × Reward)
+      | 0 => (tok 0, suc 0)
+      | suc i1 =>
+          (match i1 motive (λ _ → State × Reward)
+            | 0 => (tok (suc 0), 0)
+            | suc i2 =>
+                (match i2 motive (λ _ → State × Reward)
+                  | 0 => (tok (suc (suc 0)), 0)
+                  | suc _ => (tok (suc (suc (suc 0))), 0)))
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | tok i =>
+          (match a motive (λ _ → State × Reward)
+            | go => progress i
+            | a02 => swap i
+            | a03 => pay i
+            | a04 => pay i
+            | a05 => pay i
+            | a06 => pay i
+            | a07 => pay i
+            | a08 => pay i
+            | a09 => pay i
+            | a10 => pay i
+            | a11 => pay i
+            | a12 => pay i
+            | a13 => pay i
+            | a14 => pay i
+            | a15 => pay i
+            | a16 => pay i
+            | a17 => pay i
+            | a18 => pay i
+            | a19 => pay i
+            | a20 => pay i)
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go (cons a02 (cons a03 (cons a04 (cons a05 (cons a06 (cons a07 (cons a08 (cons a09 (cons a10 (cons a11 (cons a12 (cons a13 (cons a14 (cons a15 (cons a16 (cons a17 (cons a18 (cons a19 (cons a20 nil)))))))))))))))))))
+def default-action : run Action := go
+def horizon : run Nat := 4
+def all-states : run List State := cons (tok 0) (cons (tok (suc 0)) (cons (tok (suc (suc 0))) (cons (tok (suc (suc (suc 0)))) nil)))

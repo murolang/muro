@@ -43,6 +43,13 @@ defmodule Muro.Synth.Book do
       Process.put(:muro_synth_class_recur, true)
     end
 
+    # Before `holds`. A wide cover does not emit one observation refl
+    # per state: that table is one `step` per cell, and the homomorphism
+    # is the certificate the checker reads.
+    if Muro.Synth.Cert.wide_host?(host) do
+      Process.put(:muro_synth_wide, true)
+    end
+
     try do
       taken = Names.reserved(host.book)
       {binders, taken} = Names.table(taken)
@@ -58,6 +65,8 @@ defmodule Muro.Synth.Book do
       end)
     after
       Process.delete(:muro_synth_class_recur)
+      Process.delete(:muro_synth_wide)
+      Process.delete(:muro_synth_concrete)
     end
   end
 
@@ -1011,7 +1020,7 @@ defmodule Muro.Synth.Book do
   end
 
   defp holds(arms, bound) do
-    if Process.get(:muro_synth_class_recur) == true do
+    if Process.get(:muro_synth_class_recur) == true or Process.get(:muro_synth_wide) == true do
       ""
     else
       hold_lines(arms, bound)

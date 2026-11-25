@@ -108,10 +108,8 @@ defmodule Muro.Synth.Host do
           |> Map.put(:horizon, horizon)
           |> Map.put(:all_states, all_states)
           |> Map.put(:default, default)
-          |> Map.put(:step, fn state, action ->
-            {next, reward} = call(host, "step", [state_arg(host, state), atom!(host, action)])
-            {decode_state!(host, next), reward}
-          end)
+          |> tap(fn _ -> ensure_step_cache() end)
+          |> Map.put(:step, step_fun(host))
           |> Map.put(:leb, fn left, right ->
             truth!(call(host, "leb", [left, right]))
           end)
@@ -123,6 +121,45 @@ defmodule Muro.Synth.Host do
     end
   catch
     {:error, _, _} = err -> err
+  end
+
+  # Search memo only. `step` of one state and one action is one pair.
+  # `Loop.run/2` deletes `:muro_synth_steps` at the start and at the end.
+  # The key includes the emitted module, so two hosts in one process
+  # do not share a pair. The checker does not read this key.
+  defp ensure_step_cache do
+    case Process.get(:muro_synth_steps) do
+      table when is_map(table) -> :ok
+      _ -> Process.put(:muro_synth_steps, %{})
+    end
+  end
+
+  defp step_fun(host) do
+    fn state, action ->
+      case Process.get(:muro_synth_steps) do
+        table when is_map(table) ->
+          key = {host.module, state, action}
+
+          case Map.fetch(table, key) do
+            {:ok, pair} ->
+              pair
+
+            :error ->
+              pair = raw_step(host, state, action)
+              table = Process.get(:muro_synth_steps, %{})
+              Process.put(:muro_synth_steps, Map.put(table, key, pair))
+              pair
+          end
+
+        _ ->
+          raw_step(host, state, action)
+      end
+    end
+  end
+
+  defp raw_step(host, state, action) do
+    {next, reward} = call(host, "step", [state_arg(host, state), atom!(host, action)])
+    {decode_state!(host, next), reward}
   end
 
   @doc false

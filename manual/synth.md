@@ -52,6 +52,10 @@ Two actions are one predicate: prefer the first action of `all-actions`, else th
 
 `successor` compares successor values, pointwise, on a finite prefix, and asks for `CoinductiveHomomorphism`. It claims `CoindHomo` only when the immediate rewards respect the same ranking. `coind-homo` compares action values, pointwise, on the same kind of prefix, and asks for `CoindHomo`. A first reward that is smaller does not make the rest of the stream smaller. A pair the oracle cannot order stops the run, including a pair of actions that both lose to a third. A successor value or an action value is that same refusal when the rewards at a state have no maximum. The report names the carrier and the two actions. It does not invent a ranking.
 
+The search keeps one table of best traces, one table of solved values, and one table of `step` results, and every comparison reads those tables. A comparison that starts from an empty table ranks the same actions, including a tie and a pair it cannot order. The tables are not the certificate. The checker does not read them.
+
+A cover with more than 1500 state-action-action cells, whose `State` is not the placement triple `ongoing`, `dead`, and `solved`, is certified by one arm per state. An empty ranking and a pair of equal actions are two shared lemmas. `solve` at depth 0 is `refl`. A later depth unfolds `solve` once, then rewrites one action at a time. The motive names a single `max`, and the actions still to come stay a `max-list`. When every successor carries the same constant, the rest of that max is one list induction. The tail inducts on `n` the same way. A smaller cover is the book this search already wrote. The checker still decides.
+
 ## The loop
 
 `--depth` is the initial depth. Depth 0 is the constants and the feature tests. A negation, a conjunction, or a disjunction needs a greater depth. An empty version space is searched one depth further.
