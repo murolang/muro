@@ -493,9 +493,11 @@ defmodule Muro.EmitCEnumTest do
     task =
       Task.async(fn ->
         capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+        :ok
       end)
 
-    assert Task.yield(task, 15_000) || Task.shutdown(task, :brutal_kill),
+    assert {:ok, :ok} ==
+             (Task.yield(task, 15_000) || Task.shutdown(task, :brutal_kill)),
            "C emit looped or ran too long on mutually referenced data"
 
     header = File.read!(Path.join(dir, "mutual.h"))
