@@ -558,7 +558,8 @@ defmodule Muro.Emit.C do
         {:error, "c:unboxed"}
       else
         {:ok,
-         {squash([pre, pre2]), "#{g("mk_pair")}(#{slot_store(ea, la, st)}, #{slot_store(eb, lb, st)})",
+         {squash([pre, pre2]),
+          "#{g("mk_pair")}(#{slot_store(ea, la, st)}, #{slot_store(eb, lb, st)})",
           {:pair, la, lb}, st}}
       end
     end

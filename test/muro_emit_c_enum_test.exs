@@ -331,7 +331,6 @@ defmodule Muro.EmitCEnumTest do
     link_run!(dir, ~w(mb main), "OK\n")
   end
 
-
   test "a stream of all-nullary data packs the seed and a captured flag in the environment" do
     dir = tmp_dir()
     path = Path.join(dir, "flags_stream.muro")
@@ -441,6 +440,7 @@ defmodule Muro.EmitCEnumTest do
       refute body =~ "->muro__field_tag", fun
       refute body =~ "muro__ALLOC", fun
     end
+
     assert source =~ "switch (muro__s_1)"
 
     File.write!(Path.join(dir, "main.c"), """

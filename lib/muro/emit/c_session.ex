@@ -838,6 +838,7 @@ defmodule Muro.Emit.C.Session do
 
   defp arg_ok?({:dat, name, _}, param, st) when is_binary(param) do
     spell = C.data_struct(name, st.prefix)
+
     param == spell <> " *" or
       (param == spell and C.enum_type?(st.book, name) and not unboxed_data?(st.book, name))
   end

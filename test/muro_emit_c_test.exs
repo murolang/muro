@@ -505,7 +505,9 @@ defmodule Muro.EmitCTest do
     assert source =~ "muro__ALLOC(sizeof *muro__p)"
 
     refute source =~ Muro.Emit.Name.gen("obj_Bool_" <> Muro.Emit.C.source_id("true"))
-    assert source =~ "static Bool #{Muro.Emit.C.source_id("true")}(void) { return #{Muro.Emit.C.ctor_tag("Bool", "true")}; }"
+
+    assert source =~
+             "static Bool #{Muro.Emit.C.source_id("true")}(void) { return #{Muro.Emit.C.ctor_tag("Bool", "true")}; }"
 
     refute source =~ "malloc("
     cc!(dir, "call.c", "call.o")
