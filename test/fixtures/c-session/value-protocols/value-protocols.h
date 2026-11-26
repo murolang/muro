@@ -12,59 +12,24 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Frame Frame;
-typedef struct Ctl Ctl;
-typedef struct Goaway Goaway;
-typedef struct Body Body;
-typedef struct Bool Bool;
 typedef enum muro__tag_Frame {
   muro__tag_Frame_bytes = 0,
   muro__tag_Frame_trailers = 1,
   muro__tag_Frame_headers = 2
-} muro__tag_Frame;
-struct Frame {
-  uint8_t muro__field_tag; /* bytes = 0, trailers = 1, headers = 2 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Frame;
 typedef enum muro__tag_Ctl {
   muro__tag_Ctl_rst = 0
-} muro__tag_Ctl;
-struct Ctl {
-  uint8_t muro__field_tag; /* rst = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Ctl;
 typedef enum muro__tag_Goaway {
   muro__tag_Goaway_goaway = 0
-} muro__tag_Goaway;
-struct Goaway {
-  uint8_t muro__field_tag; /* goaway = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Goaway;
 typedef enum muro__tag_Body {
   muro__tag_Body_chunk = 0
-} muro__tag_Body;
-struct Body {
-  uint8_t muro__field_tag; /* chunk = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Body;
 typedef enum muro__tag_Bool {
   muro__tag_Bool_true_k = 0,
   muro__tag_Bool_false_k = 1
-} muro__tag_Bool;
-struct Bool {
-  uint8_t muro__field_tag; /* true = 0, false = 1 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Bool;
 typedef enum muro__word_valuezdprotocols {
   muro__word_valuezdprotocols_Frame_bytes = 0,
   muro__word_valuezdprotocols_Frame_trailers = 1,
@@ -75,9 +40,9 @@ typedef enum muro__word_valuezdprotocols {
   muro__word_valuezdprotocols_Bool_true_k = 6,
   muro__word_valuezdprotocols_Bool_false_k = 7
 } muro__word_valuezdprotocols;
-Bool *late(Frame *f);
-Frame *aszdbytes(void);
-Frame *aszdheaders(void);
+Bool late(Frame f);
+Frame aszdbytes(void);
+Frame aszdheaders(void);
 
 #include <stddef.h>
 #include <stdint.h>

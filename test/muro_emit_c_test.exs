@@ -385,7 +385,7 @@ defmodule Muro.EmitCTest do
     bool = Muro.Emit.C.source_id("Bool")
 
     assert header =~
-             "muro__nat *#{Muro.Emit.C.source_id("read")}(#{bool} *#{Muro.Emit.C.source_id("close")})"
+             "muro__nat *#{Muro.Emit.C.source_id("read")}(#{bool} #{Muro.Emit.C.source_id("close")})"
 
     assert header =~ "muro__nat *#{Muro.Emit.C.source_id("write")}(void)"
     assert header =~ "muro__nat *#{Muro.Emit.C.source_id("delete")}(void)"
@@ -393,8 +393,9 @@ defmodule Muro.EmitCTest do
     assert header =~ "muro__nat *#{Muro.Emit.C.source_id("uint8_t")}(void)"
     assert header =~ "muro__nat *keep(void)"
     refute header =~ ~r/(?<![\w])read\(/
-    assert source =~ "static #{bool} *#{Muro.Emit.C.source_id("true")}(void)"
-    assert source =~ "static #{bool} *#{Muro.Emit.C.source_id("false")}(void)"
+    assert source =~ "static #{bool} #{Muro.Emit.C.source_id("true")}(void)"
+    assert source =~ "static #{bool} #{Muro.Emit.C.source_id("false")}(void)"
+    refute source =~ "static #{bool} *"
     refute source =~ ~r/(?<![\w])true\(/
     cc!(dir, "reserved.c", "reserved.o", [c23_flag()])
 
@@ -437,6 +438,7 @@ defmodule Muro.EmitCTest do
     """)
 
     capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "nullary.h"))
     source = File.read!(Path.join(dir, "nullary.c"))
     bool = Muro.Emit.C.source_id("Bool")
     wrap = Muro.Emit.C.source_id("Wrap")
@@ -446,14 +448,19 @@ defmodule Muro.EmitCTest do
     zed = Muro.Emit.C.source_id("zed")
     f0 = Muro.Emit.Name.gen("f", 0)
     p = Muro.Emit.Name.gen("p")
-    true_obj = Muro.Emit.Name.gen("obj_#{bool}_#{true_k}")
-    false_obj = Muro.Emit.Name.gen("obj_#{bool}_#{false_k}")
+    true_tag = Muro.Emit.C.ctor_tag("Bool", "true")
+    false_tag = Muro.Emit.C.ctor_tag("Bool", "false")
     bare_obj = Muro.Emit.Name.gen("obj_#{wrap}_bare")
     zed_obj = Muro.Emit.Name.gen("obj_#{tok}_#{zed}")
-    assert source =~ "static #{bool} #{true_obj} = #{fieldless(0)};"
-    assert source =~ "static #{bool} *#{true_k}(void) { return &#{true_obj}; }"
-    assert source =~ "static #{bool} #{false_obj} = #{fieldless(1)};"
-    assert source =~ "static #{bool} *#{false_k}(void) { return &#{false_obj}; }"
+    assert header =~ "typedef enum #{Muro.Emit.C.ctor_tag_type("Bool")}"
+    assert header =~ "#{true_tag} = 0"
+    assert header =~ "#{false_tag} = 1"
+    refute header =~ "typedef struct #{bool}"
+    refute header =~ "#{bool} *"
+    assert source =~ "static #{bool} #{true_k}(void) { return #{true_tag}; }"
+    assert source =~ "static #{bool} #{false_k}(void) { return #{false_tag}; }"
+    refute source =~ "static #{bool} *"
+    refute source =~ Muro.Emit.Name.gen("obj_#{bool}_#{true_k}")
     assert source =~ "static #{wrap} #{bare_obj} = #{fieldless(0)};"
     assert source =~ "static #{wrap} *bare(void) { return &#{bare_obj}; }"
     assert source =~ "static #{tok} #{zed_obj} = #{fieldless(0)};"
@@ -497,8 +504,8 @@ defmodule Muro.EmitCTest do
     assert header =~ "#define muro__ALLOC(n) malloc(n)"
     assert source =~ "muro__ALLOC(sizeof *muro__p)"
 
-    assert source =~
-             "static Bool #{Muro.Emit.Name.gen("obj_Bool_" <> Muro.Emit.C.source_id("true"))} = #{fieldless(0)};"
+    refute source =~ Muro.Emit.Name.gen("obj_Bool_" <> Muro.Emit.C.source_id("true"))
+    assert source =~ "static Bool #{Muro.Emit.C.source_id("true")}(void) { return #{Muro.Emit.C.ctor_tag("Bool", "true")}; }"
 
     refute source =~ "malloc("
     cc!(dir, "call.c", "call.o")
@@ -541,7 +548,7 @@ defmodule Muro.EmitCTest do
       muro__nat *a = two();
       int n1 = nats(a);
       size_t used = muro_arena_at;
-      Bool *f = flag();
+      Bool f = flag();
       size_t after_flag = muro_arena_at;
       muro_arena_at = 0;
       muro__nat *b = two();
@@ -550,6 +557,7 @@ defmodule Muro.EmitCTest do
       if (used == 0 || muro_arena_at != used) return 2;
       if (after_flag != used) return 3;
       if (f != flag()) return 4;
+      if (f != muro__tag_Bool_true_k) return 5;
       return 0;
     }
     """)
@@ -1032,10 +1040,16 @@ defmodule Muro.EmitCTest do
     header = File.read!(Path.join(dir, "prim.h"))
     source = File.read!(Path.join(dir, "prim.c"))
     assert header =~ "uint8_t muro__field_tag;"
-    assert header =~ "typedef struct bool_k bool_k;"
+    assert header =~ "typedef enum muro__tag_bool_k"
+    assert header =~ "} bool_k;"
+    refute header =~ "typedef struct bool_k"
     assert header =~ "typedef struct int_k int_k;"
-    assert header =~ "typedef struct char_k char_k;"
-    assert header =~ "typedef struct uint8zut uint8zut;"
+    assert header =~ "typedef enum muro__tag_char_k"
+    assert header =~ "} char_k;"
+    refute header =~ "typedef struct char_k"
+    assert header =~ "typedef enum muro__tag_uint8zut"
+    assert header =~ "} uint8zut;"
+    refute header =~ "typedef struct uint8zut"
     refute source =~ "uint8zut_k"
     refute header =~ "struct uint8_t "
 

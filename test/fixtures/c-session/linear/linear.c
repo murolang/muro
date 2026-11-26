@@ -15,13 +15,9 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-__attribute__((unused)) static Bool muro__obj_Bool_true_k = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Bool true_k(void) { return muro__tag_Bool_true_k; }
 
-__attribute__((unused)) static Bool *true_k(void) { return &muro__obj_Bool_true_k; }
-
-__attribute__((unused)) static Bool muro__obj_Bool_false_k = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Bool *false_k(void) { return &muro__obj_Bool_false_k; }
+__attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_k; }
 muro__nat *kept(void) {
   return muro__zero();
 }

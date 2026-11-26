@@ -12,16 +12,9 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Report Report;
 typedef enum muro__tag_Report {
   muro__tag_Report_ok = 0
-} muro__tag_Report;
-struct Report {
-  uint8_t muro__field_tag; /* ok = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Report;
 typedef enum muro__word_mayzdfailzdcontrol {
   muro__word_mayzdfailzdcontrol_Report_ok = 0
 } muro__word_mayzdfailzdcontrol;

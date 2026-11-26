@@ -15,13 +15,9 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-__attribute__((unused)) static Bool muro__obj_Bool_true_k = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Bool true_k(void) { return muro__tag_Bool_true_k; }
 
-__attribute__((unused)) static Bool *true_k(void) { return &muro__obj_Bool_true_k; }
-
-__attribute__((unused)) static Bool muro__obj_Bool_false_k = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Bool *false_k(void) { return &muro__obj_Bool_false_k; }
+__attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_k; }
 
 __attribute__((unused)) static Maybe muro__obj_Maybe_nothing = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
 
@@ -47,17 +43,17 @@ __attribute__((unused)) static List *cons(void *muro__f_0, List *muro__f_1) {
   muro__p->muro__as.cons.muro__f_1 = muro__f_1;
   return muro__p;
 }
-Bool *grant(Bool *b) {
-  Bool *muro__t_0 = 0;
+Bool grant(Bool b) {
+  Bool muro__t_0 = 0;
   {
-  Bool *muro__s_0 = b;
-  switch (muro__s_0->muro__field_tag) {
+  Bool muro__s_0 = b;
+  switch (muro__s_0) {
   case 0: {
-  muro__t_0 = true_k();
+  muro__t_0 = muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_0 = false_k();
+  muro__t_0 = muro__tag_Bool_false_k;
   break;
   }
   default: {

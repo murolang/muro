@@ -15,13 +15,9 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-__attribute__((unused)) static Bool muro__obj_Bool_true_k = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Bool true_k(void) { return muro__tag_Bool_true_k; }
 
-__attribute__((unused)) static Bool *true_k(void) { return &muro__obj_Bool_true_k; }
-
-__attribute__((unused)) static Bool muro__obj_Bool_false_k = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Bool *false_k(void) { return &muro__obj_Bool_false_k; }
+__attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_k; }
 
 __attribute__((unused)) static Maybe muro__obj_Maybe_nothing = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
 
@@ -35,23 +31,15 @@ __attribute__((unused)) static Maybe *just(void *muro__f_0) {
   return muro__p;
 }
 
-__attribute__((unused)) static Ctl muro__obj_Ctl_rst = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Ctl rst(void) { return muro__tag_Ctl_rst; }
 
-__attribute__((unused)) static Ctl *rst(void) { return &muro__obj_Ctl_rst; }
+__attribute__((unused)) static Frame bytes(void) { return muro__tag_Frame_bytes; }
 
-__attribute__((unused)) static Frame muro__obj_Frame_bytes = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Frame trailers(void) { return muro__tag_Frame_trailers; }
 
-__attribute__((unused)) static Frame *bytes(void) { return &muro__obj_Frame_bytes; }
+__attribute__((unused)) static Frame headers(void) { return muro__tag_Frame_headers; }
 
-__attribute__((unused)) static Frame muro__obj_Frame_trailers = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Frame *trailers(void) { return &muro__obj_Frame_trailers; }
-
-__attribute__((unused)) static Frame muro__obj_Frame_headers = { .muro__field_tag = 2, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Frame *headers(void) { return &muro__obj_Frame_headers; }
-
-__attribute__((unused)) static Hdr *hdr(Frame *muro__f_0) {
+__attribute__((unused)) static Hdr *hdr(Frame muro__f_0) {
   Hdr *muro__p = muro__ALLOC(sizeof *muro__p);
   if (muro__p == 0) abort();
   muro__p->muro__field_tag = 0;
@@ -66,18 +54,18 @@ __attribute__((unused)) static Wrap *wrap(Hdr *muro__f_0) {
   muro__p->muro__as.wrap.muro__f_0 = muro__f_0;
   return muro__p;
 }
-Bool *late(Maybe *m) {
-  Bool *muro__t_0 = 0;
+Bool late(Maybe *m) {
+  Bool muro__t_0 = 0;
   {
   Maybe *muro__s_0 = m;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
-  muro__t_0 = false_k();
+  muro__t_0 = muro__tag_Bool_false_k;
   break;
   }
   case 1: {
   void *b = muro__s_0->muro__as.just.muro__f_0;
-  muro__t_0 = b;
+  muro__t_0 = (Bool)(uintptr_t)(b);
   break;
   }
   default: {
@@ -89,27 +77,27 @@ Bool *late(Maybe *m) {
   return muro__t_0;
 }
 
-Bool *latezdhdr(Hdr *h) {
-  Bool *muro__t_0 = 0;
+Bool latezdhdr(Hdr *h) {
+  Bool muro__t_0 = 0;
   {
   Hdr *muro__s_0 = h;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
-  Frame *f = muro__s_0->muro__as.hdr.muro__f_0;
-  Bool *muro__t_1 = 0;
+  Frame f = muro__s_0->muro__as.hdr.muro__f_0;
+  Bool muro__t_1 = 0;
   {
-  Frame *muro__s_1 = f;
-  switch (muro__s_1->muro__field_tag) {
+  Frame muro__s_1 = f;
+  switch (muro__s_1) {
   case 0: {
-  muro__t_1 = true_k();
+  muro__t_1 = muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_1 = false_k();
+  muro__t_1 = muro__tag_Bool_false_k;
   break;
   }
   case 2: {
-  muro__t_1 = false_k();
+  muro__t_1 = muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -130,33 +118,33 @@ Bool *latezdhdr(Hdr *h) {
   return muro__t_0;
 }
 
-Bool *latezdwrap(Wrap *w) {
-  Bool *muro__t_0 = 0;
+Bool latezdwrap(Wrap *w) {
+  Bool muro__t_0 = 0;
   {
   Wrap *muro__s_0 = w;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
   Hdr *h = muro__s_0->muro__as.wrap.muro__f_0;
-  Bool *muro__t_1 = 0;
+  Bool muro__t_1 = 0;
   {
   Hdr *muro__s_1 = h;
   switch (muro__s_1->muro__field_tag) {
   case 0: {
-  Frame *f = muro__s_1->muro__as.hdr.muro__f_0;
-  Bool *muro__t_2 = 0;
+  Frame f = muro__s_1->muro__as.hdr.muro__f_0;
+  Bool muro__t_2 = 0;
   {
-  Frame *muro__s_2 = f;
-  switch (muro__s_2->muro__field_tag) {
+  Frame muro__s_2 = f;
+  switch (muro__s_2) {
   case 0: {
-  muro__t_2 = true_k();
+  muro__t_2 = muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_2 = false_k();
+  muro__t_2 = muro__tag_Bool_false_k;
   break;
   }
   case 2: {
-  muro__t_2 = false_k();
+  muro__t_2 = muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -1358,21 +1346,21 @@ static int muro__sess_pay_51(const muro__sess_val *v, const muro__sess_st *st) {
 static int muro__sess_build_0(const muro__sess_val *v, const muro__sess_st *st, Maybe * *out);
 static int muro__sess_build_1(const muro__sess_val *v, const muro__sess_st *st, Hdr * *out);
 static int muro__sess_build_2(const muro__sess_val *v, const muro__sess_st *st, Wrap * *out);
-static int muro__sess_build_3(const muro__sess_val *v, const muro__sess_st *st, Bool * *out);
-static int muro__sess_build_4(const muro__sess_val *v, const muro__sess_st *st, Frame * *out);
+static int muro__sess_build_3(const muro__sess_val *v, const muro__sess_st *st, Bool  *out);
+static int muro__sess_build_4(const muro__sess_val *v, const muro__sess_st *st, Frame  *out);
 
 static void muro__sess_free_0(Maybe *p);
 static void muro__sess_free_1(Hdr *p);
 static void muro__sess_free_2(Wrap *p);
-static void muro__sess_free_3(Bool *p);
-static void muro__sess_free_4(Frame *p);
+static void muro__sess_free_3(Bool p);
+static void muro__sess_free_4(Frame p);
 
 static void muro__sess_free_0(Maybe *p) {
   if (!p) return;
   switch (p->muro__field_tag) {
     case 0: return;
     case 1: {
-      muro__sess_free_3(p->muro__as.just.muro__f_0);
+      muro__sess_free_3((Bool)(uintptr_t)(p->muro__as.just.muro__f_0));
       muro__DROP(p);
       return;
     }
@@ -1384,7 +1372,7 @@ static void muro__sess_free_1(Hdr *p) {
   if (!p) return;
   switch (p->muro__field_tag) {
     case 0: {
-      muro__sess_free_4(p->muro__as.hdr.muro__f_0);
+      muro__sess_free_4((Frame)(uintptr_t)(p->muro__as.hdr.muro__f_0));
       muro__DROP(p);
       return;
     }
@@ -1404,23 +1392,12 @@ static void muro__sess_free_2(Wrap *p) {
   }
 }
 
-static void muro__sess_free_3(Bool *p) {
-  if (!p) return;
-  switch (p->muro__field_tag) {
-    case 0: return;
-    case 1: return;
-    default: return;
-  }
+static void muro__sess_free_3(Bool p) {
+  (void)p;
 }
 
-static void muro__sess_free_4(Frame *p) {
-  if (!p) return;
-  switch (p->muro__field_tag) {
-    case 0: return;
-    case 1: return;
-    case 2: return;
-    default: return;
-  }
+static void muro__sess_free_4(Frame p) {
+  (void)p;
 }
 
 static int muro__sess_build_0(const muro__sess_val *v, const muro__sess_st *st, Maybe * *out) {
@@ -1443,7 +1420,7 @@ static int muro__sess_build_0(const muro__sess_val *v, const muro__sess_st *st, 
       if (!out) return 2;
       if (v->n != 1) return 2;
       if (1 && !v->a) return 2;
-      Bool *f0 = 0;
+      Bool f0 = 0;
       {
         int rc = muro__sess_build_3(&v->a[0], st, &f0);
         if (rc) {
@@ -1451,7 +1428,7 @@ static int muro__sess_build_0(const muro__sess_val *v, const muro__sess_st *st, 
           return rc;
         }
       }
-      *out = just((void *)f0);
+      *out = just((void *)(uintptr_t)(f0));
       return 0;
     }
     return 2;
@@ -1469,7 +1446,7 @@ static int muro__sess_build_1(const muro__sess_val *v, const muro__sess_st *st, 
       if (!out) return 2;
       if (v->n != 1) return 2;
       if (1 && !v->a) return 2;
-      Frame *f0 = 0;
+      Frame f0 = 0;
       {
         int rc = muro__sess_build_4(&v->a[0], st, &f0);
         if (rc) {
@@ -1477,7 +1454,7 @@ static int muro__sess_build_1(const muro__sess_val *v, const muro__sess_st *st, 
           return rc;
         }
       }
-      *out = hdr((Frame *)f0);
+      *out = hdr((Frame)f0);
       return 0;
     }
     return 2;
@@ -1510,7 +1487,7 @@ static int muro__sess_build_2(const muro__sess_val *v, const muro__sess_st *st, 
   }
 }
 
-static int muro__sess_build_3(const muro__sess_val *v, const muro__sess_st *st, Bool * *out) {
+static int muro__sess_build_3(const muro__sess_val *v, const muro__sess_st *st, Bool  *out) {
   (void)st;
   {
     const char *tag;
@@ -1539,7 +1516,7 @@ static int muro__sess_build_3(const muro__sess_val *v, const muro__sess_st *st, 
   }
 }
 
-static int muro__sess_build_4(const muro__sess_val *v, const muro__sess_st *st, Frame * *out) {
+static int muro__sess_build_4(const muro__sess_val *v, const muro__sess_st *st, Frame  *out) {
   (void)st;
   {
     const char *tag;
@@ -1991,27 +1968,22 @@ muro__sess_res muro__sess_gate_step(muro__sess_st st, int dir, const muro__sess_
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 2;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 3;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 2;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 3;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -2179,27 +2151,22 @@ muro__sess_res muro__sess_gatezdback_step(muro__sess_st st, int dir, const muro_
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 5;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 6;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 5;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 6;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -2367,27 +2334,22 @@ muro__sess_res muro__sess_hdrzdgate_step(muro__sess_st st, int dir, const muro__
             muro__sess_free_1(built);
             fail = 1;
           } else {
-            Bool *got = latezdhdr(built);
+            Bool got = latezdhdr(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_1(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_1(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 8;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 9;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_1(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 8;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 9;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -2555,27 +2517,22 @@ muro__sess_res muro__sess_hdrzdback_step(muro__sess_st st, int dir, const muro__
             muro__sess_free_1(built);
             fail = 1;
           } else {
-            Bool *got = latezdhdr(built);
+            Bool got = latezdhdr(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_1(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_1(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 11;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 12;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_1(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 11;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 12;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -2743,27 +2700,22 @@ muro__sess_res muro__sess_wrapzdgate_step(muro__sess_st st, int dir, const muro_
             muro__sess_free_2(built);
             fail = 1;
           } else {
-            Bool *got = latezdwrap(built);
+            Bool got = latezdwrap(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_2(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_2(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 14;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 15;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_2(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 14;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 15;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -2931,27 +2883,22 @@ muro__sess_res muro__sess_wrapzdback_step(muro__sess_st st, int dir, const muro_
             muro__sess_free_2(built);
             fail = 1;
           } else {
-            Bool *got = latezdwrap(built);
+            Bool got = latezdwrap(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_2(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_2(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 17;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 18;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_2(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 17;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 18;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -3119,27 +3066,22 @@ muro__sess_res muro__sess_loop_step(muro__sess_st st, int dir, const muro__sess_
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 20;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 21;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 20;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 21;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -3307,27 +3249,22 @@ muro__sess_res muro__sess_loopzdback_step(muro__sess_st st, int dir, const muro_
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 23;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 24;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 23;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 24;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -3619,27 +3556,22 @@ muro__sess_res muro__sess_called_step(muro__sess_st st, int dir, const muro__ses
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 28;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 30;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 28;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 30;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -3815,27 +3747,22 @@ muro__sess_res muro__sess_calledzdback_step(muro__sess_st st, int dir, const mur
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 32;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 33;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 32;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 33;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -4004,27 +3931,22 @@ muro__sess_res muro__sess_sizzed_step(muro__sess_st st, int dir, const muro__ses
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 35;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 36;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 35;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 36;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -4192,27 +4114,22 @@ muro__sess_res muro__sess_sizzed3_step(muro__sess_st st, int dir, const muro__se
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 38;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 39;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 38;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 39;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -4380,27 +4297,22 @@ muro__sess_res muro__sess_sizzed3zdback_step(muro__sess_st st, int dir, const mu
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 41;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 42;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 41;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 42;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -4568,27 +4480,22 @@ muro__sess_res muro__sess_counted_step(muro__sess_st st, int dir, const muro__se
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 44;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 45;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 44;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 45;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -4769,27 +4676,22 @@ muro__sess_res muro__sess_countedzdback_step(muro__sess_st st, int dir, const mu
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 47;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 48;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 47;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 48;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }
@@ -4970,27 +4872,22 @@ muro__sess_res muro__sess_once_step(muro__sess_st st, int dir, const muro__sess_
             muro__sess_free_0(built);
             fail = 1;
           } else {
-            Bool *got = late(built);
+            Bool got = late(built);
             int tag = -1;
-            if (!got) {
-              muro__sess_free_0(built);
-              fail = 1;
-            } else {
-              tag = (int)got->muro__field_tag;
-              muro__sess_free_0(built);
-              switch (tag) {
-                case 0: {
-                  res->state.at = 50;
-                  res->state.stuck = 0;
-                  break;
-                }
-                case 1: {
-                  res->state.at = 51;
-                  res->state.stuck = 0;
-                  break;
-                }
-                default: fail = 1; break;
-              }
+            tag = (int)got;
+            muro__sess_free_0(built);
+            switch (tag) {
+                    case 0: {
+                      res->state.at = 50;
+                      res->state.stuck = 0;
+                      break;
+                    }
+                    case 1: {
+                      res->state.at = 51;
+                      res->state.stuck = 0;
+                      break;
+                    }
+              default: fail = 1; break;
             }
           }
         }

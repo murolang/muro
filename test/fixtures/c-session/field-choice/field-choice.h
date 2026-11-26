@@ -12,22 +12,21 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Bool Bool;
-typedef struct Maybe Maybe;
-typedef struct Ctl Ctl;
-typedef struct Frame Frame;
-typedef struct Hdr Hdr;
-typedef struct Wrap Wrap;
 typedef enum muro__tag_Bool {
   muro__tag_Bool_true_k = 0,
   muro__tag_Bool_false_k = 1
-} muro__tag_Bool;
-struct Bool {
-  uint8_t muro__field_tag; /* true = 0, false = 1 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Bool;
+typedef struct Maybe Maybe;
+typedef enum muro__tag_Ctl {
+  muro__tag_Ctl_rst = 0
+} Ctl;
+typedef enum muro__tag_Frame {
+  muro__tag_Frame_bytes = 0,
+  muro__tag_Frame_trailers = 1,
+  muro__tag_Frame_headers = 2
+} Frame;
+typedef struct Hdr Hdr;
+typedef struct Wrap Wrap;
 typedef enum muro__tag_Maybe {
   muro__tag_Maybe_nothing = 0,
   muro__tag_Maybe_just = 1
@@ -41,26 +40,6 @@ struct Maybe {
     } just;
   } muro__as;
 };
-typedef enum muro__tag_Ctl {
-  muro__tag_Ctl_rst = 0
-} muro__tag_Ctl;
-struct Ctl {
-  uint8_t muro__field_tag; /* rst = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
-typedef enum muro__tag_Frame {
-  muro__tag_Frame_bytes = 0,
-  muro__tag_Frame_trailers = 1,
-  muro__tag_Frame_headers = 2
-} muro__tag_Frame;
-struct Frame {
-  uint8_t muro__field_tag; /* bytes = 0, trailers = 1, headers = 2 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
 typedef enum muro__tag_Hdr {
   muro__tag_Hdr_hdr = 0
 } muro__tag_Hdr;
@@ -69,7 +48,7 @@ struct Hdr {
   union {
     char muro__unused;
     struct {
-    Frame *muro__f_0;
+    Frame muro__f_0;
     } hdr;
   } muro__as;
 };
@@ -97,9 +76,9 @@ typedef enum muro__word_fieldzdchoice {
   muro__word_fieldzdchoice_Hdr_hdr = 8,
   muro__word_fieldzdchoice_Wrap_wrap = 9
 } muro__word_fieldzdchoice;
-Bool *late(Maybe *m);
-Bool *latezdhdr(Hdr *h);
-Bool *latezdwrap(Wrap *w);
+Bool late(Maybe *m);
+Bool latezdhdr(Hdr *h);
+Bool latezdwrap(Wrap *w);
 
 #include <stddef.h>
 #include <stdint.h>

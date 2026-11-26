@@ -12,17 +12,10 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Bool Bool;
 typedef enum muro__tag_Bool {
   muro__tag_Bool_true_k = 0,
   muro__tag_Bool_false_k = 1
-} muro__tag_Bool;
-struct Bool {
-  uint8_t muro__field_tag; /* true = 0, false = 1 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Bool;
 typedef enum muro__word_linear {
   muro__word_linear_Bool_true_k = 0,
   muro__word_linear_Bool_false_k = 1

@@ -109,7 +109,8 @@ defmodule Muro.EmitCSessionTest do
   end
 
   test "a case run whose result or argument is not a C payload is refused" do
-    # Flag is returned by value, so it is not a payload tag the step can switch on.
+    # An unboxed Flag is not a payload tag the step can switch on,
+    # even though ordinary all-nullary data is the tag enum.
     result = """
     unboxed data Flag : Type where
       on : Flag

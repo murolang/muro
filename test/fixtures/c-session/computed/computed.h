@@ -12,29 +12,15 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Item Item;
-typedef struct Bool Bool;
-typedef struct Maybe Maybe;
 typedef enum muro__tag_Item {
   muro__tag_Item_self = 0,
   muro__tag_Item_other = 1
-} muro__tag_Item;
-struct Item {
-  uint8_t muro__field_tag; /* self = 0, other = 1 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Item;
 typedef enum muro__tag_Bool {
   muro__tag_Bool_true_k = 0,
   muro__tag_Bool_false_k = 1
-} muro__tag_Bool;
-struct Bool {
-  uint8_t muro__field_tag; /* true = 0, false = 1 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Bool;
+typedef struct Maybe Maybe;
 typedef enum muro__tag_Maybe {
   muro__tag_Maybe_nothing = 0,
   muro__tag_Maybe_just = 1
@@ -56,8 +42,8 @@ typedef enum muro__word_computed {
   muro__word_computed_Maybe_nothing = 4,
   muro__word_computed_Maybe_just = 5
 } muro__word_computed;
-Bool *mark(Item *f);
-Maybe *effective(Item *f);
+Bool mark(Item f);
+Maybe *effective(Item f);
 muro__nat *kept(void);
 
 #include <stddef.h>

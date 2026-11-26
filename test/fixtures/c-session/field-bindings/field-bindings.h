@@ -12,19 +12,12 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Bool Bool;
-typedef struct Maybe Maybe;
-typedef struct List List;
 typedef enum muro__tag_Bool {
   muro__tag_Bool_true_k = 0,
   muro__tag_Bool_false_k = 1
-} muro__tag_Bool;
-struct Bool {
-  uint8_t muro__field_tag; /* true = 0, false = 1 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Bool;
+typedef struct Maybe Maybe;
+typedef struct List List;
 typedef enum muro__tag_Maybe {
   muro__tag_Maybe_nothing = 0,
   muro__tag_Maybe_just = 1
@@ -60,7 +53,7 @@ typedef enum muro__word_fieldzdbindings {
   muro__word_fieldzdbindings_List_nil = 4,
   muro__word_fieldzdbindings_List_cons = 5
 } muro__word_fieldzdbindings;
-Bool *grant(Bool *b);
+Bool grant(Bool b);
 
 #include <stddef.h>
 #include <stdint.h>
