@@ -1854,13 +1854,16 @@ defmodule Muro.Emit.C.Session do
     if inst == [] do
       "case #{tag}: return;"
     else
+      {_fun, ctypes} = ctor_info(st, dname, ctor)
+
       frees =
         inst
         |> Enum.with_index()
         |> Enum.map_join("\n", fn {ty, k} ->
           fid = Map.fetch!(st.builds, ty)
           field = "p->#{asf}.#{member}.#{Name.gen("f", k)}"
-          "muro__sess_free_#{fid}(#{pay_load(field, ty, st)});"
+          ctype = Enum.at(ctypes, k) || "void *"
+          "muro__sess_free_#{fid}(#{pay_load(field, ty, ctype, st)});"
         end)
 
       """
@@ -1890,7 +1893,8 @@ defmodule Muro.Emit.C.Session do
   defp build_ptr(_, _st), do: "void *"
 
   # A polymorphic field is `void *`. An enum scalar packed in that word
-  # goes through `uintptr_t` both ways.
+  # goes through `uintptr_t` both ways. A field whose slot is already
+  # the enum type is stored and loaded as that type, with no pack.
   defp enum_pay?({:dat, name, _}, st), do: C.enum_type?(st.book, name)
   defp enum_pay?(_, _), do: false
 
@@ -1904,8 +1908,10 @@ defmodule Muro.Emit.C.Session do
     end
   end
 
-  defp pay_load(ex, ty, st) do
-    if enum_pay?(ty, st) do
+  defp pay_load(ex, ty, ctype, st) do
+    want = String.trim(ctype)
+
+    if enum_pay?(ty, st) and want == "void *" do
       "(#{String.trim(build_ptr(ty, st))})(uintptr_t)(#{ex})"
     else
       ex

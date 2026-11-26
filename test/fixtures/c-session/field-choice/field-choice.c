@@ -1372,7 +1372,7 @@ static void muro__sess_free_1(Hdr *p) {
   if (!p) return;
   switch (p->muro__field_tag) {
     case 0: {
-      muro__sess_free_4((Frame)(uintptr_t)(p->muro__as.hdr.muro__f_0));
+      muro__sess_free_4(p->muro__as.hdr.muro__f_0);
       muro__DROP(p);
       return;
     }

@@ -463,6 +463,135 @@ defmodule Muro.EmitCEnumTest do
     link_run!(dir, ~w(apply_flag main), "OK\n")
   end
 
+  test "mutually referenced boxed data does not loop, and an all-nullary field stays an enum" do
+    dir = tmp_dir()
+    path = Path.join(dir, "mutual.muro")
+
+    File.write!(path, """
+    data Flag : Type where
+      zed : Flag
+      wob : Flag
+
+    data Node : Type where
+      tip : Node
+      cell : Flag → Forest → Node
+
+    data Forest : Type where
+      empty : Forest
+      cons : Node → Forest → Forest
+
+    def flip : run Π (t : Flag) → Flag :=
+      λ (t : Flag) →
+        match t motive (λ _ → Flag)
+          | zed => wob
+          | wob => zed
+
+    def tipN : run Node := tip
+    """)
+
+    # A walk of field types through `ctype` would loop on Node ↔ Forest.
+    task =
+      Task.async(fn ->
+        capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+      end)
+
+    assert Task.yield(task, 15_000) || Task.shutdown(task, :brutal_kill),
+           "C emit looped or ran too long on mutually referenced data"
+
+    header = File.read!(Path.join(dir, "mutual.h"))
+    source = File.read!(Path.join(dir, "mutual.c"))
+    zed_tag = Muro.Emit.C.ctor_tag("Flag", "zed")
+    wob_tag = Muro.Emit.C.ctor_tag("Flag", "wob")
+    node = Muro.Emit.C.source_id("Node")
+    forest = Muro.Emit.C.source_id("Forest")
+
+    assert header =~ "typedef enum #{Muro.Emit.C.ctor_tag_type("Flag")}"
+    assert header =~ "#{zed_tag} = 0"
+    assert header =~ "} Flag;"
+    refute header =~ "typedef struct Flag"
+    refute header =~ "Flag *"
+    assert header =~ "Flag flip(Flag t);"
+    assert header =~ "#{node} *tipN(void);"
+    assert header =~ "typedef struct #{node} #{node};"
+    assert header =~ "typedef struct #{forest} #{forest};"
+    assert header =~ "Flag muro__f_0;"
+    refute header =~ "Flag *muro__f_0"
+    refute source =~ "Flag *"
+    refute slice_after(source, "Flag flip(") =~ "muro__ALLOC"
+
+    File.write!(Path.join(dir, "main.c"), """
+    #include <stdio.h>
+    #include "mutual.h"
+
+    int main(void) {
+      if (flip(#{zed_tag}) != #{wob_tag}) return 1;
+      if (flip(#{wob_tag}) != #{zed_tag}) return 2;
+      #{node} *n = tipN();
+      if (n->muro__field_tag != 0) return 3;
+      printf("OK\\n");
+      return 0;
+    }
+    """)
+
+    cc!(dir, "mutual.c", "mutual.o")
+    cc!(dir, "main.c", "main.o")
+    link_run!(dir, ~w(mutual main), "OK\n")
+  end
+
+  test "a type whose constructors have only erased fields is still an enum" do
+    dir = tmp_dir()
+    path = Path.join(dir, "ghost.muro")
+
+    File.write!(path, """
+    data Ghost : Type where
+      ghost : Π (- n : Nat) → Ghost
+      visible : Ghost
+
+    def flipG : run Π (t : Ghost) → Ghost :=
+      λ (t : Ghost) →
+        match t motive (λ _ → Ghost)
+          | ghost _ => visible
+          | visible => ghost 0
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "ghost.h"))
+    source = File.read!(Path.join(dir, "ghost.c"))
+    typ = Muro.Emit.C.source_id("Ghost")
+    ghost = Muro.Emit.C.source_id("ghost")
+    visible = Muro.Emit.C.source_id("visible")
+    ghost_tag = Muro.Emit.C.ctor_tag("Ghost", "ghost")
+    visible_tag = Muro.Emit.C.ctor_tag("Ghost", "visible")
+
+    assert header =~ "typedef enum #{Muro.Emit.C.ctor_tag_type("Ghost")}"
+    assert header =~ "#{ghost_tag} = 0"
+    assert header =~ "#{visible_tag} = 1"
+    assert header =~ "} #{typ};"
+    refute header =~ "typedef struct #{typ}"
+    refute header =~ "#{typ} *"
+    assert header =~ "#{typ} flipG(#{typ} t);"
+    assert source =~ "static #{typ} #{ghost}(void) { return #{ghost_tag}; }"
+    assert source =~ "static #{typ} #{visible}(void) { return #{visible_tag}; }"
+    refute source =~ Muro.Emit.Name.gen("obj_#{typ}_#{ghost}")
+    refute slice_after(source, "#{typ} flipG(") =~ "muro__ALLOC"
+
+    File.write!(Path.join(dir, "main.c"), """
+    #include <stdio.h>
+    #include "ghost.h"
+
+    int main(void) {
+      if (flipG(#{ghost_tag}) != #{visible_tag}) return 1;
+      if (flipG(#{visible_tag}) != #{ghost_tag}) return 2;
+      printf("OK\\n");
+      return 0;
+    }
+    """)
+
+    cc!(dir, "ghost.c", "ghost.o")
+    cc!(dir, "main.c", "main.o")
+    link_run!(dir, ~w(ghost main), "OK\n")
+  end
+
   defp slice_after(source, fun) do
     [_, rest] = String.split(source, fun, parts: 2)
     rest
