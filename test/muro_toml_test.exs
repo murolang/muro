@@ -423,6 +423,141 @@ defmodule Muro.TomlTest do
     assert Muro.Manifest.find_root(Path.join(dir, "src/a.rs")) == Muro.Manifest.canonical(dir)
   end
 
+  test "an exunit impl string names the module, and pytest and rust-test keep strings (#300)" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    write_book(dir, "priv/muro/rounding.muro")
+    write_book(dir, "priv/muro/half.muro")
+    write_book(dir, "priv/muro/third.muro")
+    write_book(dir, "priv/muro/fourth.muro")
+
+    assert {:ok, manifest} =
+             load(dir, """
+             muro = "#{version}"
+
+             [[modules]]
+             book = "priv/muro/rounding.muro"
+             target = "test/muro/rounding_test.exs"
+             module = "MyApp.Muro.RoundingTest"
+             backend = "exunit"
+             impl = "MyApp.Muro.Rounding"
+
+             [[modules]]
+             book = "priv/muro/half.muro"
+             target = "test/muro/half_test.exs"
+             module = "MyApp.Muro.HalfTest"
+             backend = "exunit"
+             impl = "Elixir.MyApp.Muro.Half"
+
+             [[modules]]
+             book = "priv/muro/third.muro"
+             target = "tests/test_third.py"
+             backend = "pytest"
+             impl = "tests._third_impl"
+
+             [[modules]]
+             book = "priv/muro/fourth.muro"
+             target = "tests/fourth.rs"
+             backend = "rust-test"
+             impl = "crate::fourth"
+             """)
+
+    assert [rounding, half, third, fourth] = manifest.modules
+    assert rounding.kind == :exunit
+    assert rounding.module == MyApp.Muro.RoundingTest
+    assert rounding.impl == MyApp.Muro.Rounding
+    assert half.impl == MyApp.Muro.Half
+    assert third.kind == :pytest
+    assert third.impl == "tests._third_impl"
+    assert fourth.kind == :rust_test
+    assert fourth.impl == "crate::fourth"
+
+    # A top-level backend is the kind the impl is read for.
+    assert {:ok, defaulted} =
+             load(dir, """
+             muro = "#{version}"
+             backend = "exunit"
+
+             [[modules]]
+             book = "priv/muro/rounding.muro"
+             target = "test/muro/rounding_test.exs"
+             module = "MyApp.Muro.RoundingTest"
+             impl = "MyApp.Muro.Rounding"
+             """)
+
+    assert [%{kind: :exunit, impl: MyApp.Muro.Rounding}] = defaulted.modules
+
+    for bad <- ["myapp.Rounding", "MyApp.Muro.", "MyApp::Rounding", "", "MyApp.muro_x"] do
+      assert {:error, message} =
+               load(dir, """
+               muro = "#{version}"
+
+               [[modules]]
+               book = "priv/muro/rounding.muro"
+               target = "test/muro/rounding_test.exs"
+               module = "MyApp.Muro.RoundingTest"
+               backend = "exunit"
+               impl = "#{bad}"
+               """)
+
+      assert message =~ "muro.toml:8: modules entry 1: impl is not an alias, got: #{inspect(bad)}"
+    end
+
+    assert {:error, typed} =
+             load(dir, """
+             muro = "#{version}"
+
+             [[modules]]
+             book = "priv/muro/rounding.muro"
+             target = "test/muro/rounding_test.exs"
+             module = "MyApp.Muro.RoundingTest"
+             backend = "exunit"
+             impl = 1
+             """)
+
+    assert typed =~ "modules entry 1: impl must be a string"
+
+    # An elixir entry still refuses impl, with the manifest's own message.
+    assert {:error, kind} =
+             load(dir, """
+             muro = "#{version}"
+
+             [[modules]]
+             book = "priv/muro/rounding.muro"
+             target = "lib/rounding.ex"
+             module = "MyApp.Muro.Rounding"
+             backend = "elixir"
+             impl = "MyApp.Muro.Impl"
+             """)
+
+    assert kind =~ "modules entry 1: impl: is only valid for kind: :exunit"
+  end
+
+  test "Cargo.toml metadata reads an exunit impl string as the module (#300)" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    write_book(dir, "priv/muro/rounding.muro")
+
+    File.write!(Path.join(dir, "Cargo.toml"), """
+    [package]
+    name = "rounding"
+    version = "0.1.0"
+
+    [package.metadata.muro]
+    muro = "#{version}"
+
+    [[package.metadata.muro.modules]]
+    book = "priv/muro/rounding.muro"
+    target = "test/muro/rounding_test.exs"
+    module = "MyApp.Muro.RoundingTest"
+    backend = "exunit"
+    impl = "MyApp.Muro.Rounding"
+    """)
+
+    assert {:ok, manifest} = Muro.Manifest.load(dir)
+    assert [%{kind: :exunit, impl: MyApp.Muro.Rounding}] = manifest.modules
+  end
+
   defp load(dir, text) do
     File.write!(Path.join(dir, "muro.toml"), text)
     Muro.Manifest.load(dir)

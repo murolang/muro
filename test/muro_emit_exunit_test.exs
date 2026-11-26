@@ -123,6 +123,111 @@ defmodule Muro.EmitExunitTest do
     assert {:ok, %{source: ^source}} = again
   end
 
+  @numerals """
+  data Level : Type where
+    low : Level
+    high : Level
+
+  def level : run Π (n : Nat) → Level :=
+    λ (n : Nat) →
+      match n motive (λ _ → Level)
+        | 0 => low
+        | suc m => high
+
+  def twice : run Π (+ n : Nat) → Nat :=
+    λ (+ n : Nat) → plus n n
+
+  def three : run Nat := 3
+
+  data Box : Type where
+    box : Nat → Nat → Box
+
+  def boxed : run Π (+ n : Nat) → Box :=
+    λ (+ n : Nat) → box n (suc n)
+
+  def spread : run Π (+ n : Nat) → Nat × Level :=
+    λ (+ n : Nat) → (n, level n)
+
+  def zero-is-low : evidence {level 0 ≡ low : Level} := refl
+  def three-is-high : evidence {level 3 ≡ high : Level} := refl
+  def three-as-successors : evidence {level (suc (suc (suc 0))) ≡ high : Level} := refl
+  def twice-zero : evidence {twice 0 ≡ 0 : Nat} := refl
+  def twice-two : evidence {twice (suc (suc 0)) ≡ 4 : Nat} := refl
+  def level-three : evidence {level three ≡ high : Level} := refl
+  def three-ok : evidence {three ≡ 3 : Nat} := refl
+  def twice-sum : evidence {twice (plus 2 1) ≡ 6 : Nat} := refl
+  def twice-succ : evidence {twice (suc 4) ≡ suc 9 : Nat} := refl
+  def boxed-ok : evidence {boxed 7 ≡ box 7 8 : Box} := refl
+  def spread-ok : evidence {spread 12 ≡ (12, high) : Nat × Level} := refl
+  """
+
+  @numeral_tests ~w(
+    zero-is-low three-is-high three-as-successors twice-zero twice-two level-three
+    three-ok twice-sum twice-succ boxed-ok spread-ok
+  )
+
+  test "a numeral other than 0 is a Nat literal in an argument and a result (#299)" do
+    {dir, path} = book("level.muro", @numerals)
+
+    assert {:ok, %{source: source, skips: [], tests: 11}} =
+             Muro.emit_exunit(path, LevelTest, root: dir, book: "level.muro")
+
+    assert test_labels(source) == Enum.map(@numeral_tests, &"level.muro #{&1}")
+    assert source =~ "# Skipped: none"
+    refute source =~ "has no literal"
+
+    for line <- [
+          ~s|assert impl.level(0) == :low, "level.muro:25 zero-is-low"|,
+          ~s|assert impl.level(3) == :high, "level.muro:26 three-is-high"|,
+          ~s|assert impl.level(3) == :high, "level.muro:27 three-as-successors"|,
+          ~s|assert impl.twice(0) == 0, "level.muro:28 twice-zero"|,
+          ~s|assert impl.twice(2) == 4, "level.muro:29 twice-two"|,
+          ~s|assert impl.level(3) == :high, "level.muro:30 level-three"|,
+          ~s|assert impl.three() == 3, "level.muro:31 three-ok"|,
+          ~s|assert impl.twice(3) == 6, "level.muro:32 twice-sum"|,
+          ~s|assert impl.twice(5) == 10, "level.muro:33 twice-succ"|,
+          ~s|assert impl.boxed(7) == {:box, 7, 8}, "level.muro:34 boxed-ok"|,
+          ~s|assert impl.spread(12) == {12, :high}, "level.muro:35 spread-ok"|
+        ] do
+      assert source =~ line
+    end
+
+    # pytest and rust-test emit the same equations.
+    assert {:ok, %{skips: [], tests: 11}} =
+             Muro.emit_pytest(path, root: dir, book: "level.muro")
+
+    assert {:ok, %{skips: [], tests: 11}} =
+             Muro.emit_rust_test(path, root: dir, book: "level.muro")
+
+    {:ok, emitted} = Muro.emit_file(path, Level)
+    File.write!(Path.join(dir, "suite.ex"), source)
+    File.write!(Path.join(dir, "emitted.ex"), emitted)
+
+    passed = elixir!(dir, run_script(nil))
+    assert passed =~ "total: 11"
+    assert passed =~ "failures: 0"
+
+    failed =
+      elixir!(
+        dir,
+        run_script("""
+        defmodule OffByOne do
+          def level(_), do: :low
+          def twice(n), do: n + n + 1
+          def three, do: 4
+          def boxed(n), do: {:box, n, n}
+          def spread(n), do: {n + 1, :high}
+        end
+        Application.put_env(:muro, LevelTest, OffByOne)
+        """)
+      )
+
+    # level 0 is still :low. Every other equation names its wrong answer.
+    assert failed =~ "failures: 10"
+    assert failed =~ "level.muro:26 three-is-high"
+    assert failed =~ "level.muro:29 twice-two"
+  end
+
   test "a book without params keeps the 0.16.76 text apart from the test name" do
     {dir, path} = book("round.muro", @book)
 

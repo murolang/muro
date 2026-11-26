@@ -339,6 +339,39 @@ defmodule Muro.GenNativeTest do
     assert cli!(dir, ["gen"]) =~ "unchanged src/half.rs\n"
   end
 
+  test "a muro.toml exunit impl names the suite's implementation module (#300)" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    File.mkdir_p!(Path.join(dir, "priv/muro"))
+
+    File.write!(Path.join(dir, "priv/muro/rounding.muro"), """
+    def round : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → n
+
+    def round-ok : evidence {round (suc 0) ≡ suc 0 : Nat} :=
+      refl
+    """)
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+
+    [[modules]]
+    book = "priv/muro/rounding.muro"
+    target = "test/muro/rounding_test.exs"
+    module = "MyApp.Muro.RoundingTest"
+    backend = "exunit"
+    impl = "MyApp.Muro.Rounding"
+    """)
+
+    assert cli!(dir, ["gen"]) =~ "written test/muro/rounding_test.exs\n"
+    source = File.read!(Path.join(dir, "test/muro/rounding_test.exs"))
+    assert source =~ "defmodule MyApp.Muro.RoundingTest do"
+    assert source =~ "@impl_mod MyApp.Muro.Rounding\n"
+    refute source =~ "@impl_mod Rounding\n"
+    assert source =~ "The implementation defaults to `MyApp.Muro.Rounding`."
+    assert cli!(dir, ["gen", "--check"]) == "ok\n"
+  end
+
   defp round_trip(kind) do
     dir = project(kind)
     rel = target(kind)

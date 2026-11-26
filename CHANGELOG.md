@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.22.36
+
+The ExUnit backend emits a closed equation whose argument or result is a numeral other than `0` (#299). `level 3 ≡ high`, `twice (suc (suc 0)) ≡ 4`, `level three` with `def three : run Nat := 3`, and `twice (plus 2 1) ≡ 6` were skipped with `argument 1 normal form has no literal` or `result normal form has no literal`, while a chain of `suc` and the pytest and rust-test backends emitted them. A normalized numeral is now a `Nat`, printed as the same non-negative integer, inside constructor fields and pairs too. A rewrite left around a value is looked through, as an annotation is.
+
+In `muro.toml` and `[package.metadata.muro]`, the `impl` of an `exunit` entry is read as an Elixir module (#300). `impl = "MyApp.Muro.Rounding"` stopped with `impl is not an alias atom`, though `module` in the same entry was already read from a string. It is now the alias of that name, so the suite's `@impl_mod` is `MyApp.Muro.Rounding`, under an entry `backend` or a top-level one. A string that is not an alias is an error that names the entry index and the value. `impl` in `muro.exs` is still an atom, and the `impl` of a `pytest` or `rust-test` entry is still a string: a Python module name or a Rust path.
+
+`mix muro.gen` from the Mix archive finishes when loading a `.formatter.exs` plugin compiles the project's deps (#301). Compiling prunes the code path to the project's deps, which dropped the archive's ebin: the target was written, or the check passed, and then the first archive module not loaded yet failed with `UndefinedFunctionError` (`Muro.CLI.join_lines/1` or `Muro.CLI.Output.mix/1`). A CI job on a fresh checkout went red on correct files. `mix muro.gen` now puts the ebin it runs from back on the code path after loading the formatter, on success and on a raise. With muro as a dependency the ebin is a dep path and is not pruned, so nothing changes there. A test installs the test build as an archive in a fresh `MIX_ARCHIVES` and runs `mix muro.gen` and `mix muro.gen --check` in a project with no `_build` and a local plugin.
+
+### Manual
+
+- ExUnit: a `Nat` numeral is printed as an integer, as a chain of `suc` is.
+- Committed modules: an `exunit` `impl` in `muro.toml` is a string naming an Elixir module. The archive keeps its ebin when loading a plugin compiles the deps.
+
+### Package
+
+- Version 0.22.36.
+
 ## 0.22.35
 
 `muro gen` in the executable formats with a `.formatter.exs` that has `import_deps` or `plugins` (#297). The executable loads no `mix.exs`, so `Mix.Tasks.Format.formatter_for_file/2` could not resolve `import_deps`, and `muro gen` stopped with `Unknown dependency :ecto` in a Phoenix or Ecto project after `mix deps.get`. It now passes the formatter `deps_paths` from `deps/<dep>` and a plugin loader that looks in `_build/<env>/lib/*/ebin`, honouring `MIX_DEPS_PATH`, `MIX_BUILD_PATH`, `MIX_BUILD_ROOT`, and `MIX_ENV`. Those are the files `mix muro.gen` reads in the same project, so both routes write the same bytes and `--check` agrees. The executable runs in embedded mode, so the plugin's application and the built applications it lists are loaded whole. An application the executable already carries is not added from `_build`.

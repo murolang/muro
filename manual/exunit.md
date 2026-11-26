@@ -22,7 +22,7 @@ These are left out of the suite and out of the skip list. They are not closed eq
 
 Each candidate becomes one test or one skipped line. The count of tests plus the count of skips is the count of candidates.
 
-Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000). A nullary `run` used as an argument or a result, such as `golden-x`, is replaced by that value. The value is then printed with the shapes in [How values look](emit.md#how-values-look): a non-negative integer for a `Nat`, `:tt`, an atom for a constructor with no fields, `{:ctor, args…}`, `{a, b}`. `Muro.Emit.emit_closed/2` is that printer. A later `repr` (#131) hooks in there.
+Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000). A nullary `run` used as an argument or a result, such as `golden-x`, is replaced by that value. The value is then printed with the shapes in [How values look](emit.md#how-values-look): a non-negative integer for a `Nat` (a numeral such as `3`, `plus 2 1` after normalizing, and a chain of `suc` over `0` alike), `:tt`, an atom for a constructor with no fields, `{:ctor, args…}`, `{a, b}`. `Muro.Emit.emit_closed/2` is that printer. A later `repr` (#131) hooks in there.
 
 Host data arrives with repr (#131). Until then the suite compares emitted shapes. A map such as `%{"id" => 3, "enabled" => true}` is not what the assertion sees.
 

@@ -959,7 +959,7 @@ defmodule Muro.Gen do
   # ones Mix would read, so both routes write the same bytes.
   defp project_formatter(file, root) do
     if Mix.Project.get() do
-      Mix.Tasks.Format.formatter_for_file(file, root: root)
+      keep_own_ebin(fn -> Mix.Tasks.Format.formatter_for_file(file, root: root) end)
     else
       try do
         Mix.Tasks.Format.formatter_for_file(file, host_format_opts(root))
@@ -975,6 +975,37 @@ defmodule Muro.Gen do
           )
       end
     end
+  end
+
+  # Loading a formatter plugin may compile the host's deps (#301).
+  # Compiling prunes the code path to the project's own deps, and an
+  # archive's ebin is not one of them, so the muro modules not loaded
+  # yet (`Muro.CLI.Output` prints the result) could no longer be found.
+  # The ebin muro runs from is put back, on success and on a raise.
+  # Under a dep or the executable the ebin is still there and nothing
+  # changes.
+  defp keep_own_ebin(fun) do
+    ebin = own_ebin()
+
+    try do
+      fun.()
+    after
+      restore_ebin(ebin)
+    end
+  end
+
+  defp own_ebin do
+    case :code.which(__MODULE__) do
+      path when is_list(path) -> path |> Path.dirname() |> String.to_charlist()
+      _other -> nil
+    end
+  end
+
+  defp restore_ebin(nil), do: :ok
+
+  defp restore_ebin(ebin) do
+    if ebin not in :code.get_path(), do: :code.add_pathz(ebin)
+    :ok
   end
 
   defp host_format_opts(root) do
