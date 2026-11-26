@@ -1142,6 +1142,9 @@ defmodule Muro.Emit do
   # A value the suite can pass to `==`. Anything else is a skip reason.
   # `repr` (#131) replaces this classification.
   defp value_kind(:ze, _book), do: :value
+  # A numeral literal (`3`, `plus 2 1` after normalizing) is a Nat, as a
+  # chain of `suc` over `0` is (#299).
+  defp value_kind({:nat, n}, _book) when is_integer(n) and n >= 0, do: :value
   defp value_kind(:one, _book), do: :value
   defp value_kind({:atom, _name}, _book), do: :value
   defp value_kind({:slit, bin}, _book) when is_binary(bin), do: :value
@@ -1174,6 +1177,7 @@ defmodule Muro.Emit do
 
   defp value_kind({:su, t}, book), do: value_kind(t, book)
   defp value_kind({:ann, e, _ty}, book), do: value_kind(e, book)
+  defp value_kind({:rwt, _a, _b, t}, book), do: value_kind(t, book)
 
   defp value_kind({:pair, a, b}, book) do
     case value_kind(a, book) do

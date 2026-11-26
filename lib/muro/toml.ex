@@ -934,7 +934,7 @@ defmodule Muro.Toml do
          {:ok, kind} <- field_kind(table, index, path, default),
          {:ok, module} <- field_module(table, index, path),
          {:ok, c_prefix} <- field_c_prefix(table, index, path),
-         {:ok, impl} <- field_impl(table, index, path),
+         {:ok, impl} <- field_impl(table, index, path, kind),
          {:ok, imports} <- field_imports(table, index, path) do
       opts = [kind: kind]
       opts = if c_prefix == nil, do: opts, else: Keyword.put(opts, :c_prefix, c_prefix)
@@ -1011,10 +1011,20 @@ defmodule Muro.Toml do
     end
   end
 
-  defp field_impl(table, index, path) do
+  # An ExUnit `impl` names an Elixir module, read as `module` is (#300).
+  # pytest and rust-test keep the string: a Python module or a Rust path.
+  defp field_impl(table, index, path, kind) do
     case Map.get(table, "impl") do
       nil ->
         {:ok, nil}
+
+      {:string, value, line} when kind == :exunit ->
+        if alias_string?(value) do
+          {:ok, Module.concat(String.split(value, "."))}
+        else
+          {:error,
+           "#{path}:#{line}: modules entry #{index}: impl is not an alias, got: #{inspect(value)}"}
+        end
 
       {:string, value, _line} ->
         {:ok, value}
