@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.35
+
+`muro gen` in the executable formats with a `.formatter.exs` that has `import_deps` or `plugins` (#297). The executable loads no `mix.exs`, so `Mix.Tasks.Format.formatter_for_file/2` could not resolve `import_deps`, and `muro gen` stopped with `Unknown dependency :ecto` in a Phoenix or Ecto project after `mix deps.get`. It now passes the formatter `deps_paths` from `deps/<dep>` and a plugin loader that looks in `_build/<env>/lib/*/ebin`, honouring `MIX_DEPS_PATH`, `MIX_BUILD_PATH`, `MIX_BUILD_ROOT`, and `MIX_ENV`. Those are the files `mix muro.gen` reads in the same project, so both routes write the same bytes and `--check` agrees. The executable runs in embedded mode, so the plugin's application and the built applications it lists are loaded whole. An application the executable already carries is not added from `_build`.
+
+A dependency outside `deps/`, or a plugin that is not compiled, still stops `muro gen`. The message keeps the formatter's own line, says what the executable read, and points at the Mix archive: `mix muro.gen` loads the project. `mix muro.gen` with a loaded project is unchanged.
+
+### Manual
+
+- Committed modules: the executable reads `import_deps` from `deps/` and plugins from `_build/<env>/lib`, and writes the bytes `mix muro.gen` writes.
+- The executable: a `.formatter.exs` with `import_deps` or `plugins` works without `mix.exs`.
+
+### Package
+
+- Version 0.22.35.
+
 ## 0.22.34
 
 The C backend emits an all-nullary data type as the tag enum, passed by value. `Bool` is `typedef enum muro__tag_Bool { muro__tag_Bool_true_k = 0, muro__tag_Bool_false_k = 1 } Bool`. A match on that type is `switch` on the tag itself, not a pointer to a tagged struct. A constructor of that type is the enumerator and does not allocate. `true` is tag 0, so a C `if (b)` is not a test for `true`.

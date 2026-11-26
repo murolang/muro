@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.22.34-macos-aarch64
-muro-0.22.34-macos-x86_64
-muro-0.22.34-linux-x86_64
-muro-0.22.34-linux-aarch64
+muro-0.22.35-macos-aarch64
+muro-0.22.35-macos-x86_64
+muro-0.22.35-linux-x86_64
+muro-0.22.35-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,14 +25,14 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.22.34
+mise use -g github:murolang/muro@0.22.35
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.22.34
+mise use -g github:murolang/muro@0.22.35
 ```
 
 `mise install muro` from the mise registry follows once the assets exist. When a merge lands on main, the `Hex and tag` job in CI starts after the Elixir job on that commit succeeds. It publishes that `mix.exs` version to Hex if it is not already there, and pushes the annotated tag `vX.Y.Z` if it is missing. It does not wait for Agda or muro_visor. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. When this commit published the version or created the tag, the Release workflow builds the four files, smokes the Linux binary in a container with no Elixir and no Erlang, and attaches the assets to the GitHub release only after that smoke succeeds. A failed smoke publishes no binaries. The Hex package is already on Hex by then, and its dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
@@ -88,7 +88,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.22.34"
+muro = "0.22.35"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 
@@ -150,7 +150,7 @@ In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children 
 
 A missing `kind:` in `muro.exs` is still `:elixir`.
 
-The header is the same two lines and the same hashes as an Elixir target, except an `:mbi` image, which is written without a gen header: `muro gen --check` compares the image bytes. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`, so the body hash is the sha256 of the emitter's text. An `:otp` target is a `.ex` file and is formatted the same way as an Elixir target. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
+The header is the same two lines and the same hashes as an Elixir target, except an `:mbi` image, which is written without a gen header: `muro gen --check` compares the image bytes. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`, so the body hash is the sha256 of the emitter's text. An `:otp` target is a `.ex` file and is formatted the same way as an Elixir target. A `.formatter.exs` with `import_deps` or `plugins` is read without `mix.exs`: dependencies from `deps/`, plugins from `_build/<env>/lib`, the same files `mix muro.gen` reads. See [Committed modules](gen.md). `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
 
 ## init
 

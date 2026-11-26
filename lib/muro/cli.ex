@@ -237,9 +237,11 @@ defmodule Muro.CLI do
   defp named(result), do: result
 
   @doc false
+  # "the Mix archive: mix muro.gen" names the archive task on purpose,
+  # so it is left as written.
   def executable_names(message) do
     Regex.replace(
-      ~r/\bmix muro\.(deps\.get|gen|init|check|emit|mutate|synth|fill)\b/,
+      ~r/(?<!archive: )\bmix muro\.(deps\.get|gen|init|check|emit|mutate|synth|fill)\b/,
       message,
       "muro \\1"
     )
