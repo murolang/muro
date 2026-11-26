@@ -52,8 +52,10 @@ defmodule Muro.Gen do
   book basename.
   The Elixir bytes are formatted with the project's `.formatter.exs`
   when that file exists (`Mix.Tasks.Format.formatter_for_file/2`),
-  and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
-  formatted even when the formatter inputs do not list the file. The
+  and with `Code.format_string!/2` otherwise. With no Mix project
+  loaded (the executable), `import_deps` is read from `deps/<name>`
+  and plugins from `_build/<env>/lib/*/ebin`, the files Mix reads.
+  `.ex` and `.exs` are formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
   `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi` are not formatted.
   The body hash is the emitter's text. There is no timestamp and no
@@ -938,15 +940,147 @@ defmodule Muro.Gen do
   defp format_elixir(source, target, root) do
     formatted =
       if File.regular?(Path.join(root, ".formatter.exs")) do
-        {formatter, _opts} =
-          Mix.Tasks.Format.formatter_for_file(Path.join(root, target), root: root)
-
+        {formatter, _opts} = project_formatter(Path.join(root, target), root)
         formatter.(source)
       else
         source |> Code.format_string!() |> IO.iodata_to_binary()
       end
 
     ensure_newline(IO.iodata_to_binary(formatted))
+  end
+
+  # `mix muro.gen` has the host project loaded. Mix resolves
+  # `import_deps` with `Mix.Project.deps_paths/0` and loads plugins
+  # with `mix loadpaths`. The executable loads no `mix.exs`, so it
+  # gives the formatter the same two answers from the project's
+  # directories: each `deps/<name>` is dependency `name`, and a
+  # plugin not yet loaded is looked up in `_build/<env>/lib/*/ebin`.
+  # The dependency `.formatter.exs` files and the plugin beams are the
+  # ones Mix would read, so both routes write the same bytes.
+  defp project_formatter(file, root) do
+    if Mix.Project.get() do
+      Mix.Tasks.Format.formatter_for_file(file, root: root)
+    else
+      try do
+        Mix.Tasks.Format.formatter_for_file(file, host_format_opts(root))
+      rescue
+        error in Mix.Error ->
+          Mix.raise(
+            "#{Path.relative_to(file, root)}: .formatter.exs could not be loaded without mix.exs\n" <>
+              "#{error.message}\n" <>
+              "The muro executable does not load mix.exs. It reads import_deps from " <>
+              "#{Path.relative_to(host_deps_path(root), root)}/<dep>/.formatter.exs and formatter plugins from " <>
+              "#{Path.relative_to(host_build_path(root), root)}/lib/*/ebin. " <>
+              "Run mix deps.get and mix compile, or use the Mix archive: mix muro.gen loads the project."
+          )
+      end
+    end
+  end
+
+  defp host_format_opts(root) do
+    root = Path.expand(root)
+
+    [
+      root: root,
+      deps_paths: host_deps_paths(root),
+      plugin_loader: &host_plugins(&1, root)
+    ]
+  end
+
+  defp host_deps_paths(root) do
+    deps = host_deps_path(root)
+
+    case File.ls(deps) do
+      {:ok, names} ->
+        for name <- names,
+            path = Path.join(deps, name),
+            File.dir?(path),
+            into: %{},
+            do: {String.to_atom(name), path}
+
+      {:error, _} ->
+        %{}
+    end
+  end
+
+  defp host_plugins(plugins, root) do
+    if not Enum.all?(plugins, &Code.ensure_loaded?/1) do
+      ebins = host_ebins(root)
+      Enum.each(Map.values(ebins), &Code.append_path/1)
+
+      # The executable is a release in embedded mode: a module on the
+      # code path is not loaded when it is first called. The plugin's
+      # application, and each application it lists that is built
+      # there, are loaded whole.
+      plugins
+      |> Enum.flat_map(&plugin_app(&1, ebins))
+      |> app_closure(ebins, MapSet.new())
+      |> Enum.each(&load_ebin(Map.fetch!(ebins, &1)))
+    end
+
+    plugins
+  end
+
+  # Built applications of the project, by name, except an application
+  # the executable already carries, such as muro itself.
+  defp host_ebins(root) do
+    for ebin <- Path.wildcard(Path.join(host_build_path(root), "lib/*/ebin")),
+        app = ebin |> Path.dirname() |> Path.basename(),
+        :code.where_is_file(~c"#{app}.app") == :non_existing,
+        into: %{},
+        do: {app, ebin}
+  end
+
+  defp plugin_app(plugin, ebins) do
+    beam = "#{plugin}.beam"
+    for {app, ebin} <- ebins, File.regular?(Path.join(ebin, beam)), do: app
+  end
+
+  defp app_closure([], _ebins, seen), do: MapSet.to_list(seen)
+
+  defp app_closure([app | rest], ebins, seen) do
+    if MapSet.member?(seen, app) do
+      app_closure(rest, ebins, seen)
+    else
+      listed =
+        case :file.consult(String.to_charlist(Path.join(ebins[app], "#{app}.app"))) do
+          {:ok, [{:application, _, keys}]} ->
+            Keyword.get(keys, :applications, []) ++ Keyword.get(keys, :included_applications, [])
+
+          _ ->
+            []
+        end
+
+      built = for dep <- listed, name = Atom.to_string(dep), Map.has_key?(ebins, name), do: name
+      app_closure(built ++ rest, ebins, MapSet.put(seen, app))
+    end
+  end
+
+  defp load_ebin(ebin) do
+    for beam <- Path.wildcard(Path.join(ebin, "*.beam")),
+        module = beam |> Path.basename(".beam") |> String.to_atom(),
+        :code.is_loaded(module) == false do
+      :code.load_abs(String.to_charlist(Path.rootname(beam)))
+    end
+
+    :ok
+  end
+
+  # The paths Mix would use with no `deps_path:` or `build_path:` in
+  # `mix.exs`, including the environment variables Mix reads.
+  defp host_deps_path(root) do
+    Path.expand(System.get_env("MIX_DEPS_PATH") || "deps", root)
+  end
+
+  defp host_build_path(root) do
+    case System.get_env("MIX_BUILD_PATH") do
+      path when path not in [nil, ""] ->
+        Path.expand(path, root)
+
+      _ ->
+        build_root = System.get_env("MIX_BUILD_ROOT") || "_build"
+        Path.join(Path.expand(build_root, root), System.get_env("MIX_ENV") || "dev")
+    end
   end
 
   defp ensure_newline(binary) do
