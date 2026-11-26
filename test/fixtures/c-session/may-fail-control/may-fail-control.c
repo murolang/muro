@@ -15,9 +15,7 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-__attribute__((unused)) static Report muro__obj_Report_ok = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Report *ok(void) { return &muro__obj_Report_ok; }
+__attribute__((unused)) static Report ok(void) { return muro__tag_Report_ok; }
 #ifndef muro__DROP
 #define muro__DROP(p) free(p)
 #endif

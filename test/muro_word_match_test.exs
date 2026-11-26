@@ -53,8 +53,11 @@ defmodule Muro.WordMatchTest do
 
     assert header =~ "struct muro__opt_u8 { uint8_t tag; uint8_t val; };"
     assert header =~ "struct muro__opt_u64 { uint8_t tag; uint64_t val; };"
-    assert source =~ "{ .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } }"
-    assert source =~ "__attribute__((unused)) static Status *unusedCtor(void)"
+    unused = Muro.Emit.C.source_id("unusedCtor")
+    status_tag = Muro.Emit.C.ctor_tag("Status", "unusedCtor")
+    assert source =~ "static Status #{unused}(void) { return #{status_tag}; }"
+    refute source =~ "static Status *"
+    refute source =~ "static Flag *"
     assert source =~ "(void)zu;"
 
     pick = body(source, "uint64_t pickWord", "uint64_t eqByte")
@@ -405,7 +408,7 @@ defmodule Muro.WordMatchTest do
       muro__opt_bool bf; bf.tag = 1; bf.val = 0;
       muro__opt_bool bn; bn.tag = 0; bn.val = 0;
       if (nested2(bt) != 1 || nested2(bf) != 0 || nested2(bn) != 0) return fail("nested2");
-      Flag *k = kept();
+      Flag k = kept();
       muro__slice d = dropCR(s, k);
       if (d.n != 1 || d.p != s.p + 1 || d.p[0] != 'b') return fail("drop");
       muro__slice whole = dropCR(s, empty());

@@ -15,21 +15,13 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-__attribute__((unused)) static Frame muro__obj_Frame_bytes = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Frame bytes(void) { return muro__tag_Frame_bytes; }
 
-__attribute__((unused)) static Frame *bytes(void) { return &muro__obj_Frame_bytes; }
+__attribute__((unused)) static Frame trailers(void) { return muro__tag_Frame_trailers; }
 
-__attribute__((unused)) static Frame muro__obj_Frame_trailers = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Frame headers(void) { return muro__tag_Frame_headers; }
 
-__attribute__((unused)) static Frame *trailers(void) { return &muro__obj_Frame_trailers; }
-
-__attribute__((unused)) static Frame muro__obj_Frame_headers = { .muro__field_tag = 2, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Frame *headers(void) { return &muro__obj_Frame_headers; }
-
-__attribute__((unused)) static Ctl muro__obj_Ctl_rst = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Ctl *rst(void) { return &muro__obj_Ctl_rst; }
+__attribute__((unused)) static Ctl rst(void) { return muro__tag_Ctl_rst; }
 #ifndef muro__DROP
 #define muro__DROP(p) free(p)
 #endif

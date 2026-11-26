@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.22.34
+
+The C backend emits an all-nullary data type as the tag enum, passed by value. `Bool` is `typedef enum muro__tag_Bool { muro__tag_Bool_true_k = 0, muro__tag_Bool_false_k = 1 } Bool`. A match on that type is `switch` on the tag itself, not a pointer to a tagged struct. A constructor of that type is the enumerator and does not allocate. `true` is tag 0, so a C `if (b)` is not a test for `true`.
+
+A type that also has a fieldful constructor is unchanged: a fieldless constructor is still a static object, and a fieldful constructor still allocates. `unboxed data` with fields is still a struct returned by value. An all-nullary `unboxed data` type is the same enum.
+
+A pair, a stream seed, or an environment may store an all-nullary value by packing the tag in a pointer word. An `Opt` of all-nullary data stores the tag in `val` by value. An `Opt` of an unboxed struct is still `c:unboxed`. Hosts that took a pointer to an all-nullary type (`Bool *`, or any other fieldless enum) and read `b->muro__field_tag`, or used `if (b)` / `!b` as a presence test, need to compare the value to the enumerator. Tag 0 is a real constructor, not a null pointer. The checked term is unchanged. `enum_scalar?` looks only at the constructor telescope, so mutually referenced boxed types cannot loop. A session field whose slot is already the enum type is loaded without packing through `uintptr_t`.
+
+On muro-http's book server (omarzo, 4 workers, epoll, keep-alive), a GET falls from 20,688 to 14,952 instructions per request (~171k req/s from ~159k). A split-header GET falls from 22,554 to 18,906, and a late-body POST from 26,439 to 18,812. `stepB` is smaller (924 B from 1,098 B) but still a call from `scan` at `-O2`.
+
+### Manual
+
+- Emit: an all-nullary data type is the tag enum, passed by value. A match switches on the tag. A pair or `Opt` of that type packs or stores the tag, not a pointer.
+- Data: C emits all-nullary data, `unboxed data` included, as that enum.
+
+### Package
+
+- Version 0.22.34.
+
 ## 0.22.33
 
 C, Rust, and Zig inline a large run when that removes a repeated fold, stream, or `uncons` from the caller's worst path, and leave it a call when the copy would not. A call that does not fold, stream, or uncons does not justify the copy, and the choice does not depend on the order the runs are listed. A match whose scrutinee is already a constructor, a word, or a comparison fixed by an enclosing arm keeps the arm that can run. Rebinding a name drops a comparison or a field that mentioned it. A match on a known pair reads the field the arm names.

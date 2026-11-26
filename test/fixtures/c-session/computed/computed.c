@@ -15,21 +15,13 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-__attribute__((unused)) static Item muro__obj_Item_self = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Item self(void) { return muro__tag_Item_self; }
 
-__attribute__((unused)) static Item *self(void) { return &muro__obj_Item_self; }
+__attribute__((unused)) static Item other(void) { return muro__tag_Item_other; }
 
-__attribute__((unused)) static Item muro__obj_Item_other = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
+__attribute__((unused)) static Bool true_k(void) { return muro__tag_Bool_true_k; }
 
-__attribute__((unused)) static Item *other(void) { return &muro__obj_Item_other; }
-
-__attribute__((unused)) static Bool muro__obj_Bool_true_k = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Bool *true_k(void) { return &muro__obj_Bool_true_k; }
-
-__attribute__((unused)) static Bool muro__obj_Bool_false_k = { .muro__field_tag = 1, .muro__as = { .muro__unused = 0 } };
-
-__attribute__((unused)) static Bool *false_k(void) { return &muro__obj_Bool_false_k; }
+__attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_k; }
 
 __attribute__((unused)) static Maybe muro__obj_Maybe_nothing = { .muro__field_tag = 0, .muro__as = { .muro__unused = 0 } };
 
@@ -42,17 +34,17 @@ __attribute__((unused)) static Maybe *just(void *muro__f_0) {
   muro__p->muro__as.just.muro__f_0 = muro__f_0;
   return muro__p;
 }
-Bool *mark(Item *f) {
-  Bool *muro__t_0 = 0;
+Bool mark(Item f) {
+  Bool muro__t_0 = 0;
   {
-  Item *muro__s_0 = f;
-  switch (muro__s_0->muro__field_tag) {
+  Item muro__s_0 = f;
+  switch (muro__s_0) {
   case 0: {
-  muro__t_0 = true_k();
+  muro__t_0 = muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_0 = false_k();
+  muro__t_0 = muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -64,13 +56,13 @@ Bool *mark(Item *f) {
   return muro__t_0;
 }
 
-Maybe *effective(Item *f) {
+Maybe *effective(Item f) {
   Maybe *muro__t_0 = 0;
   {
-  Item *muro__s_0 = f;
-  switch (muro__s_0->muro__field_tag) {
+  Item muro__s_0 = f;
+  switch (muro__s_0) {
   case 0: {
-  muro__t_0 = just(true_k());
+  muro__t_0 = just((void *)(uintptr_t)(muro__tag_Bool_true_k));
   break;
   }
   case 1: {

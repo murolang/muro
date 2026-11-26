@@ -793,7 +793,13 @@ defmodule Muro.Emit.C.Session do
     data =
       sig &&
         Enum.find(Map.values(st.datas), fn d ->
-          C.data_struct(d.name, st.prefix) <> " *" == ret
+          spell = C.data_struct(d.name, st.prefix)
+
+          cond do
+            ret == spell <> " *" -> true
+            ret == spell -> C.enum_type?(st.book, d.name) and not unboxed_data?(st.book, d.name)
+            true -> false
+          end
         end)
 
     param = sig && param_ty(sig)
@@ -831,7 +837,10 @@ defmodule Muro.Emit.C.Session do
   defp arg_ok?(:nat, "muro__nat *", _st), do: true
 
   defp arg_ok?({:dat, name, _}, param, st) when is_binary(param) do
-    param == C.data_struct(name, st.prefix) <> " *"
+    spell = C.data_struct(name, st.prefix)
+
+    param == spell <> " *" or
+      (param == spell and C.enum_type?(st.book, name) and not unboxed_data?(st.book, name))
   end
 
   defp arg_ok?(_, _, _), do: false
@@ -1784,6 +1793,30 @@ defmodule Muro.Emit.C.Session do
   end
 
   defp free_body({:dat, name, args}, id, st) do
+    if C.enum_type?(st.book, name) do
+      ptr = build_ptr({:dat, name, args}, st)
+
+      """
+      static void muro__sess_free_#{id}(#{ptr}p) {
+        (void)p;
+      }
+      """
+      |> String.trim()
+    else
+      free_body_boxed_data(name, args, id, st)
+    end
+  end
+
+  defp free_body(_ty, id, _st) do
+    """
+    static void muro__sess_free_#{id}(void *p) {
+      (void)p;
+    }
+    """
+    |> String.trim()
+  end
+
+  defp free_body_boxed_data(name, args, id, st) do
     data = Map.get(st.datas, name)
     decl = Map.get(st.decls, name)
     ptr = build_ptr({:dat, name, args}, st)
@@ -1813,15 +1846,6 @@ defmodule Muro.Emit.C.Session do
     |> String.trim()
   end
 
-  defp free_body(_ty, id, _st) do
-    """
-    static void muro__sess_free_#{id}(void *p) {
-      (void)p;
-    }
-    """
-    |> String.trim()
-  end
-
   defp free_ctor(dname, ctor, tag, args, decl, st, asf) do
     fields = Map.get(decl.ctors, ctor, [])
     inst = Enum.map(fields, &inst_field(&1, dname, args))
@@ -1830,12 +1854,16 @@ defmodule Muro.Emit.C.Session do
     if inst == [] do
       "case #{tag}: return;"
     else
+      {_fun, ctypes} = ctor_info(st, dname, ctor)
+
       frees =
         inst
         |> Enum.with_index()
         |> Enum.map_join("\n", fn {ty, k} ->
           fid = Map.fetch!(st.builds, ty)
-          "muro__sess_free_#{fid}(p->#{asf}.#{member}.#{Name.gen("f", k)});"
+          field = "p->#{asf}.#{member}.#{Name.gen("f", k)}"
+          ctype = Enum.at(ctypes, k) || "void *"
+          "muro__sess_free_#{fid}(#{pay_load(field, ty, ctype, st)});"
         end)
 
       """
@@ -1851,8 +1879,44 @@ defmodule Muro.Emit.C.Session do
 
   defp build_ptr(:nat, _st), do: Name.gen("nat") <> " *"
   defp build_ptr(:unit, _st), do: Name.gen("unit") <> " *"
-  defp build_ptr({:dat, name, _}, st), do: C.data_struct(name, st.prefix) <> " *"
+
+  defp build_ptr({:dat, name, _}, st) do
+    spell = C.data_struct(name, st.prefix)
+
+    if C.enum_type?(st.book, name) do
+      spell <> " "
+    else
+      spell <> " *"
+    end
+  end
+
   defp build_ptr(_, _st), do: "void *"
+
+  # A polymorphic field is `void *`. An enum scalar packed in that word
+  # goes through `uintptr_t` both ways. A field whose slot is already
+  # the enum type is stored and loaded as that type, with no pack.
+  defp enum_pay?({:dat, name, _}, st), do: C.enum_type?(st.book, name)
+  defp enum_pay?(_, _), do: false
+
+  defp pay_store(ex, ty, ctype, st) do
+    want = String.trim(ctype)
+
+    if enum_pay?(ty, st) and want == "void *" do
+      "(void *)(uintptr_t)(#{ex})"
+    else
+      "(#{want})#{ex}"
+    end
+  end
+
+  defp pay_load(ex, ty, ctype, st) do
+    want = String.trim(ctype)
+
+    if enum_pay?(ty, st) and want == "void *" do
+      "(#{String.trim(build_ptr(ty, st))})(uintptr_t)(#{ex})"
+    else
+      ex
+    end
+  end
 
   defp build_body(:nat, _st) do
     """
@@ -1952,9 +2016,9 @@ defmodule Muro.Emit.C.Session do
       call_args =
         inst
         |> Enum.with_index()
-        |> Enum.map_join(", ", fn {_ty, i} ->
+        |> Enum.map_join(", ", fn {ty, i} ->
           ctype = Enum.at(ctypes, i) |> String.trim()
-          "(#{ctype})f#{i}"
+          pay_store("f#{i}", ty, ctype, st)
         end)
 
       call = if n == 0, do: "#{fun}()", else: "#{fun}(#{call_args})"
@@ -2003,7 +2067,7 @@ defmodule Muro.Emit.C.Session do
 
   defp ptr_or_void(name, st) do
     if Enum.any?(st.book, &(Map.get(&1, :kind) == :data and &1.name == name)) do
-      C.data_struct(name, st.prefix) <> " *"
+      build_ptr({:dat, name, []}, st)
     else
       "void *"
     end
@@ -2513,6 +2577,8 @@ defmodule Muro.Emit.C.Session do
     tagf = Name.gen("field_tag")
     ret = info.spell
     arm_map = Map.new(arms)
+    enum? = C.enum_type?(st.book, info.ret)
+    miss = if String.ends_with?(String.trim(info.arg), "*"), do: " || !built", else: ""
 
     branches =
       info.ctors
@@ -2533,29 +2599,56 @@ defmodule Muro.Emit.C.Session do
         end
       end)
 
+    got_line =
+      if enum? do
+        "#{ret} got = #{info.cname}(built);"
+      else
+        "#{ret} *got = #{info.cname}(built);"
+      end
+
+    tag_line = if enum?, do: "tag = (int)got;", else: "tag = (int)got->#{tagf};"
+
+    inner =
+      if enum? do
+        """
+        #{got_line}
+        int tag = -1;
+        #{tag_line}
+        muro__sess_free_#{info.build}(built);
+        switch (tag) {
+        #{indent(branches, 8)}
+          default: fail = 1; break;
+        }
+        """
+      else
+        """
+        #{got_line}
+        int tag = -1;
+        if (!got) {
+          muro__sess_free_#{info.build}(built);
+          fail = 1;
+        } else {
+          #{tag_line}
+          muro__sess_free_#{info.build}(built);
+          switch (tag) {
+        #{indent(branches, 10)}
+            default: fail = 1; break;
+          }
+        }
+        """
+      end
+
     """
     {
       #{info.arg} built = 0;
       int rc = muro__sess_build_#{info.build}(value, &res->state, &built);
       if (rc == 1) {
         cap = 1;
-      } else if (rc != 0 || !built) {
+      } else if (rc != 0#{miss}) {
         muro__sess_free_#{info.build}(built);
         fail = 1;
       } else {
-        #{ret} *got = #{info.cname}(built);
-        int tag = -1;
-        if (!got) {
-          muro__sess_free_#{info.build}(built);
-          fail = 1;
-        } else {
-          tag = (int)got->#{tagf};
-          muro__sess_free_#{info.build}(built);
-          switch (tag) {
-    #{indent(branches, 8)}
-            default: fail = 1; break;
-          }
-        }
+    #{indent(String.trim(inner), 4)}
       }
     }
     """

@@ -392,14 +392,16 @@ defmodule Muro.EmitCGapsTest do
     word_a = Muro.Emit.C.ctor_word("pa", "Piece", "piece-chunk", "a_")
     word_b = Muro.Emit.C.ctor_word("pb", "Piece", "piece-req", "b_")
 
-    assert pa_h =~ "typedef struct #{struct_a} #{struct_a};"
-    assert pb_h =~ "typedef struct #{struct_b} #{struct_b};"
     assert pa_h =~ "typedef enum #{type_a}"
     assert pb_h =~ "typedef enum #{type_b}"
     assert pa_h =~ "#{tag_a} = 0"
     assert pb_h =~ "#{tag_b} = 1"
-    assert pa_c =~ "#{struct_a} *"
-    assert pb_c =~ "#{struct_b} *"
+    assert pa_h =~ "} #{struct_a};"
+    assert pb_h =~ "} #{struct_b};"
+    refute pa_h =~ "typedef struct #{struct_a}"
+    refute pb_h =~ "typedef struct #{struct_b}"
+    refute pa_c =~ "#{struct_a} *"
+    refute pb_c =~ "#{struct_b} *"
     refute pa_h =~ "typedef struct Piece "
     refute pb_h =~ "typedef enum muro__tag_Piece "
 
@@ -427,25 +429,27 @@ defmodule Muro.EmitCGapsTest do
     link!(dir, ~w(pa pb both))
   end
 
-  test "a prefixed unboxed data run returns the prefixed struct" do
+  test "a prefixed all-nullary unboxed data run returns the prefixed enum" do
     dir = tmp_dir()
     {header, _source} = emit!(dir, "flag", @flag, c_prefix: "a_")
     struct_name = Muro.Emit.C.data_struct("Flag", "a_")
     tag = Muro.Emit.C.ctor_tag("Flag", "flag-up", "a_")
     tag_type = Muro.Emit.C.ctor_tag_type("Flag", "a_")
 
-    assert header =~ "typedef struct #{struct_name} #{struct_name};"
     assert header =~ "typedef enum #{tag_type}"
     assert header =~ "#{tag} = 0"
+    assert header =~ "} #{struct_name};"
     assert header =~ "#{struct_name} a_up("
+    refute header =~ "typedef struct #{struct_name}"
     refute header =~ "typedef struct Flag "
+    refute header =~ "#{struct_name} *"
 
     File.write!(Path.join(dir, "main.c"), """
     #include "flag.h"
 
     int main(void) {
       #{struct_name} f = a_up();
-      if (f.muro__field_tag != #{tag}) return 1;
+      if (f != #{tag}) return 1;
       return 0;
     }
     """)

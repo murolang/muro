@@ -709,9 +709,9 @@ defmodule Muro.IRShareTest do
             printf("n%d %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\\n", #{n},
               (unsigned long long)hasX(s), (unsigned long long)tally(s),
               (unsigned long long)twice(s), (unsigned long long)viaWrap(s),
-              (unsigned long long)both(&yes, s), (unsigned long long)both(&no, s),
-              (unsigned long long)nested(&yes, s), (unsigned long long)nested(&no, s),
-              (unsigned long long)branchy(&yes, s), (unsigned long long)branchy(&no, s));
+              (unsigned long long)both(yes, s), (unsigned long long)both(no, s),
+              (unsigned long long)nested(yes, s), (unsigned long long)nested(no, s),
+              (unsigned long long)branchy(yes, s), (unsigned long long)branchy(no, s));
           }
         """
       end)
@@ -720,14 +720,14 @@ defmodule Muro.IRShareTest do
     #include <stdio.h>
     #include "shared.h"
     int main(void) {
-      Pick yes = {.muro__field_tag = muro__tag_Pick_yes};
-      Pick no = {.muro__field_tag = muro__tag_Pick_no};
+      Pick yes = muro__tag_Pick_yes;
+      Pick no = muro__tag_Pick_no;
       {
         static const uint8_t b[] = {97, 98, 99};
         muro__slice s = {b, 3};
         printf("twice %llu\\n", (unsigned long long)twice(s));
         printf("viaWrap %llu\\n", (unsigned long long)viaWrap(s));
-        printf("branchy-no %llu\\n", (unsigned long long)branchy(&no, s));
+        printf("branchy-no %llu\\n", (unsigned long long)branchy(no, s));
         printf("hasX %llu\\n", (unsigned long long)hasX(s));
       }
     #{cases}

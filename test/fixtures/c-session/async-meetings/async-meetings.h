@@ -12,38 +12,17 @@ struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 
 typedef struct muro__unit muro__unit;
 struct muro__unit { uint8_t muro__field_tag; };
 #endif
-typedef struct Frame Frame;
-typedef struct Ctl Ctl;
-typedef struct Goaway Goaway;
 typedef enum muro__tag_Frame {
   muro__tag_Frame_bytes = 0,
   muro__tag_Frame_trailers = 1,
   muro__tag_Frame_headers = 2
-} muro__tag_Frame;
-struct Frame {
-  uint8_t muro__field_tag; /* bytes = 0, trailers = 1, headers = 2 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Frame;
 typedef enum muro__tag_Ctl {
   muro__tag_Ctl_rst = 0
-} muro__tag_Ctl;
-struct Ctl {
-  uint8_t muro__field_tag; /* rst = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Ctl;
 typedef enum muro__tag_Goaway {
   muro__tag_Goaway_goaway = 0
-} muro__tag_Goaway;
-struct Goaway {
-  uint8_t muro__field_tag; /* goaway = 0 */
-  union {
-    char muro__unused;
-  } muro__as;
-};
+} Goaway;
 typedef enum muro__word_asynczdmeetings {
   muro__word_asynczdmeetings_Frame_bytes = 0,
   muro__word_asynczdmeetings_Frame_trailers = 1,
