@@ -2288,9 +2288,23 @@ defmodule Muro.IR.Share do
 
   defp replace(t, key, v, fv), do: map_children(t, &replace(&1, key, v, fv))
 
-  # A `:linear` binder unused after pruning is `:affine`. Check then
-  # agrees with a valid Share rewrite.
-  defp relax_fun(fun), do: %{fun | body: relax_tm(fun.body)}
+  # A `:linear` binder unused after pruning or inlining is `:affine`,
+  # including a parameter whose only use was a dropped fresh let.
+  # Check then agrees with a valid Share rewrite.
+  defp relax_fun(fun) do
+    body = relax_tm(fun.body)
+
+    params =
+      Enum.map(fun.params, fn
+        {n, lay, :linear} ->
+          {n, lay, relax_grade(:linear, n, body)}
+
+        p ->
+          p
+      end)
+
+    %{fun | params: params, body: body}
+  end
 
   defp relax_tm({:let, x, lay, g, v, b}) do
     v = relax_tm(v)
@@ -2353,37 +2367,111 @@ defmodule Muro.IR.Share do
   # Term children of a node without binders, in evaluation order.
   defp children(t) do
     case t do
-      :ze -> []
-      :tt -> []
-      :abort -> []
-      {:nat, _} -> []
-      {:var, _} -> []
-      {:byt, _} -> []
-      {:str, _} -> []
-      {:su, u} -> [u]
-      {:call, _, args} -> args
-      {:con, _, _, args} -> args
-      {:wrd, _, _, args} -> args
-      {:pair, a, b} -> [a, b]
-      {:uncons, e} -> [e]
-      {:stream, seed, caps, _} -> [seed | Enum.map(caps, &elem(&1, 1))]
-      {:bfold, _, caps, z, s} -> Enum.map(caps, &elem(&1, 1)) ++ [z, s]
-      {:bcat, a, b} -> [a, b]
-      {:blen, a} -> [a]
-      {:beq, a, b} -> [a, b]
-      {:bsub, s, o, n} -> [s, o, n]
-      {:bget, s, i} -> [s, i]
-      {:btil, s, b} -> [s, b]
-      {:baft, s, b} -> [s, b]
-      {:sbytes, s} -> [s]
-      {:bunc, s} -> [s]
-      {:scat, a, b} -> [a, b]
-      {:slen, a} -> [a]
-      {:seq, a, b} -> [a, b]
-      {:let, _, _, _, v, b} -> [v, b]
-      {:letp, _, _, e, b} -> [e, b]
-      {:match, s, arms} -> [s | Enum.map(arms, fn {:arm, _, _, tm} -> tm end)]
-      _ -> throw(:unknown)
+      :ze ->
+        []
+
+      :tt ->
+        []
+
+      :abort ->
+        []
+
+      {:nat, _} ->
+        []
+
+      {:var, _} ->
+        []
+
+      {:byt, _} ->
+        []
+
+      {:str, _} ->
+        []
+
+      {:su, u} ->
+        [u]
+
+      {:call, _, args} ->
+        args
+
+      {:con, _, _, args} ->
+        args
+
+      {:wrd, _, _, args} ->
+        args
+
+      {:pair, a, b} ->
+        [a, b]
+
+      {:uncons, e} ->
+        [e]
+
+      {:stream, seed, caps, _} ->
+        [seed | Enum.map(caps, &elem(&1, 1))]
+
+      {:bfold, _, caps, z, s} ->
+        Enum.map(caps, &elem(&1, 1)) ++ [z, s]
+
+      {:bcat, a, b} ->
+        [a, b]
+
+      {:blen, a} ->
+        [a]
+
+      {:beq, a, b} ->
+        [a, b]
+
+      {:bsub, s, o, n} ->
+        [s, o, n]
+
+      {:bget, s, i} ->
+        [s, i]
+
+      {:btil, s, b} ->
+        [s, b]
+
+      {:baft, s, b} ->
+        [s, b]
+
+      {:sbytes, s} ->
+        [s]
+
+      {:bunc, s} ->
+        [s]
+
+      {:scat, a, b} ->
+        [a, b]
+
+      {:slen, a} ->
+        [a]
+
+      {:seq, a, b} ->
+        [a, b]
+
+      {:let, _, _, _, v, b} ->
+        [v, b]
+
+      {:letp, _, _, e, b} ->
+        [e, b]
+
+      {:match, s, arms} ->
+        [s | Enum.map(arms, fn {:arm, _, _, tm} -> tm end)]
+
+      {:match, s, lay, arms} when not is_list(lay) and is_list(arms) ->
+        [s | Enum.map(arms, fn {:arm, _, _, tm} -> tm end)]
+
+      {:lam, name, _, g, body}
+      when is_binary(name) and g in [:linear, :affine, :reuse] ->
+        [body]
+
+      {:appv, f, a} ->
+        [f, a]
+
+      {:data, _, args} when is_list(args) ->
+        args
+
+      _ ->
+        throw(:unknown)
     end
   end
 
@@ -2458,6 +2546,18 @@ defmodule Muro.IR.Share do
       {:match, s, arms} ->
         {:match, f.(s), Enum.map(arms, fn {:arm, c, ns, tm} -> {:arm, c, ns, f.(tm)} end)}
 
+      {:match, s, lay, arms} when not is_list(lay) and is_list(arms) ->
+        {:match, f.(s), lay, Enum.map(arms, fn {:arm, c, ns, tm} -> {:arm, c, ns, f.(tm)} end)}
+
+      {:lam, name, lay, g, body} when is_binary(name) ->
+        {:lam, name, lay, g, f.(body)}
+
+      {:appv, fun, a} ->
+        {:appv, f.(fun), f.(a)}
+
+      {:data, n, args} when is_list(args) ->
+        {:data, n, Enum.map(args, f)}
+
       _ ->
         t
     end
@@ -2482,6 +2582,16 @@ defmodule Muro.IR.Share do
           f.(tm, MapSet.union(bound, MapSet.new(names)), acc)
         end)
 
+      {:match, s, _lay, arms} when is_list(arms) ->
+        acc = f.(s, bound, acc)
+
+        Enum.reduce(arms, acc, fn {:arm, _, names, tm}, acc ->
+          f.(tm, MapSet.union(bound, MapSet.new(names)), acc)
+        end)
+
+      {:lam, name, _, _, body} when is_binary(name) ->
+        f.(body, MapSet.put(bound, name), acc)
+
       _ ->
         Enum.reduce(children(t), acc, fn c, acc -> f.(c, bound, acc) end)
     end
@@ -2504,15 +2614,37 @@ defmodule Muro.IR.Share do
     end)
   end
 
+  defp fv({:match, s, _lay, arms}, bound) when is_list(arms) do
+    Enum.reduce(arms, fv(s, bound), fn {:arm, _, names, tm}, acc ->
+      MapSet.union(acc, fv(tm, MapSet.union(bound, MapSet.new(names))))
+    end)
+  end
+
+  defp fv({:lam, name, _, _, body}, bound) when is_binary(name),
+    do: fv(body, MapSet.put(bound, name))
+
   defp fv(t, bound), do: Enum.reduce(children(t), MapSet.new(), &MapSet.union(&2, fv(&1, bound)))
 
   defp binders(t) do
     own =
       case t do
-        {:let, x, _, _, _, _} -> [x]
-        {:letp, a, b, _, _} -> [a, b]
-        {:match, _, arms} -> Enum.flat_map(arms, fn {:arm, _, ns, _} -> ns end)
-        _ -> []
+        {:let, x, _, _, _, _} ->
+          [x]
+
+        {:letp, a, b, _, _} ->
+          [a, b]
+
+        {:match, _, arms} ->
+          Enum.flat_map(arms, fn {:arm, _, ns, _} -> ns end)
+
+        {:match, _, _, arms} when is_list(arms) ->
+          Enum.flat_map(arms, fn {:arm, _, ns, _} -> ns end)
+
+        {:lam, name, _, _, _} when is_binary(name) ->
+          [name]
+
+        _ ->
+          []
       end
 
     Enum.reduce(children(t), MapSet.new(own), &MapSet.union(&2, binders(&1)))

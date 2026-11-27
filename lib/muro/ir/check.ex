@@ -13,8 +13,9 @@ defmodule Muro.IR.Check do
   is bottom: it does not require leftover linear binders, but uses that
   already happened still count. If every arm is `:abort`, the match is
   unreachable. Compiler-introduced CSE lets are `:reuse`. After Share
-  prunes a path, an unused `:linear` *let* in the body is downgraded to
-  `:affine` (`relax_fun/1`); parameters are unchanged.
+  prunes a path, an unused `:linear` binder — a body let, or a
+  parameter whose only use was dropped — is downgraded to `:affine`
+  (`relax_fun/1`).
 
   Captures under `{:lam, ...}` are charged at formation, as in
   `Muro.Grade` and `agda/Muro/Grade.agda` (`rest` after `pop`). A
@@ -133,7 +134,9 @@ defmodule Muro.IR.Check do
         path_grade_errors(fun.name, n, IR.param_grade(p), paths)
       end)
 
-    param_errors ++ ret_errors ++ body_errors ++ grade_errors
+    ret_agree = layout_agree(fun, "return", infer(fun.body, env, ctx), fun.ret)
+
+    param_errors ++ ret_errors ++ body_errors ++ grade_errors ++ ret_agree
   end
 
   defp path_grade_errors(fun, name, grade, paths) do
@@ -347,6 +350,7 @@ defmodule Muro.IR.Check do
   defp arm_paths(arms, scrut_lay, env, fun, ctx) do
     walked =
       Enum.map(arms, fn {:arm, tag, names, tm} ->
+        arity = arm_arity_errors(fun, scrut_lay, tag, names, ctx)
         lays = arm_field_lays(scrut_lay, tag, names, ctx)
         grades = arm_field_grades(scrut_lay, tag, names, ctx)
 
@@ -365,7 +369,7 @@ defmodule Muro.IR.Check do
           |> Enum.zip(grades)
           |> Enum.flat_map(fn {n, g} -> path_grade_errors(fun.name, n, g, paths) end)
 
-        {Enum.map(paths, &drop_binders(&1, names)), errors ++ gerr}
+        {Enum.map(paths, &drop_binders(&1, names)), arity ++ errors ++ gerr}
       end)
 
     case walked do
@@ -428,6 +432,30 @@ defmodule Muro.IR.Check do
   defp pad_grades(grades, names) do
     grades ++ List.duplicate(:reuse, max(length(names) - length(grades), 0))
   end
+
+  defp arm_arity_errors(fun, scrut_lay, tag, names, ctx) do
+    case known_field_count(scrut_lay, tag, ctx) do
+      n when is_integer(n) and n != length(names) ->
+        ["#{fun.name}: arm #{tag} has #{length(names)} binder(s), expected #{n}"]
+
+      _ ->
+        []
+    end
+  end
+
+  defp known_field_count(:nat, "suc", _ctx), do: 1
+  defp known_field_count(:nat, "zero", _ctx), do: 0
+  defp known_field_count({:opt, _}, "wsome", _ctx), do: 1
+  defp known_field_count({:opt, _}, "wnone", _ctx), do: 0
+
+  defp known_field_count({:data, d}, tag, ctx) do
+    case ctor_field_lays(ctx.book, d, tag) do
+      :unknown -> nil
+      lays -> length(lays)
+    end
+  end
+
+  defp known_field_count(_lay, _tag, _ctx), do: nil
 
   defp exhaust_errors(_fun, _lay, _arms, %{book: nil}), do: []
 
@@ -626,6 +654,12 @@ defmodule Muro.IR.Check do
        when got in [:unknown, :opaque] or expect in [:unknown, :opaque] or got == expect,
        do: []
 
+  # The default image stores a datatype as `{:data, name}`. The closures
+  # image may add argument layouts. The name is the same layout.
+  defp layout_agree(_fun, _where, {:data, n}, {:data, n, _}), do: []
+  defp layout_agree(_fun, _where, {:data, n, _}, {:data, n}), do: []
+  defp layout_agree(_fun, _where, {:data, n, a}, {:data, n, b}) when a == b, do: []
+
   defp layout_agree(fun, where, got, expect),
     do: ["#{fun.name}: #{where} has layout #{inspect(got)}, expected #{inspect(expect)}"]
 
@@ -647,8 +681,26 @@ defmodule Muro.IR.Check do
   defp infer({:call, name, _}, _env, ctx), do: call_ret(ctx, name)
   defp infer({:con, d, _, _}, _env, _ctx), do: {:data, d}
   defp infer({:wrd, lay, _, _}, _env, _ctx), do: lay
-  defp infer({:let, _, _, _, _, b}, env, ctx), do: infer(b, env, ctx)
-  defp infer({:letp, _, _, _, b}, env, ctx), do: infer(b, env, ctx)
+
+  defp infer({:let, x, lay, _g, _v, b}, env, ctx) do
+    infer(b, Map.put(env, x, %{grade: :reuse, lay: lay}), ctx)
+  end
+
+  defp infer({:letp, a, b, e, body}, env, ctx) do
+    {alay, blay} =
+      case infer(e, env, ctx) do
+        {:pair, x, y} -> {x, y}
+        _ -> {:unknown, :unknown}
+      end
+
+    env1 =
+      env
+      |> Map.put(a, %{grade: :reuse, lay: alay})
+      |> Map.put(b, %{grade: :reuse, lay: blay})
+
+    infer(body, env1, ctx)
+  end
+
   defp infer({:uncons, e}, env, ctx), do: uncons_lay(infer(e, env, ctx))
   defp infer({:stream, seed, _, _}, env, ctx), do: {:stream, infer(seed, env, ctx)}
   defp infer({:blen, _}, _env, _ctx), do: :u64
@@ -662,23 +714,37 @@ defmodule Muro.IR.Check do
   defp infer({:btil, _, _}, _env, _ctx), do: :slice
   defp infer({:baft, _, _}, _env, _ctx), do: :slice
   defp infer({:sbytes, _}, _env, _ctx), do: :slice
-  defp infer({:bunc, _}, _env, _ctx), do: :slice
-  defp infer({:lam, _, lay, _, body}, env, ctx), do: {:fn, lay, infer(body, env, ctx)}
+  defp infer({:bunc, _}, _env, _ctx), do: {:data, "Maybe"}
+
+  defp infer({:lam, name, lay, _g, body}, env, ctx) when is_binary(name) do
+    {:fn, lay, infer(body, Map.put(env, name, %{grade: :reuse, lay: lay}), ctx)}
+  end
+
   defp infer({:appv, f, _}, env, ctx), do: ret_of_fn(infer(f, env, ctx))
   defp infer({:data, name, _}, _env, _ctx), do: {:data, name}
 
-  defp infer({:match, _, arms}, env, ctx) when is_list(arms) and arms != [] do
-    {:arm, _, _, tm} = hd(arms)
-    infer(tm, env, ctx)
+  defp infer({:match, s, arms}, env, ctx) when is_list(arms) and arms != [] do
+    infer_arm(hd(arms), infer(s, env, ctx), env, ctx)
   end
 
-  defp infer({:match, _, _, arms}, env, ctx) when is_list(arms) and arms != [] do
-    {:arm, _, _, tm} = hd(arms)
-    infer(tm, env, ctx)
+  defp infer({:match, s, _lay, arms}, env, ctx) when is_list(arms) and arms != [] do
+    infer_arm(hd(arms), infer(s, env, ctx), env, ctx)
   end
 
   defp infer({:bfold, _, _, z, _}, env, ctx), do: infer(z, env, ctx)
   defp infer(_, _, _), do: :unknown
+
+  defp infer_arm({:arm, tag, names, tm}, scrut_lay, env, ctx) do
+    lays = arm_field_lays(scrut_lay, tag, names, ctx)
+
+    env1 =
+      Enum.zip(names, lays)
+      |> Enum.reduce(env, fn {n, lay}, env ->
+        Map.put(env, n, %{grade: :reuse, lay: lay})
+      end)
+
+    infer(tm, env1, ctx)
+  end
 
   defp call_ret(ctx, name) do
     case Map.fetch(ctx.by_name, name) do

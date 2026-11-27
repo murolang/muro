@@ -396,6 +396,77 @@ defmodule Muro.IRCheckTest do
     assert Enum.any?(errors, &(&1 =~ "let x is missing a grade"))
   end
 
+  test "a let-bound argument is inferred so a wrong layout is reported" do
+    callee = fun("id", [{"n", :nat, :affine}], :nat, {:var, "n"})
+
+    bad =
+      fun(
+        "go",
+        [],
+        :nat,
+        {:call, "id", [{:let, "x", :string, :affine, {:str, "hi"}, {:var, "x"}}]}
+      )
+
+    assert {:error, errors} = Check.check([bad, callee])
+    assert Enum.any?(errors, &(&1 =~ "expected :nat"))
+  end
+
+  test "the body layout must agree with the function return" do
+    bad = fun("go", [], :nat, {:str, "hi"})
+    assert {:error, errors} = Check.check([bad])
+    assert Enum.any?(errors, &(&1 =~ "return has layout :string, expected :nat"))
+  end
+
+  test "match arm binder counts are checked when the fields are known" do
+    book = box_book()
+
+    few =
+      fun(
+        "go",
+        [{"b", {:data, "Box"}, :affine}],
+        :nat,
+        {:match, {:var, "b"}, [{:arm, "mk", [], :ze}]}
+      )
+
+    assert {:error, errors} = Check.check([few], book: book)
+    assert Enum.any?(errors, &(&1 =~ "arm mk has 0 binder(s), expected 1"))
+
+    many =
+      fun(
+        "go",
+        [{"b", {:data, "Box"}, :affine}],
+        :nat,
+        {:match, {:var, "b"}, [{:arm, "mk", ["n", "m"], {:var, "n"}}]}
+      )
+
+    assert {:error, errors} = Check.check([many], book: book)
+    assert Enum.any?(errors, &(&1 =~ "arm mk has 2 binder(s), expected 1"))
+  end
+
+  test "Share relaxes an unused linear parameter after inlining drops its only use" do
+    drop = fun("drop", [{"x", :nat, :affine}, {"k", :nat, :affine}], :nat, :ze)
+    go = fun("go", [{"n", :nat, :linear}], :nat, {:call, "drop", [{:var, "n"}, :ze]})
+    shared = Share.funs([drop, go])
+    go_s = Enum.find(shared, &(&1.name == "go"))
+    assert go_s.body == :ze
+    assert IR.param_grade(hd(go_s.params)) == :affine
+    assert :ok = Check.check(shared)
+  end
+
+  test "arrow.muro elaborates %1 as a linear parameter and checks in both images" do
+    {:ok, book} = load_example("examples/arrow.muro")
+    assert {:ok, funs} = IR.elaborate(book)
+    keep = Enum.find(funs, &(&1.name == "keep"))
+    assert keep
+    assert IR.param_grade(hd(keep.params)) == :linear
+    assert :ok = Check.check(funs, book: book)
+    assert :ok = Check.check(Share.funs(funs), book: book)
+
+    assert {:ok, closed} = IR.elaborate(book, closures: true)
+    assert :ok = Check.check(closed, book: book, closures: true)
+    assert :ok = Check.check(Share.funs(closed), book: book, closures: true)
+  end
+
   test "corpus elaborations and Share images check" do
     {ok, skipped, failures} =
       Enum.reduce(corpus_paths(), {0, 0, []}, fn path, {ok, skipped, failures} ->
@@ -409,8 +480,21 @@ defmodule Muro.IRCheckTest do
                 {ok, skipped + 1, failures}
 
               {:ok, funs} ->
-                case {Check.check(funs, book: book), Check.check(Share.funs(funs), book: book)} do
-                  {:ok, :ok} ->
+                default =
+                  {Check.check(funs, book: book), Check.check(Share.funs(funs), book: book)}
+
+                closed =
+                  case IR.elaborate(book, closures: true) do
+                    {:error, _} ->
+                      {:ok, :ok}
+
+                    {:ok, cfuns} ->
+                      {Check.check(cfuns, book: book, closures: true),
+                       Check.check(Share.funs(cfuns), book: book, closures: true)}
+                  end
+
+                case {default, closed} do
+                  {{:ok, :ok}, {:ok, :ok}} ->
                     {ok + 1, skipped, failures}
 
                   {a, b} ->
@@ -430,7 +514,7 @@ defmodule Muro.IRCheckTest do
   end
 
   defp format_fail({path, a, b}),
-    do: "#{path}\n  after elaborate: #{inspect(a)}\n  after Share: #{inspect(b)}"
+    do: "#{path}\n  default: #{inspect(a)}\n  closures: #{inspect(b)}"
 
   defp fun(name, params, ret, body) do
     %{name: name, export: true, params: params, ret: ret, body: body}
