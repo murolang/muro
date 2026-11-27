@@ -108,8 +108,10 @@ defmodule Muro.IRDiffTest do
     assert plain > 1000
 
     # Every image in A-normal form agrees wherever its source image does.
-    for {anf, src} <- [anf: :plain, anf_shared: :shared, anf_closures: :closures] do
-      assert Enum.count(cases, &agreed_on?(&1, anf)) == Enum.count(cases, &agreed_on?(&1, src))
+    # So does the loop image C emits (`Muro.IR.Loop`), beside the shared
+    # image it lowers.
+    for {img, src} <- [anf: :plain, anf_shared: :shared, anf_closures: :closures, loop: :shared] do
+      assert Enum.count(cases, &agreed_on?(&1, img)) == Enum.count(cases, &agreed_on?(&1, src))
     end
   end
 
@@ -194,7 +196,8 @@ defmodule Muro.IRDiffTest do
                closures: {:error, :out_of_fuel},
                anf: {:ok, {:nat, 0}},
                anf_shared: {:ok, {:nat, 5}},
-               anf_closures: {:error, :out_of_fuel}
+               anf_closures: {:error, :out_of_fuel},
+               loop: {:ok, {:nat, 5}}
              ]
     end
   end

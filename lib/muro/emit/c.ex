@@ -27,6 +27,15 @@ defmodule Muro.Emit.C do
   all-nullary data stores the tag in `val` by value. An `Opt` of
   ordinary boxed data stores a pointer in `val`.
 
+  A byte fold is a `while` over the slice (`Muro.IR.Loop`): the fold
+  step's body is inline, its captures are locals bound once, and the
+  accumulator is a local. When the step returns the accumulator
+  unchanged for the rest of the input (`Muro.IR.Share.stop/2`) the loop
+  breaks. When the step's value is a run that updates a by-value
+  struct accumulator, the loop calls that run's in-place twin
+  `muro__io_N` on the accumulator's address instead of copying the
+  struct into the call and back.
+
   Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor of an all-nullary data type is the
   enumerator and does not. A fieldless constructor of a type that also
@@ -305,12 +314,12 @@ defmodule Muro.Emit.C do
          {:ok, funs} <- IR.elaborate(book) do
       nm = name_map(book, prefix)
 
-      case compile_funs(
-             Muro.IR.Share.funs(funs, Muro.IR.Share.opts(opts)),
-             book,
-             nm,
-             prefix
-           ) do
+      looped =
+        funs
+        |> Muro.IR.Share.funs(Muro.IR.Share.opts(opts))
+        |> Muro.IR.Loop.funs(book: book)
+
+      case compile_funs(looped, book, nm, prefix) do
         {:ok, sigs, texts, extras} ->
           runs = Emit.run_defs(book)
           bytes? = bytes_image?(funs) or data_field_bytes?(book)
@@ -386,8 +395,10 @@ defmodule Muro.Emit.C do
       names = Emit.def_names(book, &(prefix <> spell(&1)), nm.taken)
       by_name = Map.new(groups, fn {fun, _} -> {fun.name, fun} end)
 
+      io = io_names(funs)
+
       Enum.reduce_while(groups, {:ok, [], [], []}, fn {fun, _steps}, {:ok, sigs, texts, extras} ->
-        case compile_fun(fun, book, names, by_name, step_map, nm, prefix) do
+        case compile_fun(fun, book, names, by_name, step_map, nm, prefix, io) do
           {:ok, sig, text, extra} ->
             {:cont, {:ok, sigs ++ [sig], texts ++ [text], extras ++ extra}}
 
@@ -395,11 +406,45 @@ defmodule Muro.Emit.C do
             {:halt, err}
         end
       end)
+      |> with_io(groups, book, names, by_name, step_map, nm, prefix, io)
     end
   end
 
-  defp compile_fun(fun, book, names, by_name, step_map, nm, prefix) do
-    file_scope = file_scope(nm, MapSet.new(Map.values(names)))
+  # A run `Muro.IR.Loop` marked `inout: p` also gets an in-place twin,
+  # `static void muro__io_N(..., T *p)`, that writes its result through
+  # `p` instead of returning it. A loop whose body ends in
+  # `{:inout, f, args}` calls the twin on the address of its
+  # accumulator, so the by-value struct is neither copied into the call
+  # nor copied back out of it. N is the run's place in the image.
+  defp io_names(funs) do
+    funs
+    |> Enum.with_index()
+    |> Enum.filter(fn {f, _i} -> Map.get(f, :inout) != nil end)
+    |> Map.new(fn {f, i} -> {f.name, g("io", i)} end)
+  end
+
+  defp with_io({:ok, sigs, texts, extras}, groups, book, names, by_name, step_map, nm, prefix, io)
+       when map_size(io) > 0 do
+    groups
+    |> Enum.filter(fn {fun, _} -> Map.has_key?(io, fun.name) end)
+    |> Enum.reduce_while({:ok, [], []}, fn {fun, _}, {:ok, protos, defs} ->
+      case compile_io(fun, book, names, by_name, step_map, nm, prefix, io) do
+        {:ok, proto, text, []} -> {:cont, {:ok, protos ++ [proto], defs ++ [text]}}
+        {:ok, _proto, _text, _more} -> {:halt, {:error, "c:unsupported"}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, protos, defs} -> {:ok, sigs, texts, [Enum.join(protos, "\n") | extras] ++ defs}
+      err -> err
+    end
+  end
+
+  defp with_io(result, _groups, _book, _names, _by_name, _step_map, _nm, _prefix, _io),
+    do: result
+
+  defp compile_fun(fun, book, names, by_name, step_map, nm, prefix, io) do
+    file_scope = file_scope(nm, MapSet.new(Map.values(names) ++ Map.values(io)))
 
     {bound, scope} =
       Enum.map_reduce(fun.params, file_scope, fn {pname, lay, _g}, scope ->
@@ -417,22 +462,7 @@ defmodule Muro.Emit.C do
 
     env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
 
-    st = %{
-      t: 0,
-      s: 0,
-      steps: [],
-      envs: [],
-      names: names,
-      book: book,
-      funs: by_name,
-      steps_by_name: step_map,
-      fold_done: MapSet.new(),
-      nm: nm,
-      prefix: prefix,
-      file_scope: file_scope,
-      base_scope: scope,
-      scope: scope
-    }
+    st = fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
 
     with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
       expr = as_ret(expr, lay, fun.ret)
@@ -458,6 +488,75 @@ defmodule Muro.Emit.C do
         end
 
       {:ok, sig, "#{decl(sig)} {\n#{body}\n}", st.envs ++ st.steps}
+    end
+  end
+
+  defp fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope) do
+    %{
+      t: 0,
+      s: 0,
+      steps: [],
+      envs: [],
+      names: names,
+      io: io,
+      book: book,
+      funs: by_name,
+      steps_by_name: step_map,
+      fold_done: MapSet.new(),
+      nm: nm,
+      prefix: prefix,
+      file_scope: file_scope,
+      base_scope: scope,
+      scope: scope
+    }
+  end
+
+  # The in-place twin of `fun` (see `io_names/1`). The updated parameter
+  # is `T *p`, read as `(*p)`. The body is the run's own body, so every
+  # read of `(*p)` happens before the one store of the result at the end.
+  defp compile_io(fun, book, names, by_name, step_map, nm, prefix, io) do
+    file_scope = file_scope(nm, MapSet.new(Map.values(names) ++ Map.values(io)))
+    target = Map.fetch!(fun, :inout)
+
+    {bound, scope} =
+      Enum.map_reduce(fun.params, file_scope, fn {pname, lay, _g}, scope ->
+        {c, scope} = Name.bind(spell(pname), scope)
+        {{pname, c, lay}, scope}
+      end)
+
+    params =
+      for {n, c, lay} <- bound do
+        ty = ctype(lay, book, prefix)
+        if n == target, do: {String.trim_trailing(ty) <> " *", c}, else: {ty, c}
+      end
+
+    env =
+      Enum.reduce(bound, [], fn {n, c, lay}, env ->
+        [{n, if(n == target, do: "(*#{c})", else: c), lay} | env]
+      end)
+
+    {_, ptr, _} = Enum.find(bound, fn {n, _c, _lay} -> n == target end)
+    ret = ctype(fun.ret, book, prefix)
+    st = fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+
+    with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, ret) do
+      expr = as_ret(expr, lay, fun.ret)
+
+      discards =
+        bound
+        |> Enum.reject(fn {n, _c, _lay} -> uses?(fun.body, n) end)
+        |> Enum.map_join("\n", fn {_n, c, _lay} -> "  (void)#{c};" end)
+
+      store = if expr == "(*#{ptr})", do: "", else: "  *#{ptr} = #{expr};"
+
+      body =
+        [discards, if(pre == "", do: "", else: indent(pre, 2)), store]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("\n")
+
+      args = Enum.map_join(params, ", ", fn {ty, name} -> "#{ty}#{name}" end)
+      head = "__attribute__((unused)) static void #{Map.fetch!(io, fun.name)}(#{args})"
+      {:ok, head <> ";", "#{head} {\n#{body}\n}", st.envs ++ st.steps}
     end
   end
 
@@ -777,6 +876,69 @@ defmodule Muro.Emit.C do
 
         {:ok, {squash([pre, stmt]), out, {:data, "Maybe"}, st}}
       end
+    end
+  end
+
+  # `Muro.IR.Loop`: the fold step is the loop body. The captures are
+  # bound once, the accumulator is a local the body assigns, and a body
+  # that returns the accumulator unchanged assigns nothing. A body that
+  # ends in `{:inout, f, args}` calls `f`'s in-place twin on the
+  # accumulator's address. The body sees only the loop's binders.
+  defp emit_ir({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
+    {on, _, _} = octet
+    {rn, _, _} = rest
+    {an, alay, _} = acc
+    cty = ctype(alay, st.book, st.prefix)
+    cap_tys = Enum.map(caps, fn {_n, lay, _g, _tm} -> ctype(lay, st.book, st.prefix) end)
+
+    with {:ok, {cpres, cexs, st}} <- emit_args(Enum.map(caps, &elem(&1, 3)), cap_tys, env, st),
+         {:ok, {pz, ez, _zlay, st}} <- emit_ir(z, env, st, cty),
+         {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+      {accv, st} = news(st)
+      {cur, st} = news(st)
+      sl = g("slice")
+
+      {cap_decls, benv, st} =
+        caps
+        |> Enum.zip(Enum.zip(cap_tys, cexs))
+        |> Enum.reduce({[], [], st}, fn {{n, lay, _g, _tm}, {ty, ex}}, {decls, benv, st} ->
+          {local, st} = news(st)
+          void = if uses?(body, n) or stop_uses?(stop, n), do: "", else: "(void)#{local};"
+          {decls ++ ["#{ty}#{local} = #{ex};", void], [{n, local, lay} | benv], st}
+        end)
+
+      {bv, st} = news(st)
+      {rv, st} = news(st)
+      benv = [{an, accv, alay}, {rn, rv, :slice}, {on, bv, :u8} | benv]
+
+      with {:ok, {stop_src, st}} <- loop_stop(stop, accv, alay, st),
+           {:ok, {bpre, step, st}} <- loop_body(body, an, accv, benv, cty, st) do
+        octet_decl = if uses?(body, on), do: "uint8_t #{bv} = #{cur}.p[0];", else: ""
+        rest_decl = "#{sl} #{rv} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};"
+        rest_void = if uses?(body, rn), do: "", else: "(void)#{rv};"
+
+        inner =
+          squash([stop_src, octet_decl, rest_decl, rest_void, bpre, step, "#{cur} = #{rv};"])
+
+        loop =
+          squash([
+            "#{cty}#{accv} = #{ez};",
+            "#{sl} #{cur} = #{es};",
+            "while (#{cur}.n > 0) {",
+            indent(inner, 2),
+            "}"
+          ])
+
+        {:ok, {squash(cpres ++ cap_decls ++ [pz, ps, loop]), accv, alay, st}}
+      end
+    end
+  end
+
+  # In expression position (a match arm of a loop body) the in-place
+  # call is a comma expression whose value is the updated accumulator.
+  defp emit_ir({:inout, name, args}, env, st, _expect) do
+    with {:ok, {pre, call, acc_c, st}} <- io_call(name, args, env, st) do
+      {:ok, {pre, "(#{call}, #{acc_c})", call_lay(st, name), st}}
     end
   end
 
@@ -1686,6 +1848,10 @@ defmodule Muro.Emit.C do
       _ -> nil
     end)
   end
+
+  # A loop's body and stop see only the loop's binders.
+  defp uses?({:loop, caps, _o, _r, _a, z, s, _stop, _body}, name),
+    do: uses?([Enum.map(caps, &elem(&1, 3)), z, s], name)
 
   defp uses?(t, name) when is_tuple(t) do
     t == {:var, name} or t |> Tuple.to_list() |> Enum.any?(&uses?(&1, name))
@@ -2720,6 +2886,66 @@ defmodule Muro.Emit.C do
   end
 
   defp fold_cname(name), do: g("step", step_id(name))
+
+  # The early exit (`Muro.IR.Share.stop/2`) of a loop, before each octet.
+  defp loop_stop(:none, _acc, _lay, st), do: {:ok, {"", st}}
+
+  defp loop_stop({v, test}, acc, lay, st) do
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(test, [{v, acc, lay}], st, "uint64_t ") do
+      {:ok, {squash([pre, "if (#{ex}) break;"]), st}}
+    end
+  end
+
+  defp stop_uses?(:none, _n), do: false
+  defp stop_uses?({v, test}, n), do: v != n and uses?(test, n)
+
+  # The statements that set the accumulator `acc` to the body's value.
+  # A tail `let` is a local, as in `emit_ir/4`. A body that is the
+  # accumulator itself sets nothing.
+  defp loop_body({:var, an}, an, _acc, _env, _cty, st), do: {:ok, {"", "", st}}
+
+  defp loop_body({:inout, name, args}, _an, _acc, env, _cty, st) do
+    with {:ok, {pre, call, _acc_c, st}} <- io_call(name, args, env, st) do
+      {:ok, {pre, call <> ";", st}}
+    end
+  end
+
+  defp loop_body({:let, x, lay, _g, val, body}, an, acc, env, cty, st)
+       when lay != :erased and body != :abort and x != an do
+    ty = ctype(lay, st.book, st.prefix)
+
+    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, ty) do
+      {local, st} = news(st)
+
+      with {:ok, {pre2, step, st}} <- loop_body(body, an, acc, [{x, local, lay} | env], cty, st) do
+        void = if uses?(body, x), do: "", else: "(void)#{local};"
+        {:ok, {squash([pre, "#{ty}#{local} = #{ex};", void, pre2]), step, st}}
+      end
+    end
+  end
+
+  defp loop_body(body, _an, acc, env, cty, st) do
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, cty) do
+      {:ok, {pre, "#{acc} = #{ex};", st}}
+    end
+  end
+
+  # `f`'s in-place twin on the address of the accumulator, which is the
+  # argument in the place of `f`'s `inout` parameter.
+  defp io_call(name, args, env, st) do
+    with %{inout: target, params: params} <- Map.get(st.funs, name),
+         twin when is_binary(twin) <- Map.get(st.io, name),
+         i when is_integer(i) <- Enum.find_index(params, &(IR.param_name(&1) == target)),
+         {:var, x} <- Enum.at(args, i),
+         {c, _lay} <- lookup(env, x),
+         {:ok, {pres, exprs, st}} <- emit_args(args, live_ctypes(st, name), env, st) do
+      exprs = List.replace_at(exprs, i, "&#{c}")
+      {:ok, {squash(pres), "#{twin}(#{Enum.join(exprs, ", ")})", c, st}}
+    else
+      {:error, _} = err -> err
+      _ -> {:error, "c:unsupported"}
+    end
+  end
 
   defp fold_ret(st, name) do
     case Map.get(st.steps_by_name, name) do

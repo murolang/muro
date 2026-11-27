@@ -48,7 +48,8 @@ defmodule Muro.IR do
   A `Bytes` or a `Slice` is `:slice` on every image: `{:byt, binary}`,
   `{:bcat, a, b}`, `{:blen, a}`, `{:beq, a, b}`, `{:bsub, s, off, len}`,
   `{:bget, s, i}`, `{:bunc, s}`, `{:btil, s, b}`, `{:baft, s, b}`,
-  `{:bfold, step, caps, z, s}`. `strBytes` of a closed string is
+  `{:bfold, step, caps, z, s}` (`Muro.IR.Loop` lowers it for C).
+  `strBytes` of a closed string is
   `{:byt, utf8}`. An open `strBytes` is `{:sbytes, s}`. Assembly still
   refuses a string (`c:string`).
   """
