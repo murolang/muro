@@ -599,14 +599,12 @@ defmodule Muro.ChoreoFamilyTest do
                   "rollout.muro:1 choreography plan: 5th release -> worker : deploy",
                   {:message, :release, :worker, :deploy, :unit}}}}
 
+      first = "rollout.muro:1 choreography plan: first release -> registry : publish"
+      publish = {:message, :release, :registry, :publish, :unit}
+
       assert r.check_trace(eu) ==
                {:error,
-                {0,
-                 {:key, :eu,
-                  {:preamble,
-                   "rollout.muro:1 choreography plan: first release -> registry : publish",
-                   {:message, :release, :registry, :publish, :unit},
-                   {:release, :front, :deploy}}}}}
+                {0, {:key, :eu, {:preamble, first, publish, {:release, :front, :deploy}}}}}
 
       assert {:error, {3, {:key, :eu, {:unexpected, _, _, {:release, :worker, :deploy}}}}} =
                r.check_trace(pre ++ [hd(eu), {:key, :eu, {:release, :worker, :deploy}}])
