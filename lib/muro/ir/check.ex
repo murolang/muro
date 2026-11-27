@@ -19,8 +19,16 @@ defmodule Muro.IR.Check do
 
   Captures under `{:lam, ...}` are charged at formation, as in
   `Muro.Grade` and `agda/Muro/Grade.agda` (`rest` after `pop`). A
-  `:reuse` binding or argument that mentions a `:linear` or `:affine`
-  variable is refused, because copying that value would copy the capture.
+  `:reuse` binding, argument, or constructor field that mentions a
+  `:linear` or `:affine` variable is refused, because copying that value
+  would copy the capture.
+
+  `letp` binders are `:affine`, as in `Muro.Check` (⇐-letp). The
+  predecessor of `suc` or `wsome` takes `pred_qty` from the scrutinee:
+  `:reuse` under a `:reuse` variable, `:linear` under `%1`, and
+  `:affine` otherwise. Constructor field grades and binder counts are
+  taken from the book; without a book they are not guessed (a missing
+  book does not default those fields to `:reuse`).
   """
 
   alias Muro.IR
@@ -32,8 +40,10 @@ defmodule Muro.IR.Check do
 
   Options:
 
-    * `:book` — the named book, used for constructor fields and
-      exhaustiveness. Without it those checks are skipped.
+    * `:book` — the named book, used for constructor fields, field
+      grades, and exhaustiveness. Without it those checks are skipped
+      rather than defaulted to `:reuse`. An unknown constructor or a
+      wrong binder count is an error when a book is given.
     * `:closures` — `true` when the image was elaborated with
       `closures: true`. When omitted, it is inferred from the image.
   """
@@ -212,7 +222,7 @@ defmodule Muro.IR.Check do
 
     {vpaths, verr} = check_tm(val, env, fun, ctx)
     errors = errors ++ verr ++ layout_agree(fun, "let #{x}", infer(val, env, ctx), lay)
-    errors = errors ++ reuse_capture_errors(fun, "let #{x}", g, val, env)
+    errors = errors ++ reuse_capture_errors(fun, "let #{x}", g, val, env, lay)
 
     env1 = Map.put(env, x, %{grade: g, lay: lay})
     {bpaths, berr} = check_tm(body, env1, fun, ctx)
@@ -233,11 +243,16 @@ defmodule Muro.IR.Check do
 
     env1 =
       env
-      |> Map.put(a, %{grade: :reuse, lay: alay})
-      |> Map.put(b, %{grade: :reuse, lay: blay})
+      |> Map.put(a, %{grade: :affine, lay: alay})
+      |> Map.put(b, %{grade: :affine, lay: blay})
 
     {bpaths, berr} = check_tm(body, env1, fun, ctx)
-    {seq(epaths, Enum.map(bpaths, &drop_binders(&1, [a, b]))), eerr ++ berr}
+
+    gerr =
+      path_grade_errors(fun.name, a, :affine, bpaths) ++
+        path_grade_errors(fun.name, b, :affine, bpaths)
+
+    {seq(epaths, Enum.map(bpaths, &drop_binders(&1, [a, b]))), eerr ++ berr ++ gerr}
   end
 
   defp check_tm({:lam, name, lay, g, body}, env, fun, ctx) when is_binary(name) do
@@ -342,32 +357,47 @@ defmodule Muro.IR.Check do
 
   defp check_match(s, arms, env, fun, ctx, scrut_lay) do
     {spaths, serr} = check_tm(s, env, fun, ctx)
-    {apaths, aerr} = arm_paths(arms, scrut_lay, env, fun, ctx)
+    {apaths, aerr} = arm_paths(s, arms, scrut_lay, env, fun, ctx)
     ex = exhaust_errors(fun, scrut_lay, arms, ctx)
     {seq(spaths, apaths), serr ++ aerr ++ ex}
   end
 
-  defp arm_paths(arms, scrut_lay, env, fun, ctx) do
+  defp arm_paths(scrut, arms, scrut_lay, env, fun, ctx) do
     walked =
       Enum.map(arms, fn {:arm, tag, names, tm} ->
         arity = arm_arity_errors(fun, scrut_lay, tag, names, ctx)
         lays = arm_field_lays(scrut_lay, tag, names, ctx)
-        grades = arm_field_grades(scrut_lay, tag, names, ctx)
+        grades = arm_field_grades(scrut, scrut_lay, tag, names, env, ctx)
 
         env1 =
-          names
-          |> Enum.zip(lays)
-          |> Enum.zip(grades)
-          |> Enum.reduce(env, fn {{n, lay}, g}, env ->
-            Map.put(env, n, %{grade: g, lay: lay})
-          end)
+          case grades do
+            {:ok, gs} ->
+              names
+              |> Enum.zip(lays)
+              |> Enum.zip(gs)
+              |> Enum.reduce(env, fn {{n, lay}, g}, env ->
+                Map.put(env, n, %{grade: g, lay: lay})
+              end)
+
+            :unknown ->
+              Enum.zip(names, lays)
+              |> Enum.reduce(env, fn {n, lay}, env ->
+                Map.put(env, n, %{grade: :unknown, lay: lay})
+              end)
+          end
 
         {paths, errors} = check_tm(tm, env1, fun, ctx)
 
         gerr =
-          names
-          |> Enum.zip(grades)
-          |> Enum.flat_map(fn {n, g} -> path_grade_errors(fun.name, n, g, paths) end)
+          case grades do
+            {:ok, gs} ->
+              names
+              |> Enum.zip(gs)
+              |> Enum.flat_map(fn {n, g} -> path_grade_errors(fun.name, n, g, paths) end)
+
+            :unknown ->
+              []
+          end
 
         {Enum.map(paths, &drop_binders(&1, names)), arity ++ errors ++ gerr}
       end)
@@ -407,30 +437,41 @@ defmodule Muro.IR.Check do
     lays ++ List.duplicate(:unknown, max(n - length(lays), 0))
   end
 
-  defp arm_field_grades(scrut_lay, tag, names, ctx) do
-    grades =
-      case {scrut_lay, tag} do
-        {:nat, "suc"} ->
-          [:affine]
-
-        {{:opt, _}, "wsome"} ->
-          [:affine]
-
-        {{:data, d}, _} ->
-          case ctor_field_grades(ctx.book, d, tag) do
-            :unknown -> Enum.map(names, fn _ -> :reuse end)
-            gs -> gs
-          end
-
-        _ ->
-          Enum.map(names, fn _ -> :reuse end)
-      end
-
-    pad_grades(grades, names)
+  # `Env.predQty`: reusable under a reusable scrutinee variable,
+  # linear under `%1`, affine otherwise (including a non-variable).
+  defp pred_qty({:var, x}, env) do
+    case env do
+      %{^x => %{grade: :reuse}} -> :reuse
+      %{^x => %{grade: :linear}} -> :linear
+      _ -> :affine
+    end
   end
 
-  defp pad_grades(grades, names) do
-    grades ++ List.duplicate(:reuse, max(length(names) - length(grades), 0))
+  defp pred_qty(_scrut, _env), do: :affine
+
+  defp arm_field_grades(scrut, scrut_lay, tag, _names, env, ctx) do
+    case {scrut_lay, tag} do
+      {:nat, "suc"} ->
+        {:ok, [pred_qty(scrut, env)]}
+
+      {:nat, "zero"} ->
+        {:ok, []}
+
+      {{:opt, _}, "wsome"} ->
+        {:ok, [pred_qty(scrut, env)]}
+
+      {{:opt, _}, "wnone"} ->
+        {:ok, []}
+
+      {{:data, d}, _} ->
+        case ctor_field_grades(ctx.book, d, tag) do
+          :unknown -> :unknown
+          gs -> {:ok, gs}
+        end
+
+      _ ->
+        :unknown
+    end
   end
 
   defp arm_arity_errors(fun, scrut_lay, tag, names, ctx) do
@@ -531,21 +572,35 @@ defmodule Muro.IR.Check do
       args
       |> Enum.zip(callee.params)
       |> Enum.flat_map(fn {arg, p} ->
-        reuse_capture_errors(fun, "argument of #{name}", IR.param_grade(p), arg, env)
+        reuse_capture_errors(
+          fun,
+          "argument of #{name}",
+          IR.param_grade(p),
+          arg,
+          env,
+          IR.param_lay(p)
+        )
       end)
 
     arity ++ lays ++ caps
   end
 
   defp ctor_errors(fun, d, c, args, env, ctx) do
-    case {ctx.book, ctor_field_lays(ctx.book, d, c)} do
-      {nil, _} ->
+    case {ctx.book, ctor_field_lays(ctx.book, d, c), ctor_field_grades(ctx.book, d, c)} do
+      {nil, _, _} ->
         []
 
-      {_, :unknown} ->
-        []
+      {_, :unknown, _} when d == "Atom" ->
+        if args == [] do
+          []
+        else
+          ["#{fun.name}: constructor #{c} has #{length(args)} field(s), expected 0"]
+        end
 
-      {_, lays} ->
+      {_, :unknown, _} ->
+        ["#{fun.name}: unknown constructor #{c}"]
+
+      {_, lays, grades} ->
         arity =
           if length(args) == length(lays) do
             []
@@ -562,7 +617,21 @@ defmodule Muro.IR.Check do
             layout_agree(fun, "field of #{c}", infer(arg, env, ctx), lay)
           end)
 
-        arity ++ agrees
+        caps =
+          case grades do
+            :unknown ->
+              []
+
+            gs ->
+              args
+              |> Enum.zip(lays)
+              |> Enum.zip(gs)
+              |> Enum.flat_map(fn {{arg, lay}, g} ->
+                reuse_capture_errors(fun, "field of #{c}", g, arg, env, lay)
+              end)
+          end
+
+        arity ++ agrees ++ caps
     end
   end
 
@@ -621,6 +690,10 @@ defmodule Muro.IR.Check do
   defp type_lay(_book, :wbool), do: :wbool
   defp type_lay(_book, :string), do: :string
   defp type_lay(_book, :slice), do: :slice
+  defp type_lay(_book, {:word, {:ty, k}, []}) when k in [:u8, :u32, :u64], do: k
+  defp type_lay(_book, {:word, :bool, []}), do: :wbool
+  defp type_lay(_book, {:word, {:optk, k}, []}) when k in [:u8, :u32, :u64, :i64], do: {:opt, k}
+  defp type_lay(book, {:word, :opt, [a]}), do: {:opt, type_lay(book, a)}
   defp type_lay(_book, {:data, name}), do: {:data, name}
 
   defp type_lay(book, {:const, name}) do
@@ -792,19 +865,42 @@ defmodule Muro.IR.Check do
   # A `:reuse` binding or argument may not mention a linear or affine
   # variable. `Muro.Grade` charges λ-captures at formation; copying the
   # value would copy those captures (`affine variable used as reusable`).
-  defp reuse_capture_errors(_fun, _where, g, _tm, _env) when g != :reuse, do: []
+  # A + position whose type is Data copies by value, so an affine or
+  # linear variable may be moved there once (as in `Muro.Check.reuse_arg_uses/4`).
+  # A function (or other non-Data) type would scale those uses to ω.
+  defp reuse_capture_errors(_fun, _where, g, _tm, _env, _lay) when g != :reuse, do: []
 
-  defp reuse_capture_errors(fun, where, :reuse, tm, env) do
-    names = tm |> restricted_free(env, MapSet.new()) |> Enum.uniq()
+  defp reuse_capture_errors(fun, where, :reuse, tm, env, lay) do
+    if data_lay?(lay) do
+      []
+    else
+      names = tm |> restricted_free(env, MapSet.new()) |> Enum.uniq()
 
-    case names do
-      [] ->
-        []
+      case names do
+        [] ->
+          []
 
-      ns ->
-        ["#{fun.name}: #{where} uses #{Enum.join(ns, ", ")} as reusable"]
+        ns ->
+          ["#{fun.name}: #{where} uses #{Enum.join(ns, ", ")} as reusable"]
+      end
     end
   end
+
+  # `Muro.Check.is_data/3`: a + argument of a Data type copies by value.
+  defp data_lay?(:nat), do: true
+  defp data_lay?(:unit), do: true
+  defp data_lay?(:string), do: true
+  defp data_lay?(:slice), do: true
+  defp data_lay?(:u8), do: true
+  defp data_lay?(:u32), do: true
+  defp data_lay?(:u64), do: true
+  defp data_lay?(:i64), do: true
+  defp data_lay?(:wbool), do: true
+  defp data_lay?({:data, _}), do: true
+  defp data_lay?({:data, _, _}), do: true
+  defp data_lay?({:opt, a}), do: data_lay?(a)
+  defp data_lay?({:pair, a, b}), do: data_lay?(a) and data_lay?(b)
+  defp data_lay?(_), do: false
 
   defp restricted_free({:var, x}, env, bound) do
     if MapSet.member?(bound, x) do

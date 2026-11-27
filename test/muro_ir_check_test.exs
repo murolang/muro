@@ -467,6 +467,113 @@ defmodule Muro.IRCheckTest do
     assert :ok = Check.check(Share.funs(closed), book: book, closures: true)
   end
 
+  test "letp binders are affine and may not be used twice" do
+    once =
+      fun(
+        "go",
+        [{"p", {:pair, :nat, :nat}, :reuse}],
+        :nat,
+        {:letp, "a", "b", {:var, "p"}, {:var, "a"}}
+      )
+
+    assert :ok = Check.check([once])
+
+    both =
+      fun(
+        "go",
+        [{"p", {:pair, :nat, :nat}, :reuse}],
+        {:pair, :nat, :nat},
+        {:letp, "a", "b", {:var, "p"}, {:pair, {:var, "a"}, {:var, "b"}}}
+      )
+
+    assert :ok = Check.check([both])
+
+    twice =
+      fun(
+        "go",
+        [{"p", {:pair, :nat, :nat}, :reuse}],
+        {:pair, :nat, :nat},
+        {:letp, "a", "b", {:var, "p"}, {:pair, {:var, "a"}, {:var, "a"}}}
+      )
+
+    assert {:error, errors} = Check.check([twice])
+    assert Enum.any?(errors, &(&1 =~ "affine binder a used 2"))
+  end
+
+  test "a reusable Nat scrutinee gives a reusable suc predecessor" do
+    ok =
+      fun(
+        "go",
+        [{"n", :nat, :reuse}],
+        {:pair, :nat, :nat},
+        {:match, {:var, "n"},
+         [
+           {:arm, "zero", [], {:pair, :ze, :ze}},
+           {:arm, "suc", ["m"], {:pair, {:var, "m"}, {:var, "m"}}}
+         ]}
+      )
+
+    assert :ok = Check.check([ok])
+
+    affine =
+      fun(
+        "go",
+        [{"n", :nat, :affine}],
+        {:pair, :nat, :nat},
+        {:match, {:var, "n"},
+         [
+           {:arm, "zero", [], {:pair, :ze, :ze}},
+           {:arm, "suc", ["m"], {:pair, {:var, "m"}, {:var, "m"}}}
+         ]}
+      )
+
+    assert {:error, errors} = Check.check([affine])
+    assert Enum.any?(errors, &(&1 =~ "affine binder m used 2"))
+
+    {:ok, book} =
+      load_source("""
+      def go : run Π (+ n : Nat) → Nat × Nat :=
+        λ (+ n : Nat) →
+          match n motive (λ _ → (Nat × Nat))
+          | 0 => (0, 0)
+          | suc m => (m, m)
+      """)
+
+    assert {:ok, funs} = IR.elaborate(book)
+    assert :ok = Check.check(funs, book: book)
+  end
+
+  test "a reuse constructor field may not capture a linear variable" do
+    # A Data field at + copies by value, so an affine word is allowed.
+    word =
+      fun(
+        "go",
+        [{"x", :nat, :affine}],
+        {:data, "ReuseBox"},
+        {:con, "ReuseBox", "mk", [{:var, "x"}]}
+      )
+
+    assert :ok = Check.check([word], book: reuse_box_book())
+
+    bad =
+      fun(
+        "go",
+        [{"x", :nat, :linear}],
+        {:data, "FnBox"},
+        {:con, "FnBox", "mk", [{:lam, "n", :nat, :affine, {:var, "x"}}]}
+      )
+
+    assert {:error, errors} = Check.check([bad], book: reuse_fn_box_book(), closures: true)
+    assert Enum.any?(errors, &(&1 =~ "uses x as reusable"))
+  end
+
+  test "with a book, an unknown constructor is an error" do
+    book = box_book()
+    bad = fun("go", [], {:data, "Box"}, {:con, "Box", "nope", []})
+    assert {:error, errors} = Check.check([bad], book: book)
+    assert Enum.any?(errors, &(&1 =~ "unknown constructor nope"))
+  end
+
   test "corpus elaborations and Share images check" do
     {ok, skipped, failures} =
       Enum.reduce(corpus_paths(), {0, 0, []}, fn path, {ok, skipped, failures} ->
@@ -527,6 +634,40 @@ defmodule Muro.IRCheckTest do
   defp reuse_let?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&reuse_let?/1)
   defp reuse_let?(t) when is_list(t), do: Enum.any?(t, &reuse_let?/1)
   defp reuse_let?(_), do: false
+
+  defp reuse_fn_box_book do
+    [
+      %{
+        kind: :data,
+        name: "FnBox",
+        params: [],
+        indices: [],
+        ctors: [
+          %{
+            name: "mk",
+            type: {:pi, :reuse, {:pi, :affine, :nat, "_", :nat}, "f", {:const, "FnBox"}}
+          }
+        ]
+      }
+    ]
+  end
+
+  defp reuse_box_book do
+    [
+      %{
+        kind: :data,
+        name: "ReuseBox",
+        params: [],
+        indices: [],
+        ctors: [
+          %{
+            name: "mk",
+            type: {:pi, :reuse, :nat, "n", {:const, "ReuseBox"}}
+          }
+        ]
+      }
+    ]
+  end
 
   defp lin_box_book do
     [
