@@ -1,0 +1,1268 @@
+-- Pinned from doctorcorral/muro-http priv/muro/http/step.muro at 1050ea3 for
+-- test/muro_ir_http_diff_test.exs. Evidence definitions are removed;
+-- every run and data declaration is verbatim.
+-- Write slice of one HTTP/1.1 connection.
+--
+-- c/step.c is still the step the production host calls. This book
+-- decides one read, the protocol write, the handler write, and the
+-- idle tick. It does not call the kernel or the clock. It does not
+-- render bytes. The handler, the admit wall, and host_copy_response
+-- stay in C. c/step_book.c owns the buffers and calls this step.
+-- It is not linked into the production host. `--backend c` emits
+-- c/generated/step_slice.c with c_prefix http_step_.
+-- c/test_step_slice feeds the same fact and the same buffer to
+-- http_step_stepFact and to muro_http_step, and compares that host
+-- with the adapter on the covered paths.
+--
+-- Fact numbers are c/step.h: 1 accepted, 2 bytes, 3 peer closed,
+-- 4 wrote, 5 write failed, 6 now. `n` is the wrote count. `owed`
+-- is the outstanding span when `left` is 0. A short write stores
+-- `left = owed - n`, and the next wrote uses that stored remainder,
+-- so a stale `owed` does not move the span. `n` greater than or
+-- equal to that base finishes the span. The host clamps the same
+-- way. now, deadline, and idle are the adapter clock. idle is the
+-- connection's idle budget in milliseconds.
+--
+-- Book phase 0 is reading. Book phase 1 owes a protocol span and
+-- closes when that span finishes: 400, 413, 414, 417, 431, 501. A
+-- request line with no LF in the first 16384 bytes is 414. A header
+-- block past 16384 whose request line fit is 431. Book phase 3 owes
+-- the handler span for a finished request the policy accepts. keep 0
+-- returns to book phase 4 (idle) when that span finishes, and bytes
+-- past the request are classified in that same step. A leftover that
+-- is still a partial request reads again. keep 1 closes instead:
+-- Connection: close, HTTP/1.0, or a peer close during the write
+-- (that peer close drops a pipelined tail). Book phase 2 has closed.
+-- A closed step ignores every later fact and disarms the deadline.
+-- These numbers are book phases, not image phases. Image phases are
+-- read 0, handle 1, write 2, idle 3, closed 4.
+--
+-- span 0 is nothing, 1 is the close status (status_now), 2 is a
+-- write span. wake 0 is disarmed. Accept arms now+idle and ignores
+-- a carried deadline. A read or an idle step keeps a carried
+-- deadline, and arms now+idle when the deadline is 0. A write
+-- parks with wake 0. NOW from read or from idle closes. The book
+-- does not compare now with the deadline: the fact is the tick,
+-- and the two clocks produce the same close. NOW during a write
+-- parks that same span again.
+--
+-- cover 1 is an unknown fact. A streamed body whose
+-- Content-Length is within max while the peer is still open is a
+-- handler reply at the request keep (stream-open). The adapter
+-- then sets hclose when that body is still open and the response
+-- does not pull it, so the wire says Connection: close. Accept
+-- during a write (write-accept, owe-accept) and accept while idle
+-- (idle-accept) are a fresh read: now+idle, and the carried
+-- deadline is dropped. Chunked bodies are in the slice. The book
+-- scans the chunk framing
+-- (chunkScan) and decides the same status and close as
+-- host_in_policy: a bad size is 400, a size or total past max is
+-- 413, a finished body is a handler span, and a peer close before
+-- the last chunk is 400. Method code 1 is 501 before that body
+-- check, so a chunked TRACE is 501. 100-continue is in the slice.
+-- Book phase 6 owes the interim (span 6) while the body is short.
+-- Phase 8 is that interim after the peer has closed. Phase 7 is
+-- the read after the interim was sent, so a still-short body does
+-- not park a second one. A body already in the buffer, HTTP/1.0,
+-- HEAD, and a policy status (413, 417, 501) do not owe it. A tick
+-- drops it and closes. Bytes during a write park the
+-- same span. A wrote or a
+-- failure while reading stays on the read. The same facts while
+-- idle stay idle. The host holds those facts the same way. A
+-- finished buffered request on a peer close is a handler span
+-- with keep 1. The completing write closes. A within-max streamed
+-- body on a peer close is that same handler span
+-- (stream-peer-reply, stream-peer-done). A streamed body past max
+-- is an owed 413 span. Classify already finished, so that close is
+-- the write, not status_now. A wrote with left 0 and owed 0
+-- finishes: the caller named an empty span. That finish is in the
+-- book (owe-empty-span, reply-empty-span). The host has no such
+-- input. It finishes from its own byte counter.
+-- The adapter runs the handler, then feeds the result to `hand`.
+-- reqKeep is the keep the request already decided. hclose is
+-- close_after (the adapter also sets it when an open request body
+-- is not owned by the response pull). hbad is 1 for a status
+-- 400..599. howe is owe_status. href is 1 when the handler
+-- returned -1. hpull is 0 for a buffered body, 1 for a pull with
+-- a content length, and 2 for a pull with no length. hver is 1
+-- for HTTP/1.1. hhead is 1 for HEAD. hfit is 1 when a buffered
+-- body fits; a pull ignores it. A refused handler with owe_status
+-- is book phase 5: close now, no span, code 500. The image stays
+-- in handle. A buffered body that does not fit is the same shut
+-- when owe_status is clear, and a 500 write with keep 1 when it
+-- is set. A pull is a handler span whose span field is 3
+-- (content-length), 4 (chunked), or 5 (close-delimited). HEAD or
+-- a version other than HTTP/1.1 forces the delimited span and
+-- keep 1. cover stays 0 on all of these. A later fact on phase 5
+-- is quiet, the same as a close.
+-- Not claimed here: fuel, and the host's deadline decision
+-- (c/host.c on_tick compares the clocks). The adapter clears a
+-- pending interim on bytes or a peer close when the recv buffer
+-- was empty before the arrival, the same as prepare_in. The book
+-- itself keeps the interim across those facts. An accept during
+-- the interim is a fresh read on both sides. A later write can
+-- still re-park that interim on the host, because accept does not
+-- clear its bytes. The adapter drops them. That later write is
+-- not claimed. Bytes that complete the request while that interim
+-- is still outstanding, and the recv buffer was not empty, disarm
+-- the host and leave the book armed. The sweep rewinds an empty
+-- buffer instead, so that race is not in the differential. A
+-- response pull that leaves the request body open does not force
+-- Connection: close. The host then closes after the response
+-- because the body is still open. The book finishes at the
+-- request keep. The test handler does not pull, so that close is
+-- not claimed. An unknown fact is cover 1. The host returns -1.
+-- overStatus owes 400 and 413. Any other override is cover, and
+-- the adapter shuts with the stuck note. The body reader only
+-- produces 400 and 413.
+-- The C adapter admits each fact with proto_admit. This book does
+-- not. A refused admit is note 1 in that adapter.
+-- hend is the header-block end, found once. 0 means it is not yet
+-- known. A complete block is never at offset 0. After the headers
+-- finish, later steps reuse that offset and do not fold the header
+-- again. te, sawCL, and cl are the first-scan framing facts stored
+-- next to it: te is 1 when Transfer-Encoding is chunked, sawCL is 1
+-- when Content-Length was seen, and cl is that length (0 if not).
+-- When endKnown (hend in (0, sliceLen]), framedEndAt trusts those
+-- stored facts and does not scan. When hend is 0 or past the slice,
+-- it falls back to one scan and ignores the stored facts.
+-- keep-alive tails start a new request and reset hend and the facts
+-- to 0.
+-- Versus origin/main: 18 evidence names added (te-of-get, sawCL-of-get,
+-- cl-of-get, te-of-short, sawCL-of-short, cl-of-short, te-of-body,
+-- sawCL-of-body, cl-of-body, te-of-chunk, sawCL-of-chunk, cl-of-chunk,
+-- te-of-stream, sawCL-of-stream, cl-of-stream, facts-idle,
+-- facts-pipe-done, facts-pipe-done-cl), 0 removed, 204 total, plus
+-- equations that name the stored framing facts. facts-idle is te of
+-- the idle constructor. facts-pipe-done and facts-pipe-done-cl are
+-- te and cl of a GET-then-GET pipelined idle (pipeTail is idle). The
+-- non-zero fact values are the te-of- / sawCL-of- / cl-of- theorems
+-- on classify. Each one is an equation mix muro.check reduces.
+import "request.muro"
+
+unboxed data St : Type where
+  st : Π (+ phase : U64) → Π (+ code : U64) → Π (+ left : U64) → Π (+ keep : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → St
+
+unboxed data Out : Type where
+  out : Π (+ phase : U64) → Π (+ code : U64) → Π (+ close : U64) → Π (+ statusNow : U64) → Π (+ readMore : U64) → Π (+ writeMore : U64) → Π (+ span : U64) → Π (+ cover : U64) → Π (+ left : U64) → Π (+ wake : U64) → Π (+ keep : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out
+
+def factAccepted : run U64 :=
+  toU64 1
+
+def factBytes : run U64 :=
+  toU64 2
+
+def factPeer : run U64 :=
+  toU64 3
+
+def factWrote : run U64 :=
+  toU64 4
+
+def factFailed : run U64 :=
+  toU64 5
+
+def factNow : run U64 :=
+  toU64 6
+
+def readSt : run St :=
+  st (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def arm : run Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → U64 :=
+  λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match (u64eq dl (toU64 0)) motive (λ _ → U64)
+      | true => addi now idle
+      | false => dl
+
+def moreAt : run Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    out (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (arm now dl idle) (toU64 0) hend te sawCL cl
+
+def more : run Out :=
+  moreAt (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def moreEnd : run Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → moreAt (toU64 0) (toU64 0) (toU64 0) hend te sawCL cl
+
+def idleAt : run Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    out (toU64 4) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (arm now dl idle) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def idle : run Out :=
+  idleAt (toU64 0) (toU64 0) (toU64 0)
+
+def outside : run Out :=
+  out (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def quiet : run Π (+ code : U64) → Out :=
+  λ (+ code : U64) →
+    out (toU64 2) code (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def statusNow : run Π (+ code : U64) → Out :=
+  λ (+ code : U64) →
+    out (toU64 2) code (toU64 1) (toU64 1) (toU64 0) (toU64 0) (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def still : run Π (+ phase : U64) → Π (+ code : U64) → Π (+ left : U64) → Π (+ keep : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ phase : U64) → λ (+ code : U64) → λ (+ left : U64) → λ (+ keep : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    out phase code (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 2) (toU64 0) left (toU64 0) keep hend te sawCL cl
+
+def owe : run Π (+ code : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ code : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    still (toU64 1) code (toU64 0) (toU64 1) hend te sawCL cl
+
+def reply : run Π (+ keep : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ keep : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    still (toU64 3) (toU64 0) (toU64 0) keep hend te sawCL cl
+
+def take : run Π (+ o : Out) → St :=
+  λ (+ o : Out) →
+    match o motive (λ _ → St)
+      | out phase code _close _statusNow _readMore _writeMore _span _cover left _wake keep hend te sawCL cl =>
+          st phase code left keep hend te sawCL cl
+
+def spanOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore span _cover _left _wake _keep _hend _te _sawCL _cl => span
+
+def coverOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span cover _left _wake _keep _hend _te _sawCL _cl => cover
+
+def leftOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover left _wake _keep _hend _te _sawCL _cl => left
+
+def wakeOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover _left wake _keep _hend _te _sawCL _cl => wake
+
+def keepOut : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover _left _wake keep _hend _te _sawCL _cl => keep
+
+def hendOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover _left _wake _keep hend _te _sawCL _cl => hend
+
+def teOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover _left _wake _keep _hend te _sawCL _cl => te
+
+def sawCLOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover _left _wake _keep _hend _te sawCL _cl => sawCL
+
+def clOf : run Π (+ o : Out) → U64 :=
+  λ (+ o : Out) →
+    match o motive (λ _ → U64)
+      | out _phase _code _close _statusNow _readMore _writeMore _span _cover _left _wake _keep _hend _te _sawCL cl => cl
+
+def chunked : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → u64eq (teCode s) (toU64 1)
+
+def methodUnimpl : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → u64eq (methodCode s) (toU64 1)
+
+def tooLong : run Π (+ s : Slice) → Π (+ max : U64) → Bool :=
+  λ (+ s : Slice) → λ (+ max : U64) →
+    match (sawCL s) motive (λ _ → Bool)
+      | true => u64lt max (contentLength s)
+      | false => false
+
+def ver11 : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → spanEq (versionView s) b"HTTP/1.1"
+
+def expectIs : run Π (+ s : Slice) → Π (+ n : U64) → Bool :=
+  λ (+ s : Slice) → λ (+ n : U64) → u64eq (expectCode s) n
+
+-- A body the host will stream: headers are done, the buffered body
+-- is short, and Content-Length is past 16384. The step is the
+-- handler reply at the request keep. The adapter sets hclose when
+-- that body stays open and the response pull does not own it.
+-- A complete body is not short, so it is not streamed.
+-- A chunked body is not this predicate.
+def streamed : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → and (bodyShort s) (gt16384 (contentLength s))
+
+-- Phases 2, 3, 4, and 5 are a size line that has a remainder.
+-- chunk_over rejects those when rem or total+rem passes max.
+def ckHot : run Π (+ ph : U64) → Bool :=
+  λ (+ ph : U64) →
+    or (u64eq ph (toU64 2))
+      (or (u64eq ph (toU64 3)) (or (u64eq ph (toU64 4)) (u64eq ph (toU64 5))))
+
+-- Bad framing is not 413. A running total past max is. A hot phase
+-- is over when rem passes max, or total passes max-rem. Subtract
+-- only after rem fits, the same wrap guard as chunk_over. A size
+-- still being read (phase 0) is over when the accumulator passes max.
+def chunkOver : run Π (+ ck : Ck) → Π (+ max : U64) → Bool :=
+  λ (+ ck : Ck) → λ (+ max : U64) →
+    match ck motive (λ _ → Bool)
+      | ck ph acc rem total _fl _at =>
+          (match (u64eq ph (toU64 9)) motive (λ _ → Bool)
+            | true => false
+            | false =>
+                (match (u64lt max total) motive (λ _ → Bool)
+                  | true => true
+                  | false =>
+                      (match (ckHot ph) motive (λ _ → Bool)
+                        | true =>
+                            (match (u64lt max rem) motive (λ _ → Bool)
+                              | true => true
+                              | false => u64lt (subi max rem) total)
+                        | false =>
+                            (match (u64eq ph (toU64 0)) motive (λ _ → Bool)
+                              | true => u64lt max acc
+                              | false => false))))
+
+-- One scan. A bad chunk is not a policy status (classify owes 400).
+-- Otherwise chunk_over is 413, then an HTTP/1.1 Expect other than
+-- 100-continue is 417. 100-continue on a chunked body is not code 9.
+def chunkPol : run Π (+ ck : Ck) → Π (+ s : Slice) → Π (+ max : U64) → U64 :=
+  λ (+ ck : Ck) → λ (+ s : Slice) → λ (+ max : U64) →
+    match ck motive (λ _ → U64)
+      | ck ph _acc _rem _total _fl _at =>
+          (match (u64eq ph (toU64 9)) motive (λ _ → U64)
+            | true => toU64 0
+            | false =>
+                (match (chunkOver ck max) motive (λ _ → U64)
+                  | true => toU64 413
+                  | false =>
+                      (match (and (ver11 s) (expectIs s (toU64 2))) motive (λ _ → U64)
+                        | true => toU64 417
+                        | false => toU64 0)))
+
+-- Matches host_in_policy. Method code 1 is 501 before the body
+-- check, so a chunked TRACE is 501. A chunked body then uses
+-- chunkPol. Content-Length past max is 413. An HTTP/1.1 Expect
+-- other than 100-continue is 417. 0 is no policy status.
+-- 100-continue is not a policy status: wantCont parks it when the
+-- body is still short. Non-chunked requests are not scanned.
+
+-- Slice wrappers below stay for the C tests. The step itself binds
+-- one scan and a stored header end, then uses these.
+def chunkedHs : run Π (+ hs : HSt) → Bool :=
+  λ (+ hs : HSt) → u64eq (teCodeSt hs) (toU64 1)
+
+def tooLongHs : run Π (+ hs : HSt) → Π (+ max : U64) → Bool :=
+  λ (+ hs : HSt) → λ (+ max : U64) →
+    match (sawCLSt hs) motive (λ _ → Bool)
+      | true => u64lt max (contentLengthSt hs)
+      | false => false
+
+def expectIsHs : run Π (+ hs : HSt) → Π (+ n : U64) → Bool :=
+  λ (+ hs : HSt) → λ (+ n : U64) → u64eq (expectCodeSt hs) n
+
+def streamedHs : run Π (+ hs : HSt) → Π (+ s : Slice) → Bool :=
+  λ (+ hs : HSt) → λ (+ s : Slice) → and (bodyShortSt hs s) (gt16384 (contentLengthSt hs))
+
+def chunkPolHs : run Π (+ ck : Ck) → Π (+ hs : HSt) → Π (+ s : Slice) → Π (+ max : U64) → U64 :=
+  λ (+ ck : Ck) → λ (+ hs : HSt) → λ (+ s : Slice) → λ (+ max : U64) →
+    match ck motive (λ _ → U64)
+      | ck ph _acc _rem _total _fl _at =>
+          (match (u64eq ph (toU64 9)) motive (λ _ → U64)
+            | true => toU64 0
+            | false =>
+                (match (chunkOver ck max) motive (λ _ → U64)
+                  | true => toU64 413
+                  | false =>
+                      (match (and (ver11 s) (expectIsHs hs (toU64 2))) motive (λ _ → U64)
+                        | true => toU64 417
+                        | false => toU64 0)))
+
+def policyHs : run Π (+ hs : HSt) → Π (+ hend : U64) → Π (+ s : Slice) → Π (+ max : U64) → U64 :=
+  λ (+ hs : HSt) → λ (+ hend : U64) → λ (+ s : Slice) → λ (+ max : U64) →
+    match (methodUnimpl s) motive (λ _ → U64)
+      | true => toU64 501
+      | false =>
+          (match (chunkedHs hs) motive (λ _ → U64)
+            | true => chunkPolHs (chunkScanAt hend s) hs s max
+            | false =>
+                (match (tooLongHs hs max) motive (λ _ → U64)
+                  | true => toU64 413
+                  | false =>
+                      (match (and (ver11 s) (expectIsHs hs (toU64 2))) motive (λ _ → U64)
+                        | true => toU64 417
+                        | false => toU64 0)))
+
+def reqCompleteHs : run Π (+ hs : HSt) → Π (+ hend : U64) → Π (+ s : Slice) → Bool :=
+  λ (+ hs : HSt) → λ (+ hend : U64) → λ (+ s : Slice) →
+    match (chunkedHs hs) motive (λ _ → Bool)
+      | true => ckDone (chunkScanAt hend s)
+      | false =>
+          (match (bodyShortAt hend hs s) motive (λ _ → Bool)
+            | true => false
+            | false => true)
+
+def wantContHs : run Π (+ hs : HSt) → Π (+ hend : U64) → Π (+ s : Slice) → Bool :=
+  λ (+ hs : HSt) → λ (+ hend : U64) → λ (+ s : Slice) →
+    match (ver11 s) motive (λ _ → Bool)
+      | true =>
+          (match (expectIsHs hs (toU64 1)) motive (λ _ → Bool)
+            | true =>
+                (match (isHead s) motive (λ _ → Bool)
+                  | true => false
+                  | false =>
+                      (match (reqCompleteHs hs hend s) motive (λ _ → Bool)
+                        | true => false
+                        | false => true))
+            | false => false)
+      | false => false
+
+def policy : run Π (+ s : Slice) → Π (+ max : U64) → U64 :=
+  λ (+ s : Slice) → λ (+ max : U64) →
+    match (methodUnimpl s) motive (λ _ → U64)
+      | true => toU64 501
+      | false =>
+          (match (chunked s) motive (λ _ → U64)
+            | true => chunkPol (chunkScan s) s max
+            | false =>
+                (match (tooLong s max) motive (λ _ → U64)
+                  | true => toU64 413
+                  | false =>
+                      (match (and (ver11 s) (expectIs s (toU64 2))) motive (λ _ → U64)
+                        | true => toU64 417
+                        | false => toU64 0)))
+
+-- The body is finished, so 100-continue is not owed. A chunked body
+-- is finished only when the last chunk is done. Anything else is
+-- finished when it is not short. Non-chunked requests are not scanned.
+def reqComplete : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) →
+    match (chunked s) motive (λ _ → Bool)
+      | true => ckDone (chunkScan s)
+      | false =>
+          (match (bodyShort s) motive (λ _ → Bool)
+            | true => false
+            | false => true)
+
+def isHead : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → spanEq (methodView s) b"HEAD"
+
+-- HTTP/1.1 Expect: 100-continue, body not finished, not HEAD.
+-- The caller has already rejected a policy status, and it does not
+-- ask on a peer close or after the 100 was sent.
+def wantCont : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) →
+    match (ver11 s) motive (λ _ → Bool)
+      | true =>
+          (match (expectIs s (toU64 1)) motive (λ _ → Bool)
+            | true =>
+                (match (isHead s) motive (λ _ → Bool)
+                  | true => false
+                  | false =>
+                      (match (reqComplete s) motive (λ _ → Bool)
+                        | true => false
+                        | false => true))
+            | false => false)
+      | false => false
+
+-- Phase 6 is the interim span. The read timer stays armed.
+def contAt : run Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    out (toU64 6) (toU64 100) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 6) (toU64 0) (toU64 0) (arm now dl idle) (toU64 0) hend te sawCL cl
+
+-- A short write, a held fact, or a peer close while the 100 is still
+-- going out. Phase 8 means the peer has already closed.
+def contHold : run Π (+ phase : U64) → Π (+ left : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ phase : U64) → λ (+ left : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    out phase (toU64 100) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 6) (toU64 0) left (arm now dl idle) (toU64 0) hend te sawCL cl
+
+-- Phase 7 is the read after the 100 has been sent. A later short
+-- body must not park a second interim.
+def moreSent : run Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    out (toU64 7) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (arm now dl idle) (toU64 0) hend te sawCL cl
+
+def parkRead : run Π (+ sent : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ sent : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (u64eq sent (toU64 1)) motive (λ _ → Out)
+      | true => moreSent now dl idle hend te sawCL cl
+      | false => moreAt now dl idle hend te sawCL cl
+
+def isPol : run Π (+ n : U64) → Π (+ c : U64) → Bool :=
+  λ (+ n : U64) → λ (+ c : U64) → u64eq n c
+
+-- 1 when the first 16384 bytes hold no LF. limit_which in c/step.c
+-- returns 414 for that line and 431 once a line fits.
+def capLfStep : run Π (b : U8) → Π (+ acc : U64) → U64 :=
+  λ (b : U8) → λ (+ acc : U64) →
+    match (u64eq acc (toU64 0)) motive (λ _ → U64)
+      | true =>
+          (match (u8eq b (toU8 10)) motive (λ _ → U64)
+            | true => toU64 1
+            | false => toU64 0)
+      | false => acc
+
+def capHit : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    sliceFold U64 (toU64 0)
+      (λ (b : U8) → λ (_r : Slice) → λ (acc : U64) → capLfStep b acc)
+      (slice s (toU64 0) (toU64 16384))
+
+def capCode : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (u64eq (capHit s) (toU64 0)) motive (λ _ → U64)
+      | true => toU64 414
+      | false => toU64 431
+
+def replyKeep : run Π (k : Keep) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (k : Keep) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match k motive (λ _ → Out)
+      | keep-yes => reply (toU64 0) hend te sawCL cl
+      | keep-no => reply (toU64 1) hend te sawCL cl
+
+-- reading 1: classify still wants bytes, so a policy status is
+-- status_now and the step closes. reading 0: classify finished, so
+-- the handwritten step answers through the write span. code 0 only
+-- arrives with reading 1. A finished request (reading 0, code 0) is
+-- replyKeep, before this call, so there is no reply arm here.
+def usePol : run Π (+ code : U64) → Π (+ reading : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ code : U64) → λ (+ reading : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (isPol code (toU64 0)) motive (λ _ → Out)
+      | true => moreAt now dl idle hend te sawCL cl
+      | false =>
+          (match (u64eq reading (toU64 1)) motive (λ _ → Out)
+            | true => statusNow code
+            | false => owe code hend te sawCL cl)
+
+-- A finished request on a peer close is the handler span with
+-- keep 1. The completing write closes and drops a pipelined tail.
+-- A policy status is an owed span. 100-continue is not a policy code.
+def finOk : run Π (+ code : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ code : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (isPol code (toU64 0)) motive (λ _ → Out)
+      | true => reply (toU64 1) hend te sawCL cl
+      | false => owe code hend te sawCL cl
+
+-- sent 1 means the 100 was already written. A second short body
+-- reads again. sent 0 and wantCont parks the interim. A peer close
+-- does not park it: fin is 1, and the status is the final one.
+def onStatus : run Π (+ st : Status) → Π (+ hs : HSt) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ fin : U64) → Π (+ sent : U64) → Π (+ s : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ st : Status) → λ (+ hs : HSt) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ fin : U64) → λ (+ sent : U64) → λ (+ s : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match st motive (λ _ → Out)
+      | status-ok =>
+          (match (u64eq fin (toU64 1)) motive (λ _ → Out)
+            | true => finOk (policyHs hs hend s max) hend te sawCL cl
+            | false =>
+                (match (isPol (policyHs hs hend s max) (toU64 0)) motive (λ _ → Out)
+                  | true =>
+                      (match (and (u64eq sent (toU64 0)) (wantContHs hs hend s)) motive (λ _ → Out)
+                        | true => contAt now dl idle hend te sawCL cl
+                        | false => replyKeep (keepOfSt hs s) hend te sawCL cl)
+                  | false => usePol (policyHs hs hend s max) (toU64 0) now dl idle hend te sawCL cl))
+      | status-malformed =>
+          (match (headersDoneAt hend s) motive (λ _ → Out)
+            | true =>
+                (match (gt16384 (headerEndAt hend s)) motive (λ _ → Out)
+                  | true => owe (capCode s) hend te sawCL cl
+                  | false => owe (toU64 400) hend te sawCL cl)
+            | false =>
+                (match (gt16384 (sliceLen s)) motive (λ _ → Out)
+                  | true => owe (capCode s) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+                  | false => owe (toU64 400) (toU64 0) (toU64 0) (toU64 0) (toU64 0)))
+      | status-need-more =>
+          (match (u64eq fin (toU64 1)) motive (λ _ → Out)
+            | true => owe (toU64 400) hend te sawCL cl
+            | false =>
+                (match (headersDoneAt hend s) motive (λ _ → Out)
+                  | true =>
+                      (match (isPol (policyHs hs hend s max) (toU64 0)) motive (λ _ → Out)
+                        | true =>
+                            (match (and (u64eq sent (toU64 0)) (wantContHs hs hend s)) motive (λ _ → Out)
+                              | true => contAt now dl idle hend te sawCL cl
+                              | false => parkRead sent now dl idle hend te sawCL cl)
+                        | false => usePol (policyHs hs hend s max) (toU64 1) now dl idle hend te sawCL cl)
+                  | false => parkRead sent now dl idle (toU64 0) (toU64 0) (toU64 0) (toU64 0)))
+      | status-unimplemented => owe (toU64 501) hend te sawCL cl
+
+def onBufScan : run Π (+ hs : HSt) → Π (+ hend : U64) → Π (+ fin : U64) → Π (+ sent : U64) → Π (+ s : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ hs : HSt) → λ (+ hend : U64) → λ (+ fin : U64) → λ (+ sent : U64) → λ (+ s : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    onStatus (statusOfAt hend hs s) hs hend (teWhen hend hs s) (sawCLWhen hend hs s) (clWhen hend hs s) fin sent s max now dl idle
+
+def onBuf : run Π (+ fin : U64) → Π (+ sent : U64) → Π (+ s : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Out :=
+  λ (+ fin : U64) → λ (+ sent : U64) → λ (+ s : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) →
+    onBufScan (scan s) (rememberEnd hend s) fin sent s max now dl idle
+
+def baseOf : run Π (+ left : U64) → Π (+ owed : U64) → U64 :=
+  λ (+ left : U64) → λ (+ owed : U64) →
+    match (u64eq left (toU64 0)) motive (λ _ → U64)
+      | true => owed
+      | false => left
+
+def pastEnd : run Π (+ buf : Slice) → Bool :=
+  λ (+ buf : Slice) → u64lt (framedEnd buf) (sliceLen buf)
+
+def tailOf : run Π (+ buf : Slice) → Slice :=
+  λ (+ buf : Slice) →
+    slice buf (framedEnd buf) (subi (sliceLen buf) (framedEnd buf))
+
+def pastEndAt : run Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ buf : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ buf : Slice) → u64lt (framedEndAt hend te sawCL cl buf) (sliceLen buf)
+
+def tailOfAt : run Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ buf : Slice) → Slice :=
+  λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ buf : Slice) →
+    slice buf (framedEndAt hend te sawCL cl buf) (subi (sliceLen buf) (framedEndAt hend te sawCL cl buf))
+
+-- keep 1 closes. keep 0 classifies bytes past this request, or
+-- returns to idle when the buffer holds nothing past it.
+-- The caller passes only the unconsumed slice. That slice still
+-- starts with the request whose response just finished. tailOf
+-- drops that framed prefix. The next write passes that tail, not
+-- the original buffer. Passing the full two-GET buffer again, after
+-- the pipelined reply, strips the first request a second time and
+-- classifies that same tail as another reply. That re-pass is
+-- outside the contract: pipe-done passes the tail and is idle,
+-- pipe-full-again passes twoGet again and is another reply, and
+-- pipe-again-differs is that those spans are not the same.
+-- Bind framedEndAt once so a pipelined finish does not walk the
+-- just-completed request twice (pastEndAt and tailOfAt each called
+-- framedEndAt, and the emitter did not hoist that call). When hend
+-- is known, framedEndAt uses the stored framing facts and does not
+-- scan.
+def finishWriteAt : run Π (+ end : U64) → Π (+ code : U64) → Π (+ keep : U64) → Π (+ buf : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ end : U64) → λ (+ code : U64) → λ (+ keep : U64) → λ (+ buf : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match (u64eq keep (toU64 1)) motive (λ _ → Out)
+      | true => quiet code
+      | false =>
+          (match (u64lt end (sliceLen buf)) motive (λ _ → Out)
+            | true => onBuf (toU64 0) (toU64 0) (slice buf end (subi (sliceLen buf) end)) max now dl idle (toU64 0)
+            | false => idleAt now dl idle)
+
+def finishWrite : run Π (+ code : U64) → Π (+ keep : U64) → Π (+ buf : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ code : U64) → λ (+ keep : U64) → λ (+ buf : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    finishWriteAt (framedEndAt hend te sawCL cl buf) code keep buf max now dl idle
+
+def writeFact : run Π (+ phase : U64) → Π (+ code : U64) → Π (+ left : U64) → Π (+ keep : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ fact : U64) → Π (+ n : U64) → Π (+ owed : U64) → Π (+ buf : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ phase : U64) → λ (+ code : U64) → λ (+ left : U64) → λ (+ keep : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ fact : U64) → λ (+ n : U64) → λ (+ owed : U64) → λ (+ buf : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match (u64eq fact factWrote) motive (λ _ → Out)
+      | true =>
+          (match (u64lt n (baseOf left owed)) motive (λ _ → Out)
+            | true => still phase code (subi (baseOf left owed) n) keep hend te sawCL cl
+            | false => finishWrite code keep buf max now dl idle hend te sawCL cl)
+      | false =>
+          (match (u64eq fact factFailed) motive (λ _ → Out)
+            | true => quiet code
+            | false =>
+                (match (u64eq fact factPeer) motive (λ _ → Out)
+                  | true => still phase code left (toU64 1) hend te sawCL cl
+                  | false =>
+                      (match (u64eq fact factNow) motive (λ _ → Out)
+                        | true => still phase code left keep hend te sawCL cl
+                        | false =>
+                            (match (u64eq fact factBytes) motive (λ _ → Out)
+                              | true => still phase code left keep hend te sawCL cl
+                              | false =>
+                                  (match (u64eq fact factAccepted) motive (λ _ → Out)
+                                    | true => moreAt now (toU64 0) idle (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+                                    | false => outside)))))
+
+def readFact : run Π (+ fact : U64) → Π (+ s : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ fact : U64) → λ (+ s : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (u64eq fact factAccepted) motive (λ _ → Out)
+      | true => moreAt now (toU64 0) idle hend te sawCL cl
+      | false =>
+          (match (u64eq fact factBytes) motive (λ _ → Out)
+            | true => onBuf (toU64 0) (toU64 0) s max now dl idle hend
+            | false =>
+                (match (u64eq fact factPeer) motive (λ _ → Out)
+                  | true =>
+                      (match (u64eq (sliceLen s) (toU64 0)) motive (λ _ → Out)
+                        | true => quiet (toU64 0)
+                        | false => onBuf (toU64 1) (toU64 0) s max now dl idle hend)
+                  | false =>
+                      (match (u64eq fact factNow) motive (λ _ → Out)
+                        | true => quiet (toU64 0)
+                        | false =>
+                            (match (or (u64eq fact factWrote) (u64eq fact factFailed)) motive (λ _ → Out)
+                              | true => moreAt now dl idle hend te sawCL cl
+                              | false => outside))))
+
+def idleFact : run Π (+ fact : U64) → Π (+ s : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ fact : U64) → λ (+ s : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match (u64eq fact factBytes) motive (λ _ → Out)
+      | true => onBuf (toU64 0) (toU64 0) s max now dl idle (toU64 0)
+      | false =>
+          (match (u64eq fact factPeer) motive (λ _ → Out)
+            | true =>
+                (match (u64eq (sliceLen s) (toU64 0)) motive (λ _ → Out)
+                  | true => quiet (toU64 0)
+                  | false => onBuf (toU64 1) (toU64 0) s max now dl idle (toU64 0))
+            | false =>
+                (match (u64eq fact factNow) motive (λ _ → Out)
+                  | true => quiet (toU64 0)
+                  | false =>
+                      (match (or (u64eq fact factWrote) (u64eq fact factFailed)) motive (λ _ → Out)
+                        | true => idleAt now dl idle
+                        | false =>
+                            (match (u64eq fact factAccepted) motive (λ _ → Out)
+                              | true => moreAt now (toU64 0) idle (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+                              | false => outside))))
+
+-- Phase 6 or 8: the 100 is still the span. A full wrote classifies
+-- the buffer. Phase 8 carries the peer close into that classification.
+-- A tick drops the interim and closes. A hard write failure parks
+-- the same span again. Bytes keep the interim, and its read timer,
+-- when the adapter has not already cleared it. A peer close keeps
+-- the interim too, but the image is then a write, so the timer is
+-- off and the wake is 0.
+def contFact : run Π (+ phase : U64) → Π (+ left : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ fact : U64) → Π (+ n : U64) → Π (+ owed : U64) → Π (+ buf : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ phase : U64) → λ (+ left : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ fact : U64) → λ (+ n : U64) → λ (+ owed : U64) → λ (+ buf : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match (u64eq fact factWrote) motive (λ _ → Out)
+      | true =>
+          (match (u64lt n (baseOf left owed)) motive (λ _ → Out)
+            | true => contHold phase (subi (baseOf left owed) n) now dl idle hend te sawCL cl
+            | false =>
+                (match (u64eq phase (toU64 8)) motive (λ _ → Out)
+                  | true => onBuf (toU64 1) (toU64 1) buf max now dl idle hend
+                  | false => onBuf (toU64 0) (toU64 1) buf max now dl idle hend))
+      | false =>
+          (match (u64eq fact factFailed) motive (λ _ → Out)
+            | true => contHold phase left now dl idle hend te sawCL cl
+            | false =>
+                (match (u64eq fact factNow) motive (λ _ → Out)
+                  | true => quiet (toU64 0)
+                  | false =>
+                      (match (u64eq fact factPeer) motive (λ _ → Out)
+                        | true => contHold (toU64 8) left (toU64 0) (toU64 0) (toU64 0) hend te sawCL cl
+                        | false =>
+                            (match (u64eq fact factBytes) motive (λ _ → Out)
+                              | true => contHold phase left now dl idle hend te sawCL cl
+                              | false =>
+                                  (match (u64eq fact factAccepted) motive (λ _ → Out)
+                                    | true => moreAt now (toU64 0) idle (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+                                    | false => outside)))))
+
+-- Phase 7: the 100 is already sent. Bytes and a peer close classify
+-- with sent 1, so a still-short body does not park another interim.
+def sentFact : run Π (+ fact : U64) → Π (+ s : Slice) → Π (+ max : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ fact : U64) → λ (+ s : Slice) → λ (+ max : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (u64eq fact factAccepted) motive (λ _ → Out)
+      | true => moreAt now (toU64 0) idle hend te sawCL cl
+      | false =>
+          (match (u64eq fact factBytes) motive (λ _ → Out)
+            | true => onBuf (toU64 0) (toU64 1) s max now dl idle hend
+            | false =>
+                (match (u64eq fact factPeer) motive (λ _ → Out)
+                  | true =>
+                      (match (u64eq (sliceLen s) (toU64 0)) motive (λ _ → Out)
+                        | true => quiet (toU64 0)
+                        | false => onBuf (toU64 1) (toU64 1) s max now dl idle hend)
+                  | false =>
+                      (match (u64eq fact factNow) motive (λ _ → Out)
+                        | true => quiet (toU64 0)
+                        | false =>
+                            (match (or (u64eq fact factWrote) (u64eq fact factFailed)) motive (λ _ → Out)
+                              | true => moreSent now dl idle hend te sawCL cl
+                              | false => outside))))
+
+def stepFact : run Π (+ st : St) → Π (+ fact : U64) → Π (+ buf : Slice) → Π (+ max : U64) → Π (+ n : U64) → Π (+ owed : U64) → Π (+ now : U64) → Π (+ dl : U64) → Π (+ idle : U64) → Out :=
+  λ (+ st : St) → λ (+ fact : U64) → λ (+ buf : Slice) → λ (+ max : U64) → λ (+ n : U64) → λ (+ owed : U64) → λ (+ now : U64) → λ (+ dl : U64) → λ (+ idle : U64) →
+    match st motive (λ _ → Out)
+      | st phase code left keep hend te sawCL cl =>
+          (match (or (u64eq phase (toU64 2)) (u64eq phase (toU64 5))) motive (λ _ → Out)
+            | true => quiet code
+            | false =>
+                (match (or (u64eq phase (toU64 1)) (u64eq phase (toU64 3))) motive (λ _ → Out)
+                  | true => writeFact phase code left keep hend te sawCL cl fact n owed buf max now dl idle
+                  | false =>
+                      (match (or (u64eq phase (toU64 6)) (u64eq phase (toU64 8))) motive (λ _ → Out)
+                        | true => contFact phase left hend te sawCL cl fact n owed buf max now dl idle
+                        | false =>
+                            (match (u64eq phase (toU64 7)) motive (λ _ → Out)
+                              | true => sentFact fact buf max now dl idle hend te sawCL cl
+                              | false =>
+                                  (match (u64eq phase (toU64 4)) motive (λ _ → Out)
+                                    | true => idleFact fact buf max now dl idle
+                                    | false => readFact fact buf max now dl idle hend te sawCL cl)))))
+
+def step0 : run Π (+ st : St) → Π (+ fact : U64) → Π (+ buf : Slice) → Π (+ max : U64) → Π (+ n : U64) → Π (+ owed : U64) → Out :=
+  λ (+ st : St) → λ (+ fact : U64) → λ (+ buf : Slice) → λ (+ max : U64) → λ (+ n : U64) → λ (+ owed : U64) →
+    stepFact st fact buf max n owed (toU64 0) (toU64 0) (toU64 0)
+
+-- Phase 5 is a handler that closed before a span was parked. The
+-- image stays in handle. A later fact is quiet, like phase 2.
+def shutHandle : run Π (+ code : U64) → Out :=
+  λ (+ code : U64) →
+    out (toU64 5) code (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 1) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+-- close_after or a 4xx/5xx forces keep 1. Otherwise the request keep stands.
+def keepHand : run Π (+ reqKeep : U64) → Π (+ hclose : U64) → Π (+ hbad : U64) → U64 :=
+  λ (+ reqKeep : U64) → λ (+ hclose : U64) → λ (+ hbad : U64) →
+    match (u64eq hbad (toU64 1)) motive (λ _ → U64)
+      | true => toU64 1
+      | false =>
+          (match (u64eq hclose (toU64 1)) motive (λ _ → U64)
+            | true => toU64 1
+            | false => reqKeep)
+
+-- span 3 content-length pull, 4 chunked pull, 5 close-delimited pull.
+def spanPull : run Π (+ keep : U64) → Π (+ span : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ keep : U64) → λ (+ span : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    out (toU64 3) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 1) span (toU64 0) (toU64 0) (toU64 0) keep hend te sawCL cl
+
+-- A buffered body that does not fit, after a commit, is a 500 span.
+def oweFit : run Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    still (toU64 3) (toU64 500) (toU64 0) (toU64 1) hend te sawCL cl
+
+def hand : run Π (+ reqKeep : U64) → Π (+ hclose : U64) → Π (+ hbad : U64) → Π (+ howe : U64) → Π (+ href : U64) → Π (+ hpull : U64) → Π (+ hver : U64) → Π (+ hhead : U64) → Π (+ hfit : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ reqKeep : U64) → λ (+ hclose : U64) → λ (+ hbad : U64) → λ (+ howe : U64) → λ (+ href : U64) → λ (+ hpull : U64) → λ (+ hver : U64) → λ (+ hhead : U64) → λ (+ hfit : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (u64eq href (toU64 1)) motive (λ _ → Out)
+      | true =>
+          (match (u64eq howe (toU64 1)) motive (λ _ → Out)
+            | true => shutHandle (toU64 500)
+            | false => shutHandle (toU64 0))
+      | false =>
+          (match (u64eq hpull (toU64 1)) motive (λ _ → Out)
+            | true => spanPull (keepHand reqKeep hclose hbad) (toU64 3) hend te sawCL cl
+            | false =>
+                (match (u64eq hpull (toU64 2)) motive (λ _ → Out)
+                  | true =>
+                      (match (or (u64eq hhead (toU64 1)) (u64eq hver (toU64 0))) motive (λ _ → Out)
+                        | true => spanPull (toU64 1) (toU64 5) hend te sawCL cl
+                        | false => spanPull (keepHand reqKeep hclose hbad) (toU64 4) hend te sawCL cl)
+                  | false =>
+                      (match (u64eq hfit (toU64 0)) motive (λ _ → Out)
+                        | true =>
+                            (match (u64eq howe (toU64 1)) motive (λ _ → Out)
+                              | true => oweFit hend te sawCL cl
+                              | false => shutHandle (toU64 0))
+                        | false => reply (keepHand reqKeep hclose hbad) hend te sawCL cl)))
+
+-- After a successful handler, 400 or 413 on the body reader is an
+-- owed protocol span. The host reader sets only those two. Any
+-- other code stays outside, and the adapter shuts.
+def overStatus : run Π (+ code : U64) → Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Out :=
+  λ (+ code : U64) → λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) →
+    match (or (u64eq code (toU64 400)) (u64eq code (toU64 413))) motive (λ _ → Out)
+      | true => owe code hend te sawCL cl
+      | false => outside
+
+def lineBuf : run Slice :=
+  b"GET / HT"
+
+def hdrBuf : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\n"
+
+def getBuf : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\n\r\n"
+
+def postShort : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 4\r\n\r\n"
+
+def postBody : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 4\r\n\r\nabcd"
+
+def tooBig : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 100\r\n\r\n"
+
+def expectBuf : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nExpect: foo\r\nContent-Length: 4\r\n\r\n"
+
+def expectDone : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nExpect: foo\r\nContent-Length: 0\r\n\r\n"
+
+def traceBuf : run Slice :=
+  b"TRACE / HTTP/1.1\r\nHost: h\r\nContent-Length: 4\r\n\r\n"
+
+def traceDone : run Slice :=
+  b"TRACE / HTTP/1.1\r\nHost: h\r\n\r\n"
+
+def gzipBuf : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: gzip\r\n\r\n"
+
+def badBuf : run Slice :=
+  b"GET/feed HTTP/1.1\r\n\r\n"
+
+def noHost : run Slice :=
+  b"GET / HTTP/1.1\r\n\r\n"
+
+def chunkBuf : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
+
+def chunkOne : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\n\r\n"
+
+def chunkExt : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=1\r\nwiki\r\n0\r\n\r\n"
+
+def chunkTrailer : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhi\r\n0\r\nX-A: b\r\n\r\n"
+
+def chunkBare : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nNope\r\n\r\n"
+
+def chunkBad : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"
+
+def chunkSpace : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n4 \r\nwiki\r\n0\r\n\r\n"
+
+def chunkExtLf : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n4;bad\n\r\nwiki\r\n0\r\n\r\n"
+
+def chunkOverHex : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n10000000000000000\r\n"
+
+def chunkToo : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n1000000\r\n"
+
+def chunkPrem : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhi"
+
+def chunkClose : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+
+def chunkPipe : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET / HTTP/1.1\r\nHost: h\r\n\r\n"
+
+def chunkMulti : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n1\r\nb\r\n0\r\n\r\n"
+
+def chunkExpect : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nExpect: foo\r\n\r\n"
+
+def chunkExpectDone : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nExpect: foo\r\n\r\n0\r\n\r\n"
+
+def chunkTrace : run Slice :=
+  b"TRACE / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n"
+
+def chunkTraceDone : run Slice :=
+  b"TRACE / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+
+def contBuf : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n"
+
+def contFull : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\nping"
+
+def cont10 : run Slice :=
+  b"POST / HTTP/1.0\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n"
+
+def contHead : run Slice :=
+  b"HEAD / HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 4\r\n\r\n"
+
+def contBig : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nExpect: 100-continue\r\nContent-Length: 100\r\n\r\n"
+
+def contChunk : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nExpect: 100-continue\r\n\r\n"
+
+def contChunkDone : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\nExpect: 100-continue\r\n\r\n0\r\n\r\n"
+
+def headBuf : run Slice :=
+  b"HEAD / HTTP/1.1\r\nHost: h\r\n\r\n"
+
+def closeBuf : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\nConnection: close\r\n\r\n"
+
+def http10Buf : run Slice :=
+  b"GET / HTTP/1.0\r\n\r\n"
+
+def twoGet : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\n\r\nGET / HTTP/1.1\r\nHost: h\r\n\r\n"
+
+def pipePart : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\n\r\nGET / HT"
+
+def streamBuf : run Slice :=
+  b"POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 16385\r\n\r\n"
+
+def max10 : run U64 :=
+  toU64 10
+
+def maxBig : run U64 :=
+  toU64 8388608
+
+def sawLine : run Out :=
+  step0 readSt factBytes lineBuf max10 (toU64 0) (toU64 0)
+
+def sawHdr : run Out :=
+  step0 readSt factBytes hdrBuf max10 (toU64 0) (toU64 0)
+
+def sawGet : run Out :=
+  step0 readSt factBytes getBuf max10 (toU64 0) (toU64 0)
+
+def sawShort : run Out :=
+  step0 readSt factBytes postShort max10 (toU64 0) (toU64 0)
+
+def sawBody : run Out :=
+  step0 readSt factBytes postBody max10 (toU64 0) (toU64 0)
+
+def saw413 : run Out :=
+  step0 readSt factBytes tooBig max10 (toU64 0) (toU64 0)
+
+def saw413Body : run Out :=
+  step0 readSt factBytes postBody (toU64 0) (toU64 0) (toU64 0)
+
+def saw417 : run Out :=
+  step0 readSt factBytes expectBuf maxBig (toU64 0) (toU64 0)
+
+def saw417Done : run Out :=
+  step0 readSt factBytes expectDone maxBig (toU64 0) (toU64 0)
+
+def saw501 : run Out :=
+  step0 readSt factBytes traceBuf maxBig (toU64 0) (toU64 0)
+
+def saw501Done : run Out :=
+  step0 readSt factBytes traceDone maxBig (toU64 0) (toU64 0)
+
+def sawGzip : run Out :=
+  step0 readSt factBytes gzipBuf max10 (toU64 0) (toU64 0)
+
+def sawBad : run Out :=
+  step0 readSt factBytes badBuf max10 (toU64 0) (toU64 0)
+
+def sawNoHost : run Out :=
+  step0 readSt factBytes noHost max10 (toU64 0) (toU64 0)
+
+def sawAccept : run Out :=
+  step0 readSt factAccepted b"" max10 (toU64 0) (toU64 0)
+
+def sawFinEmpty : run Out :=
+  step0 readSt factPeer b"" max10 (toU64 0) (toU64 0)
+
+def sawFinPartial : run Out :=
+  step0 readSt factPeer lineBuf max10 (toU64 0) (toU64 0)
+
+def sawFinOver : run Out :=
+  step0 readSt factPeer tooBig max10 (toU64 0) (toU64 0)
+
+def sawChunk : run Out :=
+  step0 readSt factBytes chunkBuf max10 (toU64 0) (toU64 0)
+
+def sawChunkOne : run Out :=
+  step0 readSt factBytes chunkOne max10 (toU64 0) (toU64 0)
+
+def sawChunkExt : run Out :=
+  step0 readSt factBytes chunkExt max10 (toU64 0) (toU64 0)
+
+def sawChunkTrailer : run Out :=
+  step0 readSt factBytes chunkTrailer max10 (toU64 0) (toU64 0)
+
+def sawChunkBare : run Out :=
+  step0 readSt factBytes chunkBare max10 (toU64 0) (toU64 0)
+
+def sawChunkBad : run Out :=
+  step0 readSt factBytes chunkBad max10 (toU64 0) (toU64 0)
+
+def sawChunkSpace : run Out :=
+  step0 readSt factBytes chunkSpace max10 (toU64 0) (toU64 0)
+
+def sawChunkExtLf : run Out :=
+  step0 readSt factBytes chunkExtLf max10 (toU64 0) (toU64 0)
+
+def sawChunkOverHex : run Out :=
+  step0 readSt factBytes chunkOverHex max10 (toU64 0) (toU64 0)
+
+def sawChunkToo : run Out :=
+  step0 readSt factBytes chunkToo maxBig (toU64 0) (toU64 0)
+
+def sawChunkPrem : run Out :=
+  step0 readSt factPeer chunkPrem maxBig (toU64 0) (toU64 0)
+
+def sawChunkClose : run Out :=
+  step0 readSt factBytes chunkClose max10 (toU64 0) (toU64 0)
+
+def sawChunkPipe : run Out :=
+  step0 readSt factBytes chunkPipe max10 (toU64 0) (toU64 0)
+
+def sawChunkMulti : run Out :=
+  step0 readSt factBytes chunkMulti max10 (toU64 0) (toU64 0)
+
+def sawChunkOverDone : run Out :=
+  step0 readSt factBytes chunkOne (toU64 1) (toU64 0) (toU64 0)
+
+def sawChunkExpect : run Out :=
+  step0 readSt factBytes chunkExpect maxBig (toU64 0) (toU64 0)
+
+def sawChunkExpectDone : run Out :=
+  step0 readSt factBytes chunkExpectDone maxBig (toU64 0) (toU64 0)
+
+def sawChunkTrace : run Out :=
+  step0 readSt factBytes chunkTrace maxBig (toU64 0) (toU64 0)
+
+def sawChunkTraceDone : run Out :=
+  step0 readSt factBytes chunkTraceDone maxBig (toU64 0) (toU64 0)
+
+def sawCont : run Out :=
+  step0 readSt factBytes contBuf max10 (toU64 0) (toU64 0)
+
+def sawContFull : run Out :=
+  step0 readSt factBytes contFull max10 (toU64 0) (toU64 0)
+
+def sawCont10 : run Out :=
+  step0 readSt factBytes cont10 max10 (toU64 0) (toU64 0)
+
+def sawContHead : run Out :=
+  step0 readSt factBytes contHead max10 (toU64 0) (toU64 0)
+
+def sawContBig : run Out :=
+  step0 readSt factBytes contBig max10 (toU64 0) (toU64 0)
+
+def sawContChunk : run Out :=
+  step0 readSt factBytes contChunk max10 (toU64 0) (toU64 0)
+
+def sawContChunkDone : run Out :=
+  step0 readSt factBytes contChunkDone max10 (toU64 0) (toU64 0)
+
+def contSent : run St :=
+  take (moreSent (toU64 0) (toU64 0) (toU64 0) (headerEnd contBuf) (toU64 0) (toU64 1) (toU64 4))
+
+def sawNow : run Out :=
+  step0 readSt factNow getBuf max10 (toU64 0) (toU64 0)
+
+def sawWroteRead : run Out :=
+  step0 readSt factWrote getBuf max10 (toU64 0) (toU64 0)
+
+def sawHead : run Out :=
+  step0 readSt factBytes headBuf max10 (toU64 0) (toU64 0)
+
+def sawClose : run Out :=
+  step0 readSt factBytes closeBuf max10 (toU64 0) (toU64 0)
+
+def sawHttp10 : run Out :=
+  step0 readSt factBytes http10Buf max10 (toU64 0) (toU64 0)
+
+def sawTwo : run Out :=
+  step0 readSt factBytes twoGet max10 (toU64 0) (toU64 0)
+
+def sawPipe : run Out :=
+  step0 readSt factBytes pipePart max10 (toU64 0) (toU64 0)
+
+def sawStream : run Out :=
+  step0 readSt factBytes streamBuf maxBig (toU64 0) (toU64 0)
+
+def sawStream413 : run Out :=
+  step0 readSt factBytes streamBuf max10 (toU64 0) (toU64 0)
+
+def sawStreamPeer : run Out :=
+  step0 readSt factPeer streamBuf maxBig (toU64 0) (toU64 0)
+
+def closed413 : run St :=
+  take saw413
+
+def closed417 : run St :=
+  take saw417
+
+def closed501 : run St :=
+  take saw501
+
+def closed400 : run St :=
+  take (step0 (take sawBad) factWrote badBuf max10 (toU64 1) (toU64 1))
+
+def owe400 : run St :=
+  take sawBad
+
+def repGet : run St :=
+  take sawGet
+
+def sawFinGet : run Out :=
+  step0 readSt factPeer getBuf max10 (toU64 0) (toU64 0)
+
+def sawFinBody : run Out :=
+  step0 readSt factPeer postBody max10 (toU64 0) (toU64 0)
+
+def oweShort : run Out :=
+  step0 owe400 factWrote badBuf max10 (toU64 1) (toU64 4)
+
+def oweZero : run Out :=
+  step0 owe400 factWrote badBuf max10 (toU64 0) (toU64 8)
+
+def owe413Short : run Out :=
+  step0 (take saw413Body) factWrote postBody (toU64 0) (toU64 1) (toU64 4)
+
+def replyLeft : run Out :=
+  step0 repGet factWrote getBuf max10 (toU64 1) (toU64 8)
+
+def replyTwo : run Out :=
+  step0 (take replyLeft) factWrote getBuf max10 (toU64 2) (toU64 0)
+
+def replyZero : run Out :=
+  step0 repGet factWrote getBuf max10 (toU64 0) (toU64 8)
+
+def replyPeer : run Out :=
+  step0 (take sawTwo) factPeer twoGet max10 (toU64 0) (toU64 0)
+
+def pipeTail : run Out :=
+  step0 (take (step0 (take sawTwo) factWrote twoGet max10 (toU64 4) (toU64 4))) factWrote getBuf max10 (toU64 4) (toU64 4)
+
+def pipeAgain : run Out :=
+  step0 (take (step0 (take sawTwo) factWrote twoGet max10 (toU64 4) (toU64 4))) factWrote twoGet max10 (toU64 4) (toU64 4)
+
+def idleSt : run St :=
+  take (step0 repGet factWrote getBuf max10 (toU64 8) (toU64 8))
+
+def nowBefore : run Out :=
+  stepFact readSt factNow getBuf max10 (toU64 0) (toU64 0) (toU64 1000) (toU64 61000) (toU64 60000)
+
+def nowAfter : run Out :=
+  stepFact readSt factNow getBuf max10 (toU64 0) (toU64 0) (toU64 70000) (toU64 61000) (toU64 60000)
+
+def idleBefore : run Out :=
+  stepFact idleSt factNow b"" max10 (toU64 0) (toU64 0) (toU64 1000) (toU64 61000) (toU64 60000)
+
+def idleAfter : run Out :=
+  stepFact idleSt factNow b"" max10 (toU64 0) (toU64 0) (toU64 70000) (toU64 61000) (toU64 60000)
+
+def sawAcceptWake : run Out :=
+  stepFact readSt factAccepted b"" max10 (toU64 0) (toU64 0) (toU64 1000) (toU64 424242) (toU64 60000)
+
+def sawLineKeep : run Out :=
+  stepFact readSt factBytes lineBuf max10 (toU64 0) (toU64 0) (toU64 1000) (toU64 424242) (toU64 60000)
+
+def sawLineArm : run Out :=
+  stepFact readSt factBytes lineBuf max10 (toU64 0) (toU64 0) (toU64 1000) (toU64 0) (toU64 60000)
+
+def replyWake : run Out :=
+  stepFact readSt factBytes getBuf max10 (toU64 0) (toU64 0) (toU64 1000) (toU64 424242) (toU64 60000)
+
+def backArm : run Out :=
+  stepFact repGet factWrote getBuf max10 (toU64 8) (toU64 8) (toU64 1000) (toU64 0) (toU64 60000)
+
+def backKeep : run Out :=
+  stepFact repGet factWrote getBuf max10 (toU64 8) (toU64 8) (toU64 1000) (toU64 424242) (toU64 60000)
+
+def capLine : run Slice :=
+  b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+def capHdr : run Slice :=
+  b"GET / HTTP/1.1\r\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+def sawCapLine : run Out :=
+  step0 readSt factBytes capLine maxBig (toU64 0) (toU64 0)
+
+def sawCapHdr : run Out :=
+  step0 readSt factBytes capHdr maxBig (toU64 0) (toU64 0)
+
+def capLineShort : run Out :=
+  step0 (take sawCapLine) factWrote capLine maxBig (toU64 1) (toU64 4)
+
+def shortTwo : run Out :=
+  step0 (take sawTwo) factWrote twoGet max10 (toU64 1) (toU64 8)
+
+def leftoverSt : run St :=
+  take (step0 (take sawPipe) factWrote pipePart max10 (toU64 4) (toU64 4))
+
+def leftoverWake : run Out :=
+  stepFact (take sawPipe) factWrote pipePart max10 (toU64 4) (toU64 4) (toU64 1000) (toU64 0) (toU64 60000)
+
+def leftoverKeep : run Out :=
+  stepFact (take sawPipe) factWrote pipePart max10 (toU64 4) (toU64 4) (toU64 1000) (toU64 424242) (toU64 60000)
+
+def closedClose : run St :=
+  take (step0 (take sawClose) factWrote closeBuf max10 (toU64 8) (toU64 8))
+
+def capHdrDone : run Slice :=
+  b"GET / HTTP/1.1\r\nHost: h\r\nX-Pad: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\r\n\r\n"
+
+def sawHdrDone : run Out :=
+  step0 readSt factBytes capHdrDone maxBig (toU64 0) (toU64 0)

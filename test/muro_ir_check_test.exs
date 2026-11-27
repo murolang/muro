@@ -12,6 +12,35 @@ defmodule Muro.IRCheckTest do
     assert :ok = Check.check(Share.funs(funs), book: book)
   end
 
+  test "word results: a bare none is any option, checked ops an option, eq a boolean" do
+    none = {:wrd, :u8, :none, []}
+    assert :ok = Check.check([fun("n8", [], {:opt, :u8}, none)])
+    assert :ok = Check.check([fun("n64", [], {:opt, :u64}, none)])
+    assert :ok = Check.check([fun("ns", [], {:opt, :string}, none)])
+
+    assert {:error, errors} = Check.check([fun("bad", [], :nat, none)])
+    assert Enum.any?(errors, &(&1 =~ "bad: return has layout {:opt, :opaque}, expected :nat"))
+
+    assert {:error, _} = Check.check([fun("w", [], :u8, none)])
+
+    some = {:wrd, :u8, :some, [{:wrd, :u8, {:lit, :u8, 1}, []}]}
+    assert :ok = Check.check([fun("s", [], {:opt, :u8}, some)])
+    assert {:error, _} = Check.check([fun("s", [], {:opt, :u64}, some)])
+
+    for op <- [:cadd, :csub, :cmul, :div, :rem] do
+      w = {:wrd, :u64, op, [wrd(1), wrd(2)]}
+      assert :ok = Check.check([fun("c", [], {:opt, :u64}, w)])
+      assert {:error, errors} = Check.check([fun("c", [], :u64, w)])
+      assert Enum.any?(errors, &(&1 =~ "c: return has layout {:opt, :u64}, expected :u64"))
+    end
+
+    assert :ok = Check.check([fun("t", [], :nat, {:wrd, :u64, :ton, [wrd(3)]})])
+
+    eq = {:wrd, :u8, :eq, [wrd(1), wrd(2)]}
+    assert :ok = Check.check([fun("e", [], :wbool, eq)])
+    assert {:error, _} = Check.check([fun("e", [], :u8, eq)])
+  end
+
   test "a reuse parameter may be used twice" do
     fun = fun("twice", [{"s", :slice, :reuse}], :u64, {:call, "id", [{:var, "s"}, {:var, "s"}]})
     id = fun("id", [{"a", :slice, :reuse}, {"b", :slice, :reuse}], :u64, wrd(0))
