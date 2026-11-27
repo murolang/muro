@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (#309, takes its version slot on rebase)
+## 0.22.45
 
 A family rule can name the kinds an instance waits for. On a family whose kind is a closed `data`, `held while <kind> unresolved` (comma lists allowed) is the open-world reading of `earlier` filtered by kind: the instance is held while an arrived instance of a listed kind with the same key is unresolved, and opens when none has arrived. `held until <kind> resolved` (comma lists allowed) is a prerequisite: the instance is held until at least one instance of each listed kind and key has arrived and resolved, so a `worker` stays held until a `front` arrives and resolves. One resolved instance satisfies the prerequisite even while another instance of that kind is unresolved; repeating `held` mixes the two (`held until front resolved, held while front unresolved`). `withdraw` does not satisfy `until`. The fact that a kind resolved survives the row leaving (`departed`, `skip_below`) and is forgotten by `drop_key`. `never held`, `held while earlier unresolved`, and `held while any unresolved` are unchanged.
 
@@ -21,6 +21,10 @@ An unknown kind is refused at its token (`<line>:<col>: <family>: <kind> is not 
 ### Manual
 
 - Fsm, grammar, temporal, limits, examples, extending, and for-agents: named-kind hold rules, `some_resolved`, and `waiting_on/2`.
+
+### Package
+
+- Version 0.22.45.
 
 ## 0.22.44
 
