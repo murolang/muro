@@ -87,10 +87,10 @@ lib/muro/print.ex       surface syntax, locations, hole messages
 lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
 lib/muro/session.ex     session / conform, mirror of decide and finishes; `rec X. S` unfolds one action and a repeated head conforms
-lib/muro/prefix.ex      a list of directed moves is a legal prefix of a session from a position; the finite forms follow the Agda derivation; recursion, a named continuation, a dependent payload, an evidence bound, an indexed bit, a case, and the numeric position are this checker
+lib/muro/prefix.ex      a list of directed moves is a legal prefix of a session from a position; the finite forms follow the Agda derivation; recursion, a named continuation, a dependent payload, an evidence bound, an indexed bit, a case, and the numeric position are this checker; on a choreography the moves are `a -> b : label` and `p chooses label` from the start in the written order (`Muro.Choreo.prefix/3`)
 lib/muro/fail.ex        a party of a two-party meeting may stop; a receive from that party has a failure arm; OTP and fsm emit it; other backends are `c:mayfail`
 lib/muro/talk.ex        one description of an exchange, mirror of seen
-lib/muro/choreo.ex      a global type projected to each role pair, mirror of project
+lib/muro/choreo.ex      a global type projected to each role pair, mirror of project; `prefix/3` is the legal prefix in the written order, mirror of accept
 lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
@@ -105,7 +105,7 @@ lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exuni
 lib/muro/emit/pytest.ex closed equations → one pytest module (`--backend pytest`, `kind: :pytest`)
 lib/muro/emit/rust_test.ex closed equations → one Rust test file (`--backend rust-test`, `kind: :rust_test`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked peer is monitored and a `:DOWN` that is not a halt takes the failure arm; a book with no mark emits the previous module (`--backend otp`)
-lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (an open instance leaves), `withdraw/2` (a held instance resolves without opening), `skip/3`, `drop_key/2`, `skip_below/2` (one floor for every key: an arrival at or below it is the departed refusal), `finish` (`:resolve` or `:rerun`), and `check_trace/1` (arrivals, resolutions, withdrawals, skips, drops, `skip_below`, reruns, and `{party, id, send|recv|down}`). A rule is `never held`, `held while earlier unresolved`, or `held while any unresolved`. `earlier_resolved k kind` names the earlier instances of that key and kind; each meeting end has `finish`, and `:rerun` when one family uses that end; two families on one end name `finish` on the family child; the transport stays with the host (`--backend fsm`). A family may be marked `may redeliver`. `contract name : idempotent init`, `contract name : in order`, and `contract name : dense`, and `skip` after an entry, are [State machines](fsm.md#an-external-contract).
+lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (an open instance leaves), `withdraw/2` (a held instance resolves without opening), `skip/3`, `drop_key/2`, `skip_below/2` (one floor for every key: an arrival at or below it is the departed refusal), `finish` (`:resolve` or `:rerun`), and `check_trace/1` (arrivals, resolutions, withdrawals, skips, drops, `skip_below`, reruns, and `{party, id, send|recv|down}`). A rule is `never held`, `held while earlier unresolved`, or `held while any unresolved`. `earlier_resolved k kind` names the earlier instances of that key and kind; each meeting end has `finish`, and `:rerun` when one family uses that end; two families on one end name `finish` on the family child; the transport stays with the host (`--backend fsm`). A family may be marked `may redeliver`. `contract name : idempotent init`, `contract name : in order`, and `contract name : dense`, and `skip` after an entry, are [State machines](fsm.md#an-external-contract). A choreography that checks is a monitor child with `init/0`, `step/4`, `step/5`, `choose/3`, `expected/1`, `done?/1`, and `check_trace/1,2`, stepped with global events in the written order; a `seen` of a choreography is a session child, and a `seen` of a talk is refused.
 lib/muro/emit/c_session.ex a session endpoint is a pure step written as C; the actions are the ones the state machine takes, init takes `uint64_t`, and `down` is not emitted (`--backend c`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/emit/mbi.ex    exactly one exported run as an .mbi image (`--backend mbi`, `kind: :mbi`); a run it calls is a definition in the image; muro-beam loads it
@@ -132,6 +132,7 @@ agda/Muro/Dual.agda     the other end of a session; send swaps with recv, a depe
 agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same payload type and the value inhabits it; a received nat instantiates a vector length; an evidence payload meets as a nat; a literal bit meets the arm of that bit; a variable meets a receive at its innermost binding; `meet name : left with right` follows it
 agda/Muro/Talk.agda     one description of an exchange; say names one payload and one continuation; `session name := seen party with party in talk` follows it
 agda/Muro/Choreo.agda   a global type; `g ↾ r / s ≡ b` is the binary session of one role with another; `project-sound`, `project-complete`, and `pairwise-dual`; `--safe`; not a Tm
+agda/Muro/ChoreoPrefix.agda a legal prefix of a global type in its written order; `accept` decides `GLeg`, `accept-sound` and `accept-complete`; `--safe`; not a Tm
 agda/Muro/Seated.agda   a party of a description sits at a place; `seat name : party at place in talk` follows it; the same place stays; two places cross once
 agda/Muro/Held.agda     a meeting at the parties' places; the same place stays; two places cross once; a `.muro` file does not write it
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
@@ -161,7 +162,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.41`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.42`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -174,7 +175,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.41.ez
+mix archive.install muro-0.22.42.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -267,7 +268,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom (`dne: depends on classical.LEM` when the entry file is `lib/muro/std/classical.muro`), then:
 
 ```
-Muro v0.22.41
+Muro v0.22.42
 All terms check. Evidence never becomes a run.
 ```
 

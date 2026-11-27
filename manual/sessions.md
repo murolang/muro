@@ -682,6 +682,8 @@ A book whose next moves come from a `run` states each offer as its own `prefix`,
 
 `examples/prefix.muro` is the worked book.
 
+A choreography has legal prefixes too. `prefix name : <choreography> :=` lists interactions in the choreography's own syntax, `a -> b : label` and `p chooses label`, from the start, in the order the global type is written. The page is [Choreography](choreography.md#a-legal-prefix), and `examples/release-plan.muro` is the worked book.
+
 ## Where a check fails
 
 A refusal names the step and the position of that step. The line and column are the `put`, `get`, `pick0`, `pick1`, `cover`, or `match`, not the `conform` that contains it. A conformance says what the process does and which protocol step it was checked against. A reason comes after that, when the value was computed.

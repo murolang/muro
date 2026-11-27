@@ -46,7 +46,7 @@ mix muro.synth path.muro --out out.muro --oracle trace
 mix muro.fill path.muro --def name          # fill one ? body by search; the checker decides
 mix muro --version                          # the copy that ran
 mix muro.init                               # muro.exs and priv/muro/
-mix muro.emit path.muro --backend fsm           # one state machine per session, and one dispatcher per keyed family, on stdout
+mix muro.emit path.muro --backend fsm           # one state machine per session, one dispatcher per keyed family, and one monitor per choreography, on stdout
 mix muro.emit path.muro --backend exunit       # ExUnit suite on stdout; a param library is accepted
 mix muro.emit path.muro --backend exunit --imports  # also that book's direct imports
 mix muro.emit path.muro --backend pytest       # pytest module on stdout; the same equations
@@ -62,7 +62,7 @@ make agda                                   # Job B only; needs vendor/agda-stdl
 
 `mix muro.fill path.muro --def name` writes a body for a definition whose body is `?`. It tries terms in order of size. A run is kept when the book's closed equations about that name still check. Evidence is kept when the type checks. A spec is kept the same way. It is a search. It is not `mix muro.synth`. See [Fill](manual/fill.md).
 
-The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.22.41`. From a checkout: `mix archive.build && mix archive.install muro-0.22.41.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.22.41`. See [The executable](manual/binary.md).
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.22.42`. From a checkout: `mix archive.build && mix archive.install muro-0.22.42.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.22.42`. See [The executable](manual/binary.md).
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A keyed family prints `family <name>: <meeting> per key of <kind>`, and a family marked `may redeliver` prints that mark on the same line. A temporal declaration prints one line per declaration. A formula that says `relies idempotent init`, `relies in order`, or `relies dense`, and holds, prints `<name>: depends on contract idempotent init`, `in order`, or `dense` on the next line. `may redeliver` is not that line. Those lines are in book order. See [State machines](manual/fsm.md#an-external-contract). A choreography prints one line per projected pair. A definition the entry file reaches that depends on an axiom prints `<name>: depends on <File.axiom>`. An imported definition the entry file does not reach is silent. All of them sit between the version and that sentence, families and temporal declarations first, then choreography, then the axiom lines. A book with none of them prints the two lines. A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
@@ -80,7 +80,7 @@ mix muro.emit path.muro --backend rust      # <name>.rs
 mix muro.emit path.muro --backend zig       # <name>.zig
 mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 mix muro.emit path.muro --backend js        # <name>.mjs and <name>.d.ts; node runs the module
-mix muro.emit path.muro --backend fsm       # one state machine per session, and one dispatcher per keyed family, on stdout
+mix muro.emit path.muro --backend fsm       # one state machine per session, one dispatcher per keyed family, and one monitor per choreography, on stdout
 mix muro.emit path.muro --backend mbi       # <stem>.mbi, exactly one graded run; a run it calls is a closed definition
 ```
 

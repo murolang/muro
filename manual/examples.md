@@ -159,7 +159,7 @@ See [Terms](language.md#session).
 
 ## two-phase-commit.muro
 
-One choreography, and each role has a session with each other role. The choreography is spec. Elixir, Rust, Zig, and assembly omit it. C refuses the book, because `seen` is not a state machine, and the run is not written.
+One choreography, and each role has a session with each other role. The choreography is spec. Elixir, Rust, Zig, and assembly omit it. C and JavaScript write the run and the session image of each `seen` session, a projection in the session vocabulary. `--backend fsm` emits those sessions and one monitor for the choreography.
 
 ```
 choreography two-phase-commit
@@ -178,6 +178,28 @@ choreography two-phase-commit
 `coordinator` with `alice` is `send Unit (recv Unit (choose (send Unit end) (send Unit end)))`. `alice` with `coordinator` is the dual, `recv Unit (send Unit (branch (recv Unit end) (recv Unit end)))`. `coordinator` with `bob` is the same shape, and `bob` with `coordinator` is its dual. `alice` with `bob` is `end`, and so is `bob` with `alice`: those two never interact. The choice stays even though commit and abort send the same shape of message. `session ca := seen coordinator with alice in two-phase-commit` is that first session. `kept` is the run definition in the same file. `mix muro.emit examples/two-phase-commit.muro` emits `kept`.
 
 A participant whose branches differ, and who was not told the choice, is refused. That book is `test/fixtures/choreo_untold.muro`, not an example. See [Choreography](choreography.md).
+
+`mix muro.emit --backend fsm examples/two-phase-commit.muro` emits one state machine per `seen` session and one monitor for the whole choreography. C and JavaScript emit the session images of the `seen` sessions.
+
+## release-plan.muro
+
+A release that spans two services. The front is deployed before the worker, and only the choreography says so: the session `release` has with `front` and the one it has with `worker` keep no order between them.
+
+```
+choreography plan
+  roles release, front, worker
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+  worker -> release : deployed
+
+prefix front-first : plan :=
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+```
+
+`front-first` is a legal prefix in the written order. Starting with `release -> worker : deploy` is refused: `not enabled at start, expected release -> front : deploy, wrote release -> worker : deploy`. `mix muro.emit --backend fsm examples/release-plan.muro` emits `ReleasePlanFsm.Rf`, `ReleasePlanFsm.Rw`, and the monitor `ReleasePlanFsm.Plan`, which refuses the worker's deploy before the front's. See [Choreography](choreography.md#the-written-order) and [State machines](fsm.md#a-choreography).
 
 ## seated.muro
 

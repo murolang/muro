@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.22.42
+
+A choreography keeps the order between pairs that projection drops, and a run of the whole choreography can be checked against it (#308). The order is the written order: the next legal interaction is the next one written in the global type, or one label of the choice written next, and two interactions that share no role are still taken in the order they are written. `expected` therefore names one next interaction, and a prefix and a monitor agree on one list.
+
+`prefix name : <choreography> :=` lists interactions in the choreography's own syntax, `a -> b : label` with the payload type when it is not `Unit`, and `p chooses label`, and says the list is a legal prefix from the start. `Muro.Choreo.prefix/3` decides it. A refusal is `not enabled at start, expected <interaction>, wrote <move>`, wrapped from the second move on as `move N is not a legal continuation of <choreography> at start: …`. A position other than the start is `at <pos> is not a position of <choreography>`, and a choreography move on a session is `<session> is not a choreography`. `agda/Muro/ChoreoPrefix.agda` (`--safe`) defines the judgment `GLeg` and `accept`, proved sound and complete; the checker follows that function.
+
+`--backend fsm` emits one monitor child per choreography that checks. `init/0`; `step(state, from, to, label)` for a `Unit` message and `step(state, from, to, label, value)` for any message; `choose(state, role, label)` for a choice; `expected/1` (`{:message, from, to, label, type}`, `{:choose, role, [label, ...]}`, or `:done`); `done?/1`; and `check_trace/1` and `check_trace(trace, complete: true)` over `{from, to, label}`, `{from, to, label, value}`, and `{role, label}` events. A wrong event, a bad state, or a trace that is not a list is `{:error, …}`, with `{:unexpected, step, expected, event}` naming `<file>:<line> choreography <name>: <ordinal> <interaction>`; nothing raises. A book with a choreography and no session emits the monitor alone. `session name := seen role with role in <choreography>` is emitted as a session child by `--backend fsm`, and its C and JavaScript session images step it the same way. A `seen` of a talk is still `seen is not a state machine`. A book with no choreography emits the same bytes as before. A book with a choreography and ordinary sessions gains the monitor child, so `mix muro.gen --check` reports its `kind: :fsm` target after upgrading; regenerate it with `mix muro.gen`.
+
+A role and a choice label are atoms in the monitor, so two roles of one choreography, or two labels of one choice (nested choices included), that reach one atom spelling are refused at check, naming both: `roles front-end and front_end spell one Elixir atom`, `branches roll-out and roll_out spell one Elixir atom`.
+
+### Tests
+
+- `test/muro_choreo_fsm_test.exs`: role and choice-label spelling clashes, the release-plan monitor, `check_trace` (prefix, complete, a non-list trace), projections as session children, payloads and choices, bad states, a choreography-only book, a book with no choreography, alias and atom spelling, two-phase commit, the outline, and the prefix judgment (empty, partial, whole, choices, out of order, wrong label, payload, role, and choice, past the end, a session move, a position, `Muro.Choreo.prefix/3`).
+- `test/muro_emit_c_session_test.exs`: `two-phase-commit.muro` and `release-plan.muro` emit as state machines and C session images.
+- `test/muro_emit_js_session_test.exs`: the `seen` sessions of `two-phase-commit.muro` and `release-plan.muro` are JavaScript steppers, and they follow the state machine's trace.
+- `test/muro_emit_reserve_test.exs`: the monitor's `muro_fsm_g_done?` and `muro_fsm_g_node?` helpers are host names a run cannot take.
+- `test/fixtures/emit-examples.digest`: `release-plan.muro`, and the session images of `two-phase-commit.muro`.
+
+### Manual
+
+- Choreography: the written order, a legal prefix, and the monitor. State machines: a choreography. Grammar, Sessions, Examples (`release-plan.muro`), and For agents.
+
+### Package
+
+- Version 0.22.42.
+
 ## 0.22.41
 
 `Muro.IR.Rep` resolves each data type of a book once. A type whose constructors have no live field is `{:enum, ctors}`, including an all-nullary `unboxed data`. Other `unboxed data` is `{:value, [{ctor, fields}]}`, a struct passed by value. Everything else is `{:boxed, [{ctor, fields}]}`, a heap tag plus fields. A field is `{name, layout, :live | :erased}` in telescope order. `Muro.Emit.C` reads its enum, by-value, and pointer choices from `Muro.IR.Rep` and no longer classifies a type itself (`enum_scalar?`, `unboxed?`, `type_layout`, and the by-value struct order moved there). The `c:unboxed` rules are in the same module: a by-value struct as a pair half, a stream seed, or a stream capture (`value_lay?/2`, which C reads; Rust and Zig keep their own pair and stream checks), and an `Opt` of declared `unboxed data` (`refuse_unboxed_opt/2`, which `Muro.Emit.refuse_unboxed_opt/2` now calls for C, Rust, and Zig). `value_opt_payload?/2` tells C when an option typedef holds a by-value struct. `Muro.IR.Rep.check/2` applies `refuse_unboxed_opt/2`, then `value_lay?/2` to every pair half, stream seed, and stream capture of an image, without emitting, and agrees with C on every C book of the corpus.

@@ -1,0 +1,21 @@
+-- A release that spans two services. The front is deployed before the
+-- worker, because the new worker stops writing a field the old front
+-- still reads. The choreography fixes that order. `--backend fsm` emits
+-- one monitor for the whole plan, and one state machine for each pair.
+
+choreography plan
+  roles release, front, worker
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+  worker -> release : deployed
+
+session rf := seen release with front in plan
+session rw := seen release with worker in plan
+
+prefix front-first : plan :=
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+
+def kept : run Nat := 0

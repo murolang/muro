@@ -25,6 +25,15 @@ defmodule Muro.Emit.Fsm do
   Two families on that end do not: the error names `finish` on the
   family child. The child does not run the meeting. This child is
   generated code. It is not an Agda proof.
+
+  A choreography that checks is one more child, the monitor of the
+  whole global type. `init/0` starts it. `step/4` takes a message with
+  a Unit payload, `step/5` a message with its value, and `choose/3` the
+  label of a choice. The monitor follows the written order: the next
+  event is the next interaction written, even when two interactions
+  share no role (`agda/Muro/ChoreoPrefix.agda`). A `seen` session of a
+  choreography is the projection, and it is a session child like any
+  other. A `seen` of a talk is refused.
   """
 
   alias Muro.{Ast, Emit, Session}
@@ -63,7 +72,12 @@ defmodule Muro.Emit.Fsm do
 
   @doc false
   def image(book, path, opts \\ []) when is_list(book) do
-    case plan(book, path, opts) do
+    # Session images only: a choreography's monitor is not a session, so
+    # its planning does not decide whether the sessions have an image.
+    case plan_sessions(book, path, opts) do
+      {:ok, %{sessions: []} = st} ->
+        {:error, "#{st.label} has no session to emit"}
+
       {:ok, st} ->
         sessions =
           Enum.map(st.sessions, fn sess ->
@@ -99,19 +113,25 @@ defmodule Muro.Emit.Fsm do
   end
 
   defp plan(book, path, opts) do
-    with {:ok, st} <- plan_sessions(book, path, opts) do
-      {:ok, Map.put(st, :families, ready_families(book))}
+    with {:ok, st} <- plan_sessions(book, path, opts),
+         {:ok, globals} <- plan_globals(st) do
+      st = st |> Map.put(:families, ready_families(book)) |> Map.put(:globals, globals)
+      {:ok, st}
     end
   end
 
+  # A book with a choreography and no session still has a child: the
+  # monitor of that choreography.
   defp plan_sessions(book, path, opts) do
     label = book_label(path, opts)
+    sessions = Enum.filter(book, &(Map.get(&1, :kind) == :session))
+    choreos = Enum.filter(book, &(Map.get(&1, :kind) == :choreography))
 
-    case Enum.filter(book, &(Map.get(&1, :kind) == :session)) do
-      [] ->
+    case {sessions, choreos} do
+      {[], []} ->
         {:error, "#{label} has no session to emit"}
 
-      sessions ->
+      _ ->
         st = %{
           book: book,
           sessions: sessions,
@@ -127,6 +147,166 @@ defmodule Muro.Emit.Fsm do
 
         open_all(sessions, st)
     end
+  end
+
+  # ---- choreography monitor ----------------------------------------------
+  #
+  # One child per choreography that checks. The monitor follows the
+  # written order: the next legal event is the next interaction written
+  # in the global type, or the choice it reaches. Roles and labels are
+  # atoms (`Emit.elixir_atom_name/1`). A message keeps its payload type.
+  defp plan_globals(st) do
+    st.book
+    |> Enum.filter(&(Map.get(&1, :kind) == :choreography))
+    |> Enum.reduce_while({:ok, []}, fn chor, {:ok, acc} ->
+      case plan_global(chor, st) do
+        {:ok, global} -> {:cont, {:ok, acc ++ [global]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp plan_global(%{name: name, roles: roles, body: body} = chor, st) do
+    file = session_file(chor, st)
+    line = line_of(chor)
+    where = "#{file}:#{line} choreography #{name}"
+
+    ctx = %{
+      st: st,
+      subst: %{},
+      where: where,
+      counts: %{msg: 0, choice: 0}
+    }
+
+    with {:ok, _lines} <- choreo_ok(Muro.Choreo.check(name, roles, body, st.book), where),
+         {:ok, tree, _ctx} <- label_global(body, ctx) do
+      {:ok, %{name: name, file: file, line: line, tree: tree, end_step: "#{where}: end"}}
+    end
+  end
+
+  defp choreo_ok({:ok, lines}, _where), do: {:ok, lines}
+  defp choreo_ok({:error, msg}, where), do: {:error, "#{where}: #{msg}"}
+
+  defp label_global(:end, ctx), do: {:ok, {:end, "#{ctx.where}: end"}, ctx}
+
+  defp label_global({:comm, a, b, l, ty, cont}, ctx) do
+    case support_ty(ty, ctx) do
+      :ok ->
+        {n, ctx} = count(ctx, :msg)
+        step = "#{ctx.where}: #{ordinal(n)} #{Muro.Choreo.show_message(a, b, l, ty)}"
+
+        with {:ok, cont, ctx} <- label_global(cont, ctx) do
+          {:ok, {:msg, step, g_atom(a), g_atom(b), g_atom(l), ty, cont}, ctx}
+        end
+
+      {:error, reason} ->
+        {:error, "#{ctx.where}: #{reason}"}
+    end
+  end
+
+  defp label_global({:choice, p, branches}, ctx) do
+    {n, ctx} = count(ctx, :choice)
+    step = "#{ctx.where}: #{ordinal(n)} #{p} chooses"
+
+    result =
+      Enum.reduce_while(branches, {:ok, [], ctx}, fn {l, g}, {:ok, acc, ctx} ->
+        case label_global(g, ctx) do
+          {:ok, g, ctx} -> {:cont, {:ok, acc ++ [{g_atom(l), g}], ctx}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+
+    with {:ok, arms, ctx} <- result do
+      {:ok, {:pick, step, g_atom(p), arms}, ctx}
+    end
+  end
+
+  defp count(ctx, kind) do
+    n = Map.fetch!(ctx.counts, kind) + 1
+    {n, %{ctx | counts: Map.put(ctx.counts, kind, n)}}
+  end
+
+  defp g_atom(name), do: String.to_atom(Emit.elixir_atom_name(name))
+
+  # Sessions claim first, then families, then choreographies.
+  defp global_mods(st) do
+    used =
+      st.sessions
+      |> Enum.map(& &1.name)
+      |> Emit.elixir_modules()
+      |> Map.values()
+      |> Kernel.++(Enum.map(family_mods(st), &elem(&1, 1)))
+      |> MapSet.new()
+
+    {mods, _} =
+      Enum.map_reduce(st.globals, used, fn global, used ->
+        {mod, used} = Muro.Emit.Name.claim(Emit.elixir_alias(global.name), used)
+        {{global, mod}, used}
+      end)
+
+    mods
+  end
+
+  defp global_clauses(globals) do
+    Enum.flat_map(globals, fn {global, camel} ->
+      key = inspect(global.name)
+
+      [
+        "defmodule #{camel} do",
+        "def init",
+        "def step(state, from, to, label)",
+        "def step(state, from, to, label, value)",
+        "def choose(state, role, label)",
+        "muro_fsm_g_done?(#{key}, state)",
+        "muro_fsm_g_expected(#{key}, state)",
+        "def check_trace(trace)",
+        "def check_trace(trace, opts)",
+        global.end_step
+      ]
+    end)
+  end
+
+  defp global_children(parent, st) do
+    st
+    |> global_mods()
+    |> Enum.map_join("\n\n", fn {global, camel} -> global_child(parent, camel, global.name) end)
+  end
+
+  defp global_child(parent, camel, key) do
+    """
+    defmodule #{camel} do
+      @moduledoc \"\"\"
+      The whole of choreography `#{key}`, in the order it is written. A
+      message is `step/4` (a Unit payload) or `step/5`. A choice is
+      `choose/3`. The state is opaque: thread it, compare it with ==,
+      and do not depend on its shape.
+      \"\"\"
+
+      def init, do: #{parent}.muro_fsm_g_init(#{inspect(key)})
+
+      def step(state, from, to, label) do
+        #{parent}.muro_fsm_g_step(#{inspect(key)}, state, {from, to, label})
+      end
+
+      def step(state, from, to, label, value) do
+        #{parent}.muro_fsm_g_step(#{inspect(key)}, state, {from, to, label, value})
+      end
+
+      def choose(state, role, label) do
+        #{parent}.muro_fsm_g_step(#{inspect(key)}, state, {role, label})
+      end
+
+      def done?(state), do: #{parent}.muro_fsm_g_done?(#{inspect(key)}, state)
+
+      def expected(state), do: #{parent}.muro_fsm_g_expected(#{inspect(key)}, state)
+
+      def check_trace(trace), do: #{parent}.muro_fsm_g_trace(#{inspect(key)}, trace, false)
+
+      def check_trace(trace, opts) when is_list(opts) do
+        #{parent}.muro_fsm_g_trace(#{inspect(key)}, trace, Keyword.get(opts, :complete) == true)
+      end
+    end
+    """
   end
 
   defp fsm_outline(module, book, st) do
@@ -148,6 +328,7 @@ defmodule Muro.Emit.Fsm do
       end)
 
     fams = family_mods(st)
+    globals = global_mods(st)
     ends = session_dispatchers(st)
 
     clauses =
@@ -183,12 +364,13 @@ defmodule Muro.Emit.Fsm do
       names:
         [inspect(module) | Map.values(aliases)]
         |> Enum.uniq()
-        |> Kernel.++(Enum.map(fams, &elem(&1, 1))),
+        |> Kernel.++(Enum.map(fams, &elem(&1, 1)))
+        |> Kernel.++(Enum.map(globals, &elem(&1, 1))),
       elixir: Emit.elixir_names(book),
       signatures: signatures,
       layouts:
         Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
-      clauses: clauses ++ family_clauses(fams)
+      clauses: clauses ++ family_clauses(fams) ++ global_clauses(globals)
     }
   end
 
@@ -440,8 +622,25 @@ defmodule Muro.Emit.Fsm do
     end
   end
 
-  defp label({:seen, _, _, _}, ctx) do
-    {:error, blame(ctx, "seen is not a state machine")}
+  # A talk's `seen` stays refused. A choreography's `seen` is the
+  # projection, already in the vocabulary of a session, and it is
+  # labelled as that session.
+  defp label({:seen, p, q, name}, ctx) do
+    book = ctx.st.book
+
+    cond do
+      Enum.any?(book, &match?(%{kind: :talk, name: ^name}, &1)) ->
+        {:error, blame(ctx, "seen is not a state machine")}
+
+      chor = Enum.find(book, &match?(%{kind: :choreography, name: ^name}, &1)) ->
+        case Muro.Choreo.session(chor.roles, chor.body, p, q, book) do
+          {:ok, proto} -> label(proto, ctx)
+          {:error, msg} -> {:error, blame(ctx, msg)}
+        end
+
+      true ->
+        {:error, blame(ctx, "seen is not a state machine")}
+    end
   end
 
   defp label(_other, ctx), do: {:error, blame(ctx, "ill-formed protocol")}
@@ -1218,6 +1417,8 @@ defmodule Muro.Emit.Fsm do
       #{indent(hosts(book), 2)}
 
       #{indent(children(module, st), 2)}
+
+      #{indent(global_children(inspect(module), st), 2)}
       end
       """
 
@@ -1235,6 +1436,7 @@ defmodule Muro.Emit.Fsm do
 
     text
     |> gate(Enum.any?(book, &Muro.Fail.marked?/1))
+    |> region("choreo", st.globals != [])
     |> Code.format_string!()
     |> IO.iodata_to_binary()
     |> Kernel.<>("\n")
@@ -1245,6 +1447,9 @@ defmodule Muro.Emit.Fsm do
   defp gate(src, true), do: strip_marker(src, "fail")
 
   defp gate(src, false), do: drop_region(src, "fail")
+
+  defp region(src, name, true), do: strip_marker(src, name)
+  defp region(src, name, false), do: drop_region(src, name)
 
   defp drop_region(src, name) do
     Regex.replace(~r/^[ \t]*#\|\|#{name}\n.*?^[ \t]*#\|\|\/#{name}\n/ms, src, "")
@@ -1383,6 +1588,8 @@ defmodule Muro.Emit.Fsm do
 
     decls = Session.payload_decls(st.book)
     safe = safe_maps(decls)
+    globals = Enum.map(st.globals, &{&1.name, &1.tree})
+    g_ends = Enum.map(st.globals, &{&1.name, &1.end_step})
 
     """
     @doc false
@@ -2620,7 +2827,7 @@ defmodule Muro.Emit.Fsm do
 
     #{calls(st, names)}
 
-    defp muro_fsm_templates, do: #{lit(sessions |> Map.new())}
+    defp muro_fsm_templates, do: #{table(Map.new(sessions))}
 
     #||fail
     # An empty literal map makes Map.get always return nil.
@@ -2629,7 +2836,7 @@ defmodule Muro.Emit.Fsm do
     #||/fail
     defp muro_fsm_duals, do: #{lit(duals)}
 
-    defp muro_fsm_ends, do: #{lit(ends)}
+    defp muro_fsm_ends, do: #{table(ends)}
 
     defp muro_fsm_end(key), do: Map.get(muro_fsm_ends(), key, "")
 
@@ -2637,6 +2844,113 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_decls, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(decls)))})
 
     defp muro_fsm_reprs, do: #{lit(reprs)}
+
+    #||choreo
+    # A choreography is one global tree. The state is the rest of it.
+    # The next event is the next interaction in the written order.
+    defp muro_fsm_globals, do: :maps.from_list(#{lit(Enum.sort(globals))})
+
+    defp muro_fsm_g_ends, do: :maps.from_list(#{lit(Enum.sort(g_ends))})
+
+    defp muro_fsm_g_end(key), do: Map.get(muro_fsm_g_ends(), key, "")
+
+    @doc false
+    def muro_fsm_g_init(key), do: %{k: key, g: Map.fetch!(muro_fsm_globals(), key)}
+
+    @doc false
+    def muro_fsm_g_step(key, state, event) do
+      case muro_fsm_g_prep(key, state) do
+        {:ok, g} -> muro_fsm_g_take(key, g, event)
+        :bad -> {:error, {:unexpected, muro_fsm_g_end(key), :done, event}}
+      end
+    end
+
+    @doc false
+    def muro_fsm_g_done?(key, state) do
+      match?({:ok, {:end, _}}, muro_fsm_g_prep(key, state))
+    end
+
+    @doc false
+    def muro_fsm_g_expected(key, state) do
+      case muro_fsm_g_prep(key, state) do
+        {:ok, g} -> muro_fsm_g_expect(g)
+        :bad -> :done
+      end
+    end
+
+    @doc false
+    def muro_fsm_g_trace(key, trace, complete?) when is_list(trace) do
+      muro_fsm_g_walk(key, muro_fsm_g_init(key), trace, 0, complete?)
+    end
+
+    def muro_fsm_g_trace(_key, other, _complete?), do: {:error, {:trace, other}}
+
+    defp muro_fsm_g_walk(key, state, [], index, true) do
+      case muro_fsm_g_prep(key, state) do
+        {:ok, {:end, _}} -> :ok
+        {:ok, g} -> {:error, {index, {:incomplete, elem(g, 1), muro_fsm_g_expect(g)}}}
+        :bad -> {:error, {index, {:incomplete, muro_fsm_g_end(key), :done}}}
+      end
+    end
+
+    defp muro_fsm_g_walk(_key, _state, [], _index, false), do: :ok
+
+    defp muro_fsm_g_walk(key, state, [event | rest], index, complete?) do
+      case muro_fsm_g_step(key, state, event) do
+        {:ok, next} -> muro_fsm_g_walk(key, next, rest, index + 1, complete?)
+        {:error, reason} -> {:error, {index, reason}}
+      end
+    end
+
+    defp muro_fsm_g_prep(key, %{k: key, g: g} = state) when map_size(state) == 2 do
+      if muro_fsm_g_node?(g), do: {:ok, g}, else: :bad
+    end
+
+    defp muro_fsm_g_prep(_key, _state), do: :bad
+
+    defp muro_fsm_g_node?({:end, step}) when is_binary(step), do: true
+
+    defp muro_fsm_g_node?({:msg, step, a, b, l, _ty, _cont})
+         when is_binary(step) and is_atom(a) and is_atom(b) and is_atom(l),
+         do: true
+
+    defp muro_fsm_g_node?({:pick, step, p, [_, _ | _]}) when is_binary(step) and is_atom(p),
+      do: true
+
+    defp muro_fsm_g_node?(_), do: false
+
+    defp muro_fsm_g_take(_key, {:end, step}, event), do: {:error, {:unexpected, step, :done, event}}
+
+    defp muro_fsm_g_take(key, {:msg, step, a, b, l, ty, cont} = g, event) do
+      with {^a, ^b, ^l, value} <- muro_fsm_g_message(event),
+           {:ok, _wire} <- muro_fsm_take(ty, value, %{}) do
+        {:ok, %{k: key, g: cont}}
+      else
+        _ -> {:error, {:unexpected, step, muro_fsm_g_expect(g), event}}
+      end
+    end
+
+    defp muro_fsm_g_take(key, {:pick, step, p, arms} = g, event) do
+      with {^p, label} <- event,
+           {_, next} <- List.keyfind(arms, label, 0) do
+        {:ok, %{k: key, g: next}}
+      else
+        _ -> {:error, {:unexpected, step, muro_fsm_g_expect(g), event}}
+      end
+    end
+
+    defp muro_fsm_g_message({a, b, l}), do: {a, b, l, :tt}
+    defp muro_fsm_g_message({a, b, l, value}), do: {a, b, l, value}
+    defp muro_fsm_g_message(_), do: :none
+
+    defp muro_fsm_g_expect({:end, _}), do: :done
+    defp muro_fsm_g_expect({:msg, _, a, b, l, ty, _}), do: {:message, a, b, l, muro_fsm_desc(ty)}
+
+    defp muro_fsm_g_expect({:pick, _, p, arms}) do
+      {:choose, p, Enum.map(arms, fn {label, _} -> label end)}
+    end
+
+    #||/choreo
 
     defp muro_fsm_source_to_safe, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(safe.to)))})
 
@@ -2957,6 +3271,11 @@ defmodule Muro.Emit.Fsm do
     """
     |> String.trim()
   end
+
+  # A book with a choreography and no session has no session table. An
+  # empty literal map would make every lookup a type warning.
+  defp table(map) when map_size(map) == 0, do: ":maps.from_list([])"
+  defp table(map), do: lit(map)
 
   # Since OTP 26 a small map with atom keys iterates in atom-table order,
   # which depends on what the VM loaded first. Sorting the keys keeps the

@@ -12,8 +12,81 @@ defmodule Muro.Prefix do
   alias Muro.Emit.C.Session, as: Stepper
 
   @doc false
-  def judge(book, %{name: name, session: use, at: at, moves: moves, loc: loc})
+  def judge(book, %{name: name, session: use, at: at, moves: moves, loc: loc} = d)
       when is_list(book) do
+    case global_use(book, use) do
+      %{} = chor ->
+        judge_global(book, chor, d)
+
+      nil ->
+        case Enum.find(moves, &match?({:global, _, _, _}, &1)) do
+          nil -> judge_session(book, name, use, at, moves, loc)
+          move -> {:error, blamed(move_loc(move), name, "#{show_use(use)} is not a choreography")}
+        end
+    end
+  end
+
+  # A name that is a session stays a session. A name that is only a
+  # choreography is the global type.
+  defp global_use(book, use) when is_binary(use) do
+    if decl(book, use) do
+      nil
+    else
+      Enum.find(book, &match?(%{kind: :choreography, name: ^use}, &1))
+    end
+  end
+
+  defp global_use(_book, _use), do: nil
+
+  # A choreography prefix is the written order (`Muro.Choreo.prefix/3`).
+  # It starts at the start. A session move is not an interaction.
+  defp judge_global(book, chor, %{name: name, at: at, moves: moves, loc: loc}) do
+    st = %{
+      name: name,
+      session: chor.name,
+      origin: "start",
+      here: "start",
+      n: 1,
+      decl_loc: loc,
+      move_loc: loc
+    }
+
+    if at in [:start, {:name, "start"}] do
+      case Muro.Choreo.check(chor.name, chor.roles, chor.body, book) do
+        {:error, msg} -> {:error, blamed(loc, name, "#{chor.name}: #{msg}")}
+        {:ok, _lines} -> judge_global_moves(chor, moves, st)
+      end
+    else
+      {:error, blamed(loc, name, "at #{show_at(at)} is not a position of #{chor.name}")}
+    end
+  end
+
+  defp judge_global_moves(chor, moves, st) do
+    case Muro.Choreo.prefix(chor.roles, chor.body, Enum.map(moves, &global_move/1)) do
+      :ok ->
+        :ok
+
+      {:error, n, reason} ->
+        move = Enum.at(moves, n - 1)
+        blame(%{st | n: n, move_loc: move_loc(move)}, global_reason(reason, move, st))
+    end
+  end
+
+  defp global_move({:global, :msg, {a, b, label, ty}, _}), do: {:msg, a, b, label, ty}
+  defp global_move({:global, :pick, {p, label}, _}), do: {:pick, p, label}
+  defp global_move(other), do: {:session, other}
+
+  defp global_reason({:unknown_role, role}, _move, _st), do: "unknown role #{role}"
+
+  defp global_reason({:not_enabled, expected, _}, move, st) do
+    "not enabled at #{st.here}, expected #{expected}, wrote #{show_move(move)}"
+  end
+
+  defp show_at({:name, pos}), do: pos
+  defp show_at({:num, n}), do: Integer.to_string(n)
+  defp show_at(other), do: inspect(other)
+
+  defp judge_session(book, name, use, at, moves, loc) do
     with {:ok, opened, source} <- open_prefix(book, use),
          {:ok, proto, recs, origin} <- position(book, use, opened, source, at) do
       walk(proto, recs, moves, %{
@@ -384,6 +457,10 @@ defmodule Muro.Prefix do
     "not enabled at #{st.here}, expected #{action(head)}, wrote #{show_move(move)}"
   end
 
+  defp show_move({:global, :msg, {a, b, label, ty}, _}),
+    do: Muro.Choreo.show_message(a, b, label, ty)
+
+  defp show_move({:global, :pick, {p, label}, _}), do: "#{p} chooses #{label}"
   defp show_move({dir, :pick, bit, _}), do: "#{dir} pick #{bit}"
   defp show_move({dir, :data, val, _}), do: "#{dir} #{Session.show_value(val)}"
 

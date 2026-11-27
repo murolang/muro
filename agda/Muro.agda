@@ -71,6 +71,7 @@ import Muro.Temporal.Sound
 import Muro.Temporal.Examples
 import Muro.Talk
 import Muro.Choreo
+import Muro.ChoreoPrefix
 import Muro.Seated
 import Muro.Held
 import Muro.Arrow

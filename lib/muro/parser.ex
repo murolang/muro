@@ -898,6 +898,12 @@ defmodule Muro.Parser do
       s == "" or decl_boundary?(s) ->
         {:ok, [], s}
 
+      interaction_start?(s) ->
+        with {:ok, move, rest} <- parse_gmove(s),
+             {:ok, more, rest} <- parse_pmoves(rest) do
+          {:ok, [move | more], rest}
+        end
+
       word_kw?(s, "send") or word_kw?(s, "recv") ->
         with {:ok, move, rest} <- parse_pmove(s),
              {:ok, more, rest} <- parse_pmoves(rest) do
@@ -905,7 +911,33 @@ defmodule Muro.Parser do
         end
 
       true ->
-        {:error, err(s, "expected send or recv")}
+        {:error,
+         err(s, "expected send or recv, or a choreography move a -> b : label or p chooses label")}
+    end
+  end
+
+  # A move of a choreography prefix is written as the choreography
+  # writes it: `a -> b : label`, with the payload when it is not Unit,
+  # or `p chooses label`.
+  defp parse_gmove(s) do
+    loc = here(s)
+
+    with {:ok, name, rest} <- ident(s) do
+      rest = skip(rest)
+
+      if word_kw?(rest, "chooses") do
+        with {:ok, label, rest} <- ident(skip(after_kw(rest, "chooses"))) do
+          {:ok, {:global, :pick, {name, label}, loc}, rest}
+        end
+      else
+        with {:ok, rest} <- eat_arrow(rest),
+             {:ok, to, rest} <- ident(skip(rest)),
+             {:ok, rest} <- colon(skip(rest)),
+             {:ok, label, rest} <- ident(skip(rest)),
+             {:ok, ty, rest} <- parse_msg_pay(skip(rest)) do
+          {:ok, {:global, :msg, {name, to, label, ty}, loc}, rest}
+        end
+      end
     end
   end
 
