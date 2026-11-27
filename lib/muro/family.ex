@@ -10,9 +10,10 @@ defmodule Muro.Family do
   That search checks the generated dispatcher. The hold rules
   `held while earlier unresolved` and `held while any unresolved`,
   `withdraw` of a held instance, and `earlier_resolved` are proved in
-  `agda/Muro/Family.agda`. `Muro.Family.Step` is that step. The
-  generator, the meeting steps, one retry then give-up, `fail stop`,
-  and `resolved k init` are not.
+  `agda/Muro/Family.agda`. Named-kind rules are `NamedHold` in that
+  file. `Muro.Family.Step` is that step. The generator, the meeting
+  steps, one retry then give-up, `fail stop`, and `resolved k init`
+  are not.
 
   A family with no kind, `family rollout : plan per key`, ranges over a
   choreography. `Muro.ChoreoFamily` checks it and decides its formulas.
@@ -93,6 +94,10 @@ defmodule Muro.Family do
   end
 
   def judge_formula(_book, %{name: name}, _formula, {:error, _}, _prep) do
+    {:error, "skipped because #{name} does not check"}
+  end
+
+  def judge_formula(_book, %{name: name}, _formula, {:error, _, _}, _prep) do
     {:error, "skipped because #{name} does not check"}
   end
 
@@ -196,7 +201,9 @@ defmodule Muro.Family do
   defp nullary_after?(_, 0), do: true
   defp nullary_after?(_, _), do: false
 
-  defp rules_ok(%{name: type_name, ctors: ctors}, rules) do
+  @atom_msg "a family formula names opened, held, resolved, earlier_resolved, or some_resolved"
+
+  defp rules_ok(%{name: type_name, ctors: ctors} = data, rules) do
     names = MapSet.new(ctors, & &1.name)
 
     case rule_walk(rules, type_name, names, MapSet.new()) do
@@ -204,11 +211,125 @@ defmodule Muro.Family do
         err
 
       {:ok, seen} ->
-        case Enum.find(ctors, fn ctor -> not MapSet.member?(seen, ctor.name) end) do
-          nil -> :ok
-          %{name: missing} -> {:error, "no rule for #{missing}"}
+        case unknown_kind(data, rules) do
+          {:error, _, _} = err ->
+            err
+
+          nil ->
+            case Enum.find(ctors, fn ctor -> not MapSet.member?(seen, ctor.name) end) do
+              nil -> hold_cycles(data, rules)
+              %{name: missing} -> {:error, "no rule for #{missing}"}
+            end
         end
     end
+  end
+
+  # A named kind points at its own token. The rule's constructor still
+  # uses the declaration location, from `family_report`.
+  defp unknown_kind(%{name: type_name, ctors: ctors}, rules) do
+    names = MapSet.new(ctors, & &1.name)
+
+    Enum.find_value(rules, fn rule ->
+      Enum.find_value(Map.get(rule, :at, []), fn {_mode, name, loc} ->
+        if MapSet.member?(names, name) do
+          nil
+        else
+          {:error, loc, "#{name} is not a constructor of #{type_name}"}
+        end
+      end)
+    end)
+  end
+
+  # Both `while` and `until` are edges. One cycle is enough. It is
+  # rotated so the earliest constructor is first, then closed.
+  defp hold_cycles(%{ctors: ctors}, rules) do
+    order = Enum.map(ctors, & &1.name)
+    index = Map.new(Enum.with_index(order))
+    edges = Map.new(rules, &{&1.ctor, dep_edges(&1)})
+
+    case cycle_from(order, edges, %{}) do
+      nil ->
+        :ok
+
+      {:cycle, nodes} ->
+        {shown, loc} = canon_cycle(nodes, edges, index)
+        {:error, loc, "hold cycle " <> Enum.join(shown, ", ")}
+    end
+  end
+
+  defp dep_edges(%{hold: {:named, %{while: while, until: until}}} = rule) do
+    locs =
+      Enum.reduce(Map.get(rule, :at, []), %{}, fn {_mode, name, loc}, acc ->
+        Map.put_new(acc, name, loc)
+      end)
+
+    for name <- Enum.uniq(while ++ until), do: {name, Map.get(locs, name)}
+  end
+
+  defp dep_edges(_rule), do: []
+
+  defp cycle_from(nodes, edges, color) do
+    Enum.reduce_while(nodes, color, fn node, color ->
+      if Map.get(color, node, :white) == :white do
+        case paint(node, edges, color, []) do
+          {:cycle, _nodes} = found -> {:halt, found}
+          color -> {:cont, color}
+        end
+      else
+        {:cont, color}
+      end
+    end)
+    |> case do
+      {:cycle, _nodes} = found -> found
+      _color -> nil
+    end
+  end
+
+  defp paint(node, edges, color, stack) do
+    color = Map.put(color, node, :gray)
+    stack = [node | stack]
+
+    Enum.reduce_while(Map.get(edges, node, []), color, fn {dep, _loc}, color ->
+      case Map.get(color, dep, :white) do
+        :gray ->
+          {:halt, {:cycle, unwind(stack, dep)}}
+
+        :black ->
+          {:cont, color}
+
+        :white ->
+          case paint(dep, edges, color, stack) do
+            {:cycle, _} = found -> {:halt, found}
+            color -> {:cont, color}
+          end
+      end
+    end)
+    |> case do
+      {:cycle, _} = found -> found
+      color -> Map.put(color, node, :black)
+    end
+  end
+
+  # `stack` is newest-first. The result runs from `dep` along the edges
+  # back to the node that pointed at `dep`, and does not repeat `dep`.
+  defp unwind(stack, dep) do
+    {newer, _} = Enum.split_while(stack, &(&1 != dep))
+    [dep | Enum.reverse(newer)]
+  end
+
+  defp canon_cycle(nodes, edges, index) do
+    start = Enum.min_by(nodes, &Map.fetch!(index, &1))
+    {left, right} = Enum.split_while(nodes, &(&1 != start))
+    rotated = right ++ left
+    last = List.last(rotated)
+    {rotated ++ [start], edge_loc(edges, last, start)}
+  end
+
+  defp edge_loc(edges, from, to) do
+    Enum.find_value(Map.get(edges, from, []), fn
+      {^to, loc} -> loc
+      _ -> nil
+    end)
   end
 
   defp rule_walk([], _type_name, _names, seen), do: {:ok, seen}
@@ -257,7 +378,7 @@ defmodule Muro.Family do
   end
 
   defp walk_formula(_book, _data, _env, _other) do
-    {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
+    {:error, @atom_msg}
   end
 
   defp walk_prop(_book, _data, _env, true), do: :ok
@@ -278,12 +399,12 @@ defmodule Muro.Family do
   end
 
   defp walk_prop(book, data, env, {atom, key, kind})
-       when atom in [:opened, :held, :resolved, :earlier_resolved] do
+       when atom in [:opened, :held, :resolved, :earlier_resolved, :some_resolved] do
     with :ok <- expect_key(book, env, atom, key), do: expect_ctor(data, kind)
   end
 
   defp walk_prop(_book, _data, _env, _other) do
-    {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
+    {:error, @atom_msg}
   end
 
   defp expect_key(book, env, atom, key) do

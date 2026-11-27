@@ -45,7 +45,10 @@ defmodule Muro.FamilyMoreTest do
       )
 
     assert {:error, msg} = check(src)
-    assert msg =~ "bad: a family formula names opened, held, resolved, or earlier_resolved"
+
+    assert msg =~
+             "bad: a family formula names opened, held, resolved, earlier_resolved, or some_resolved"
+
     refute msg =~ "holds in"
 
     meet = """
@@ -59,6 +62,10 @@ defmodule Muro.FamilyMoreTest do
 
     assert {:error, msg} = check(meet)
     assert msg =~ "inst: earlier_resolved names an instance of a family"
+
+    one = String.replace(meet, "earlier_resolved k command", "some_resolved k command")
+    assert {:error, msg} = check(one)
+    assert msg =~ "inst: some_resolved names an instance of a family"
   end
 
   test "the hold rule and the atom parse, and a missing kind is refused" do
@@ -73,7 +80,7 @@ defmodule Muro.FamilyMoreTest do
              """)
 
     assert msg =~
-             "expected never held, held while earlier unresolved, or held while any unresolved"
+             "expected never held, held while earlier unresolved, held while any unresolved, held while <kind> unresolved, or held until <kind> resolved"
 
     assert {:error, msg} =
              Parser.parse("""

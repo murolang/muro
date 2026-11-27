@@ -216,7 +216,7 @@ defmodule Muro.Family.Graph do
   defp formula_atoms({:imp, p, q}), do: formula_atoms(p) ++ formula_atoms(q)
 
   defp formula_atoms({atom, _key, kind})
-       when atom in [:opened, :held, :resolved, :earlier_resolved],
+       when atom in [:opened, :held, :resolved, :earlier_resolved, :some_resolved],
        do: [{atom, kind}]
 
   defp formula_atoms(_other), do: []
@@ -275,6 +275,7 @@ defmodule Muro.Family.Graph do
             :never -> true
             :earlier -> earlier_clear?(g, state, inst, mask)
             :any -> any_clear?(g, state, inst)
+            {:named, spec} -> named_clear?(g, state, inst, spec)
           end
 
         _ ->
@@ -418,7 +419,8 @@ defmodule Muro.Family.Graph do
         instantiate_to(p, q, binders, g.keys)
 
       {:ok, _} ->
-        {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
+        {:error,
+         "a family formula names opened, held, resolved, earlier_resolved, or some_resolved"}
     end
   end
 
@@ -463,7 +465,7 @@ defmodule Muro.Family.Graph do
   defp subst({:imp, p, q}, var, key), do: {:imp, subst(p, var, key), subst(q, var, key)}
 
   defp subst({atom, name, kind}, var, key)
-       when atom in [:opened, :held, :resolved, :earlier_resolved] do
+       when atom in [:opened, :held, :resolved, :earlier_resolved, :some_resolved] do
     {atom, if(name == var, do: key, else: name), kind}
   end
 
@@ -504,6 +506,16 @@ defmodule Muro.Family.Graph do
   # same key opened before this one was known. That late arrival does
   # not falsify `resolved` while the earlier opening is still running.
   # When nothing of the key is running, every known instance counts.
+  # At least one instance of this key and kind has resolved. False when
+  # none have, including when none have arrived. Giving up counts.
+  # `resolved` stays the universal reading and is vacuous when nothing
+  # of that kind counts. This atom is not a reason to double the script.
+  defp holds(g, state, {:some_resolved, key, kind}) do
+    Enum.any?(g.instances, fn inst ->
+      inst.key == key and inst.kind == kind and resolved?(phase(state, inst.id))
+    end)
+  end
+
   defp holds(g, state, {:resolved, key, kind}) do
     runners = runners(g, state, key)
 
@@ -672,7 +684,41 @@ defmodule Muro.Family.Graph do
         Enum.all?(g.instances, fn other ->
           other.id == inst.id or other.key != inst.key or not running?(phase(state, other.id))
         end)
+
+      # `while` is the arrived rows of those kinds. A kind that has not
+      # arrived is not unresolved, so it does not hold this one.
+      # `until` needs one resolved row of each kind. Giving up counts.
+      # One resolved row is enough while another of that kind is open.
+      {:named, %{while: while, until: until}} ->
+        Enum.all?(while, fn kind ->
+          not Enum.any?(g.instances, fn other ->
+            other.key == inst.key and other.kind == kind and unresolved?(phase(state, other.id))
+          end)
+        end) and
+          Enum.all?(until, fn kind ->
+            Enum.any?(g.instances, fn other ->
+              other.key == inst.key and other.kind == kind and resolved?(phase(state, other.id))
+            end)
+          end)
     end
+  end
+
+  # Known at the opening: a later row of a `while` kind is not a
+  # violation. `until` is a fact that stays on the graph, because a
+  # resolved phase is not removed.
+  defp named_clear?(g, state, inst, %{while: while, until: until}) do
+    Enum.all?(while, fn kind ->
+      Enum.all?(g.instances, fn other ->
+        other.key != inst.key or other.kind != kind or
+          not unresolved?(phase(state, other.id)) or
+          not known_at_open?(state, inst.id, other.id)
+      end)
+    end) and
+      Enum.all?(until, fn kind ->
+        Enum.any?(g.instances, fn other ->
+          other.key == inst.key and other.kind == kind and resolved?(phase(state, other.id))
+        end)
+      end)
   end
 
   @doc false
