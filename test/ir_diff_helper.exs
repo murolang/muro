@@ -119,7 +119,8 @@ defmodule Muro.IRDiff do
   @doc "The images `compare/3` runs, in order."
   def image_keys, do: [:plain, :shared, :closures | Keyword.keys(@anf_of)]
 
-  defp with_anf(ctx) do
+  @doc "Rebuilds the A-normal images of `ctx` from the images they come from."
+  def with_anf(ctx) do
     Enum.reduce(@anf_of, ctx, fn {k, src}, ctx ->
       funs = Map.fetch!(ctx, src)
       opts = [book: ctx.book, closures: src == :closures]

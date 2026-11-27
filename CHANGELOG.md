@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.22.41
+
+`Muro.IR.Rep` resolves each data type of a book once. A type whose constructors have no live field is `{:enum, ctors}`, including an all-nullary `unboxed data`. Other `unboxed data` is `{:value, [{ctor, fields}]}`, a struct passed by value. Everything else is `{:boxed, [{ctor, fields}]}`, a heap tag plus fields. A field is `{name, layout, :live | :erased}` in telescope order. `Muro.Emit.C` reads its enum, by-value, and pointer choices from `Muro.IR.Rep` and no longer classifies a type itself (`enum_scalar?`, `unboxed?`, `type_layout`, and the by-value struct order moved there). The `c:unboxed` rules are in the same module: a by-value struct as a pair half, a stream seed, or a stream capture (`value_lay?/2`), its C option typedef (`value_opt_payload?/2`), and an `Opt` of declared `unboxed data` (`refuse_unboxed_opt/2`, which `Muro.Emit.refuse_unboxed_opt/2` now calls for C, Rust, and Zig). `Muro.IR.Rep.check/2` applies all of them to an image without emitting, and agrees with C on every C book of the corpus.
+
+Emitted bytes did not change. Every C output (plain, `c_prefix:`, `share: false`, and the outline), Rust, Zig, and JavaScript output of `examples`, `test/fixtures`, `lib/muro/std`, and `test/http_step` (848 outputs over 140 books, refusal reasons included) hashes the same before and after.
+
+`Muro.IR.Anf.funs/2` puts an image in A-normal form. Every operand of a call, a constructor, a word operation, a pair, `su`, `uncons`, a closure application, a string or bytes primitive, a stream or fold, and every `match` and `letp` scrutinee is a variable or a literal. A non-atomic operand is bound by a fresh `let` in `Muro.IR.Eval`'s order (stream captures before the seed), so values, `abort`, and fuel do not change. A `let` of a `let` is flattened, and a `match` in operand position is bound by a `let`, so no continuation is copied. Binders are unique per function; a fresh name contains `%`. A fresh `let` takes the layout `Muro.IR.Check` infers; a scrutinee is `:affine`, as a non-variable scrutinee is there, and another operand is `:reuse` unless its value mentions a `:linear` or `:affine` variable, `:linear` otherwise. `violations/1`, `anf?/1`, and `unique_binders?/1` are the structural checks. No emitter reads A-normal form yet. `Muro.IR.Check` exposes the layout inference, restricted-variable, and arm-environment helpers the pass shares with it.
+
+### Tests
+
+- `test/muro_ir_rep_test.exs`: classification and field metadata, the predicates C reads, `c:unboxed` parity with C on pair, stream, and `Opt` books, and `Muro.IR.Rep.check/2` against C on every C book of the corpus and the HTTP step book.
+- `test/muro_ir_anf_test.exs`: binding order, renaming, flattening, stream order, grades, a reusable position still refusing a linear operand, and every image of the corpus and the HTTP step book (default, Share, closures, closures Share; 328 images): the `Muro.IR.Check` verdict is the same after A-normal form, the result is in A-normal form with unique binders, and every closed run evaluates the same.
+- The differential harness runs each image in A-normal form (`anf`, `anf_shared`, `anf_closures`) beside the image it came from: 4,940 corpus cases over 1,235 runs, 8,130 edge-value cases of `ir_eval_ops.muro`, and the HTTP step book, with no mismatch. A closure an A-normal image returns agrees by shape.
+
+### Manual
+
+- Extending: `Muro.IR.Rep` and `Muro.IR.Anf`.
+
+### Package
+
+- Version 0.22.41.
+
 ## 0.22.40
 
 `Muro.IR.Eval` is a call-by-value interpreter of a `Muro.IR` image. `call/4` runs one function on argument values and returns `{:ok, value}` or `{:error, reason}`; `eval/4` evaluates a term under an environment, `take/4` reads the first heads of a stream, and `apply_value/4` applies a closure. It reads every image `Muro.IR` produces: the default image of `Muro.IR.elaborate/2`, that image after `Muro.IR.Share.funs/2`, and the closures image (`{:lam, ...}`, `{:appv, ...}`, typed matches). Values are `{:nat, n}`, `:tt`, `{:word, k, residue}`, `true`/`false`, `{:some, v}`/`:none`, `{:str, utf8}`, `{:bytes, bin}`, `{:pair, a, b}`, `{:con, data, ctor, live_fields}` (an atom is `{:con, "Atom", name, []}`), `{:stream, step, caps, seed}`, `{:clo, env, x, body}`, and `:erased` for an erased constructor field's `let`. Every call, closure application, stream `uncons`, and `bfold` octet spends one unit of fuel (default 1,000,000), so a run that does not stop ends in `{:error, :out_of_fuel}`. Other errors are `:abort`, `{:unbound, x}`, `{:unknown_fun, f}`, `{:arity, f, want, got}`, `{:no_arm, v}`, `{:type, want, v}`, `{:stuck_word, op, args}`, and `{:unknown_term, t}`. A word operation is handed to `Muro.Word.step/2` on the literal terms of its argument values, so wrapping, signed order, total shifts, checked arithmetic, and division by zero are the checker's own reductions. Strings and bytes use `Muro.Print.scalar_count/1` and `Muro.Bytes`. A generated fold or stream step is looked up apart from source runs, as in `Muro.IR.Share`. `sliceUncons` is the book's `Maybe` (`just (octet, rest)` or `nothing`).
