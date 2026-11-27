@@ -242,11 +242,12 @@ defmodule Muro.Synth do
   # atoms, had considered 3766542 programs by the end of size 7.
   @considered_budget 1_000_000
   # Soft bound on current growth, sampled in `sized_insert` before each
-  # candidate is inserted. `:erlang.memory(:total)` minus the total at
-  # the start of the walk. Not a hard cap on the peak: the candidate
-  # just inserted can pass the bound before the next sample, and a
-  # later sample reads the total after collection, not the high-water
-  # mark. 512 MiB.
+  # candidate is inserted. This process's memory (`Process.info(self(),
+  # :memory)`) minus the total at the start of the walk. Not a hard cap
+  # on the peak: the candidate just inserted can pass the bound before
+  # the next sample, and a later sample reads the total after
+  # collection, not the high-water mark. Other processes in the same VM
+  # do not count. 512 MiB.
   @memory_budget 512 * 1_048_576
 
   @doc """
@@ -280,11 +281,12 @@ defmodule Muro.Synth do
   Bytes of current growth `enumerate_sized/6` may observe before it
   stops, unless a call passes `memory_budget:`.
 
-  The bound is a soft sample of current growth, not a hard cap on the
-  peak and not the size of the VM. Before each candidate is inserted,
-  the walk reads `:erlang.memory(:total)` minus the total recorded when
-  the walk started. The candidate just inserted can take that total
-  past the bound; the next sample is what stops the walk. A later
+  The bound is a soft sample of current growth of this process, not a
+  hard cap on the peak and not the size of the VM. Before each candidate
+  is inserted, the walk reads `Process.info(self(), :memory)` minus the
+  process total recorded when the walk started. Concurrent work in other
+  processes does not count. The candidate just inserted can take that
+  total past the bound; the next sample is what stops the walk. A later
   sample reads the total after collection, not the high-water mark.
   The report names `memory budget`. A negative bound stops before the
   first candidate. `Muro.Synth.Loop.run/2` takes the same option, and
@@ -398,8 +400,16 @@ defmodule Muro.Synth do
       size: 0,
       considered_budget: considered_budget,
       memory_budget: memory_budget,
-      base_mem: :erlang.memory(:total)
+      base_mem: walk_memory()
     }
+
+    # `after_base:` is a zero-arity hook for tests. It runs after
+    # `base_mem` is recorded and before the first candidate is inserted,
+    # so a test can grow memory in another process and then continue.
+    case Keyword.get(opts, :after_base) do
+      hook when is_function(hook, 0) -> hook.()
+      _other -> :ok
+    end
 
     # `size` advances in `insert_counted`, after a program at that
     # size is counted. Assigning it here would name the next size when
@@ -842,9 +852,9 @@ defmodule Muro.Synth do
   # inserted. `seen` still records every signature that was inserted, so
   # the counts stay the counts of the programs actually considered.
   #
-  # The memory sample is the current total, not a peak. It runs before
-  # this candidate is inserted, so the previous candidate can already
-  # have taken the total past the bound.
+  # The memory sample is the current process total, not a peak and not
+  # the VM. It runs before this candidate is inserted, so the previous
+  # candidate can already have taken the process total past the bound.
   defp sized_insert(%{stop: stop} = st, _prog_fun, _size, _sig) when is_binary(stop), do: st
 
   defp sized_insert(st, _prog_fun, _size, _sig) when st.considered >= st.considered_budget do
@@ -864,10 +874,16 @@ defmodule Muro.Synth do
     end
   end
 
-  # Current growth since `base_mem`, not the high-water mark. Collection
-  # between samples lowers the total the next candidate sees.
+  # Current growth of this process since `base_mem`, not the high-water
+  # mark and not `:erlang.memory(:total)`. Collection between samples
+  # lowers the total the next candidate sees.
   defp over_memory?(st) do
-    :erlang.memory(:total) - st.base_mem > st.memory_budget
+    walk_memory() - st.base_mem > st.memory_budget
+  end
+
+  defp walk_memory do
+    {:memory, mem} = Process.info(self(), :memory)
+    mem
   end
 
   defp insert_counted(st, _prog_fun, size, _sig) when size > st.max_size, do: st
@@ -913,7 +929,7 @@ defmodule Muro.Synth do
   defp heartbeat(%{trace: true, considered: considered} = st)
        when rem(considered, 1_000_000) == 0 do
     elapsed = System.monotonic_time(:millisecond) - st.started
-    heap = div(:erlang.memory(:total), 1_048_576)
+    heap = div(walk_memory(), 1_048_576)
 
     IO.puts(
       :stderr,
@@ -963,7 +979,7 @@ defmodule Muro.Synth do
     if trace?() do
       elapsed = System.monotonic_time(:millisecond) - started
       new = Map.get(st.counts, size, 0)
-      heap = div(:erlang.memory(:total), 1_048_576)
+      heap = div(walk_memory(), 1_048_576)
 
       IO.puts(
         :stderr,

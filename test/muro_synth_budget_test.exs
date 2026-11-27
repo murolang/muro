@@ -70,6 +70,66 @@ defmodule Muro.SynthBudgetTest do
     assert meta.sizes == []
   end
 
+  test "the memory budget ignores growth in other processes" do
+    # The walk used to sample `:erlang.memory(:total)`. A parallel ExUnit
+    # case could take the VM more than 512 MiB past the start of a walk
+    # that itself considered only a few hundred programs, and the walk
+    # would stop with `memory budget`. The sample is this process.
+    # `after_base:` runs after `base_mem` is recorded and before the
+    # first candidate is inserted, so the other process is already
+    # holding the extra memory when later samples run.
+    features = ["a", "b", "c", "d"]
+    states = [:s0, :s1, :s2, :s3, :s4, :s5]
+
+    feat = fn
+      "a", state when state in [:s0, :s5] -> true
+      "b", state when state in [:s1, :s5] -> true
+      "c", :s2 -> true
+      "d", :s3 -> true
+      _feature, _state -> false
+    end
+
+    budget = 16 * 1_048_576
+    hold = 64 * 1_048_576
+    parent = self()
+
+    holder =
+      spawn(fn ->
+        receive do
+          {:go, from} ->
+            blob = :binary.copy(<<1>>, hold)
+            send(from, {:held, byte_size(blob)})
+
+            receive do
+              :drop -> byte_size(blob)
+            end
+        end
+      end)
+
+    assert {:ok, _index, meta} =
+             Muro.Synth.enumerate_sized(
+               features,
+               Muro.Synth.pred_size_bound(),
+               &Muro.Synth.signature(&1, states, feat),
+               length(states),
+               nil,
+               memory_budget: budget,
+               after_base: fn ->
+                 send(holder, {:go, parent})
+
+                 receive do
+                   {:held, ^hold} -> :ok
+                 after
+                   5_000 -> flunk("holder did not allocate")
+                 end
+               end
+             )
+
+    assert meta.truncated == false
+    assert meta.considered > 0
+    send(holder, :drop)
+  end
+
   test "a non-integer budget is a usage error" do
     assert {:error, :usage, considered} =
              Muro.Synth.Loop.run("examples/cshrl/envs/two_state.muro", considered_budget: 1.5)
