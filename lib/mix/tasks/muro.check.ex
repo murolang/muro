@@ -28,10 +28,11 @@ defmodule Mix.Tasks.Muro.Check do
   `family <name>: <meeting> per key of <kind>`, and each temporal
   declaration that holds prints `temporal <name>: holds in <n> reachable
   states`. A family marked `may redeliver` prints that mark on the same
-  line. A formula that says `relies` and a closed-list entry
+  line. A family marked `may revert` prints that mark after it. The
+  printed order is fixed. A formula that says `relies` and a closed-list entry
   (`idempotent init`, `in order`, or `dense`), and holds, prints
   `<name>: depends on contract <entry>` on the next line.
-  `may redeliver` is not that line. Those lines are in book order. Each choreography then prints
+  `may redeliver` and `may revert` are not that line. Those lines are in book order. Each choreography then prints
   one `choreography <name>: <role> with <role> = <session>` line per
   ordered pair of roles. Each definition the entry file reaches that
   depends on an axiom and is not a `run` then prints

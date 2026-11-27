@@ -137,6 +137,12 @@ defmodule Muro.FamilyMoreTest do
     assert {:ok, dropped} = Graph.withdraw(g, blocked, 1)
     assert Graph.phase(dropped, 1) == :withdrawn
     assert Graph.phase(dropped, 2) == :held
+
+    held_only = {:held, :absent, :absent}
+    assert {:ok, gone} = Graph.withdraw(g, held_only, 0)
+    assert Graph.phase(gone, 0) == :withdrawn
+    refute Graph.holds?(g, {:some_resolved, "a", "command"}, gone)
+    refute Graph.holds?(g, {:resolved, "a", "command"}, gone)
     assert Graph.openable(g, dropped) == [2]
     assert {:error, {:resolved, 1}} = Graph.withdraw(g, dropped, 1)
 

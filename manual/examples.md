@@ -559,6 +559,20 @@ temporal front-before-worker : rollout :=
 
 The book also states the same implication for `schema`, and `always ((opened k cleanup) implies (some_resolved k worker))`. `mix muro.check` prints `family rollout: slot per key of Step`, then each formula holding in 8906 reachable states, 26423 transitions. `front` and `schema` are open together in that graph. See [Temporal](temporal.md#a-keyed-family).
 
+## keyed-rollback.muro
+
+`front` opens when it arrives. `worker` stays held until a `front` of the same key has resolved. The family is marked `may revert`, so a resolved row stays until `revert`, `drop_key`, or `skip_below`, and `revert` puts it back to open. A worker that is open or resolved blocks a revert of `front`. A held worker does not.
+
+```
+family rollout : slot per key of Step may revert
+  front never held
+  worker held until front resolved
+temporal front-before-worker : rollout :=
+  forall (k : key). always ((some_resolved k worker) implies (resolved k front))
+```
+
+The book also states `always ((some_resolved k worker) implies (some_resolved k front))`. `resolved k worker` is true when no worker counts, so it is not the antecedent. `mix muro.check` prints `family rollout: slot per key of Step may revert`, then each formula holding in 247 reachable states, 557 transitions. See [Temporal](temporal.md#a-keyed-family).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.

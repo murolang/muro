@@ -3516,6 +3516,11 @@ gap-refused (den-cons ())
 -- that `release-records` does, and `unblocked-min`: a least-rank held
 -- row is not blocked when its `until` facts are in and every in-window
 -- `while` row of its key is itself held.
+-- `Revert` below is a separate phase (`vopen`, `vheld`, `vres`) so a
+-- resolved row can stay. `revert-inv` puts a `vres` row back to `vopen`
+-- when no same-key open or resolved row lists its kind, and drops the
+-- fact when it was the last resolved row of that key and kind.
+-- `unguarded-breaks` is a revert with that guard off.
 ------------------------------------------------------------------------
 
 module NamedHold where
@@ -3528,7 +3533,8 @@ module NamedHold where
   -- reason to open another, because a nhold row still counts as a hit.
   --
   -- `no-overtake` is the safety theorem. `arriveN-inv`, `resolve-inv`,
-  -- and `withdraw-inv` preserve it. `withdraw-facts` is the negative
+  -- and `withdraw-inv` preserve it. `Revert.revert-inv` preserves `VInv`.
+  -- `withdraw-facts` is the negative
   -- fact. `release-records` is the positive one. `unblocked-min` is
   -- progress for a nhold row of least rank: with its `until` facts in,
   -- and every in-window `while` row of its key nhold, it is not blocked.
@@ -4157,3 +4163,669 @@ module NamedHold where
     blocked-split δ rs fs (key r) at (kind r)
       (no-while δ rs r at min blockers)
       (as-true (allUntil fs (key r) (untilOf δ (kind r))) au)
+
+  ------------------------------------------------------------------------
+  -- `may revert`, for named kinds only. A resolved row stays in the
+  -- list. `revert` puts it back to `vopen` when no other same-key row
+  -- that is `vopen` or `vres` lists this kind in `while` or `until`.
+  -- The fact `(key, kind)` is removed when no `vres` row of that key
+  -- and kind remains. A `vheld` row has no obligation and does not
+  -- block. `earlier` and `any` are not this development.
+  --
+  -- `revert-inv` preserves `VInv`. `before-inv` is the two-row state.
+  -- `guarded-keeps` is that state under the guard: the worker blocks
+  -- the front. `unguarded-breaks` drops the front fact anyway, and the
+  -- worker is still `vres`.
+  ------------------------------------------------------------------------
+
+  module Revert where
+
+    data VPhase : Set where
+      vopen vheld vres : VPhase
+
+    record VRow : Set where
+      field
+        key index id kind : ℕ
+        phase             : VPhase
+        born openedAt     : ℕ
+
+    open VRow
+
+    record VState : Set where
+      field
+        rows  : List VRow
+        facts : List Fact
+        tick  : ℕ
+
+    open VState
+
+    oblig : VPhase → Bool
+    oblig vopen = true
+    oblig vheld = false
+    oblig vres  = true
+
+    live : VPhase → Bool
+    live vopen = true
+    live vheld = true
+    live vres  = false
+
+    isRes : VPhase → Bool
+    isRes vres  = true
+    isRes vopen = false
+    isRes vheld = false
+
+    blocking : VPhase → Bool
+    blocking vopen = true
+    blocking vheld = false
+    blocking vres  = true
+
+    vids : List VRow → List ℕ
+    vids []       = []
+    vids (q ∷ qs) = id q ∷ vids qs
+
+    Distinct : List ℕ → Set
+    Distinct []       = ⊤
+    Distinct (x ∷ xs) = (¬ Any (_≡ x) xs) × Distinct xs
+
+    id-mem : ∀ {q qs} → Any (_≡ q) qs → Any (_≡ id q) (vids qs)
+    id-mem (here refl)  = here refl
+    id-mem (there rest) = there (id-mem rest)
+
+    unique-any : ∀ {qs q p} → Distinct (vids qs) →
+                 Any (_≡ q) qs → Any (_≡ p) qs → id q ≡ id p → q ≡ p
+    unique-any {[]} dist ()
+    unique-any {r ∷ rs} (fresh , dist) (here refl) (here refl) _ = refl
+    unique-any {r ∷ rs} (fresh , dist) (here refl) (there mp) eq =
+      ⊥-elim (fresh (subst (λ i → Any (_≡ i) (vids rs)) (sym eq) (id-mem mp)))
+    unique-any {r ∷ rs} (fresh , dist) (there mq) (here refl) eq =
+      ⊥-elim (fresh (subst (λ i → Any (_≡ i) (vids rs)) eq (id-mem mq)))
+    unique-any {r ∷ rs} (fresh , dist) (there mq) (there mp) eq =
+      unique-any dist mq mp eq
+
+    hitOpen : VRow → ℕ → ℕ → List ℕ → Bool
+    hitOpen q k at ks =
+      if ⌊ key q ≟ k ⌋ then
+        (if elem (kind q) ks then ⌊ born q ≤? at ⌋ else false)
+      else false
+
+    vhit : VRow → ℕ → ℕ → List ℕ → Bool
+    vhit q k at ks = if live (phase q) then hitOpen q k at ks else false
+
+    vwhile : List VRow → ℕ → ℕ → List ℕ → Bool
+    vwhile []       k at ks = false
+    vwhile (q ∷ qs) k at ks = vhit q k at ks ∨ vwhile qs k at ks
+
+    VSafe : Dep → List VRow → List Fact → VRow → Set
+    VSafe δ rs fs r =
+      T (not (vwhile rs (key r) (openedAt r) (whileOf δ (kind r)))) ×
+      T (allUntil fs (key r) (untilOf δ (kind r)))
+
+    VOk : Dep → List VRow → List Fact → VRow → Set
+    VOk δ rs fs r = oblig (phase r) ≡ true → VSafe δ rs fs r
+
+    VInv : Dep → VState → Set
+    VInv δ s = Distinct (vids (rows s)) × Every (VOk δ (rows s) (facts s)) (rows s)
+
+    vfind : ℕ → List VRow → Maybe VRow
+    vfind ident []       = nothing
+    vfind ident (q ∷ qs) = if ⌊ ident ≟ id q ⌋ then just q else vfind ident qs
+
+    flipFirst : ℕ → List VRow → List VRow
+    flipFirst ident []       = []
+    flipFirst ident (q ∷ qs) =
+      if ⌊ ident ≟ id q ⌋ then record q { phase = vopen } ∷ qs
+      else q ∷ flipFirst ident qs
+
+    depends : Dep → VRow → VRow → Bool
+    depends δ target other =
+      elem (kind target) (whileOf δ (kind other)) ∨
+      elem (kind target) (untilOf δ (kind other))
+
+    blocks : Dep → VRow → VRow → Bool
+    blocks δ target other =
+      if ⌊ id other ≟ id target ⌋ then false
+      else if ⌊ key other ≟ key target ⌋ then
+        (if blocking (phase other) then depends δ target other else false)
+      else false
+
+    anyBlock : Dep → VRow → List VRow → Bool
+    anyBlock δ target []       = false
+    anyBlock δ target (q ∷ qs) = blocks δ target q ∨ anyBlock δ target qs
+
+    otherRes : VRow → List VRow → Bool
+    otherRes r []       = false
+    otherRes r (q ∷ qs) =
+      if ⌊ id q ≟ id r ⌋ then otherRes r qs
+      else if ⌊ key q ≟ key r ⌋ then
+        (if ⌊ kind q ≟ kind r ⌋ then
+          (if isRes (phase q) then true else otherRes r qs)
+         else otherRes r qs)
+      else otherRes r qs
+
+    dropFact : List Fact → ℕ → ℕ → List Fact
+    dropFact []             k d = []
+    dropFact ((k' , d') ∷ fs) k d =
+      if ⌊ k ≟ k' ⌋ then
+        (if ⌊ d ≟ d' ⌋ then dropFact fs k d else (k' , d') ∷ dropFact fs k d)
+      else (k' , d') ∷ dropFact fs k d
+
+    adjust : VRow → List VRow → List Fact → List Fact
+    adjust r rs fs =
+      if otherRes r rs then fs else dropFact fs (key r) (kind r)
+
+    vids-flip : ∀ ident qs → vids (flipFirst ident qs) ≡ vids qs
+    vids-flip ident []       = refl
+    vids-flip ident (q ∷ qs) with ident ≟ id q
+    ... | yes _ = refl
+    ... | no _ rewrite vids-flip ident qs = refl
+
+    blocks-of : ∀ δ target qs q → anyBlock δ target qs ≡ false →
+                Any (_≡ q) qs → blocks δ target q ≡ false
+    blocks-of δ target (q ∷ qs) .q eq (here refl) =
+      proj₁ (∨-false (blocks δ target q) (anyBlock δ target qs) eq)
+    blocks-of δ target (p ∷ qs) q eq (there mem) =
+      blocks-of δ target qs q
+        (proj₂ (∨-false (blocks δ target p) (anyBlock δ target qs) eq)) mem
+
+    until-irrefl : ∀ δ k → elem k (untilOf δ k) ≡ false
+    until-irrefl δ k with uncover (elem k (untilOf δ k))
+    ... | reveal false eq = eq
+    ... | reveal true  eq =
+      ⊥-elim (self-until δ k (elem-sound k (untilOf δ k) (≡true-T eq)))
+
+    hitOpen-key : ∀ q k at ks → ¬ (key q ≡ k) → hitOpen q k at ks ≡ false
+    hitOpen-key q k at ks ¬eq with key q ≟ k
+    ... | yes eq = ⊥-elim (¬eq eq)
+    ... | no _   = refl
+
+    hitOpen-elem : ∀ q k at ks → key q ≡ k → elem (kind q) ks ≡ false →
+                   hitOpen q k at ks ≡ false
+    hitOpen-elem q k at ks eq el with key q ≟ k
+    ... | yes _ rewrite el = refl
+    ... | no ¬p = ⊥-elim (¬p eq)
+
+    vhit-vres : ∀ q k at ks → phase q ≡ vres → vhit q k at ks ≡ false
+    vhit-vres q k at ks eq rewrite eq = refl
+
+    vhit-open : ∀ q k at ks → hitOpen q k at ks ≡ false →
+                vhit (record q { phase = vopen }) k at ks ≡ false
+    vhit-open q k at ks eq rewrite eq = refl
+
+    nat-fresh : ∀ {ip iq : ℕ} {is : List ℕ} →
+                ¬ Any (_≡ ip) is → Any (_≡ iq) is → ¬ (iq ≡ ip)
+    nat-fresh fresh (here refl) eq = fresh (here eq)
+    nat-fresh fresh (there mem) eq = nat-fresh (λ m → fresh (there m)) mem eq
+
+    nat-yes : ∀ m n → m ≡ n → ⌊ m ≟ n ⌋ ≡ true
+    nat-yes m n eq with m ≟ n
+    ... | yes _ = refl
+    ... | no ¬p = ⊥-elim (¬p eq)
+
+    nat-no : ∀ m n → ¬ (m ≡ n) → ⌊ m ≟ n ⌋ ≡ false
+    nat-no m n ¬eq with m ≟ n
+    ... | yes eq = ⊥-elim (¬eq eq)
+    ... | no _   = refl
+
+    flip-skip : ∀ ident p qs → ¬ (ident ≡ id p) →
+                flipFirst ident (p ∷ qs) ≡ p ∷ flipFirst ident qs
+    flip-skip ident p qs ¬eq =
+      cong (λ b → if b then record p { phase = vopen } ∷ qs
+                       else p ∷ flipFirst ident qs)
+           (nat-no ident (id p) ¬eq)
+
+    vwhile-flip : ∀ qs q k at ks →
+                  phase q ≡ vres →
+                  hitOpen q k at ks ≡ false →
+                  Distinct (vids qs) →
+                  Any (_≡ q) qs →
+                  vwhile (flipFirst (id q) qs) k at ks ≡ vwhile qs k at ks
+    vwhile-flip [] q k at ks _ _ _ ()
+    vwhile-flip (p ∷ qs) .p k at ks ph ho _ (here refl) =
+      trans (cong (λ zs → vwhile zs k at ks) (head-flip p qs))
+            (trans (cong (λ b → b ∨ vwhile qs k at ks) (vhit-open p k at ks ho))
+                   (sym (cong (λ b → b ∨ vwhile qs k at ks) (vhit-vres p k at ks ph))))
+      where
+        head-flip : ∀ p qs →
+                    flipFirst (id p) (p ∷ qs) ≡ record p { phase = vopen } ∷ qs
+        head-flip p qs =
+          cong (λ b → if b then record p { phase = vopen } ∷ qs
+                           else p ∷ flipFirst (id p) qs)
+               (nat-yes (id p) (id p) refl)
+    vwhile-flip (p ∷ qs) q k at ks ph ho (fresh , dist) (there mem) =
+      let ¬eq = nat-fresh {ip = id p} {iq = id q} {is = vids qs}
+                  fresh (id-mem mem)
+          rec  = vwhile-flip qs q k at ks ph ho dist mem
+      in subst (λ zs → vwhile zs k at ks ≡ vhit p k at ks ∨ vwhile qs k at ks)
+           (sym (flip-skip (id q) p qs ¬eq))
+           (cong (λ b → vhit p k at ks ∨ b) rec)
+
+    fact-skip : ∀ fs k d k0 d0 → ¬ (k ≡ k0 × d ≡ d0) →
+                fact? (dropFact fs k0 d0) k d ≡ fact? fs k d
+    fact-skip [] k d k0 d0 _ = refl
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both with k0 ≟ k' | k ≟ k'
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes ek | yes ek'
+        with d0 ≟ d' | d ≟ d'
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes ek | yes ek' | yes ed | yes ed' =
+      ⊥-elim (¬both (trans ek' (sym ek) , trans ed' (sym ed)))
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes _ | yes _ | yes _ | no _ =
+      fact-skip fs k d k0 d0 ¬both
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes _ | yes ek' | no _ | yes ed
+        rewrite nat-yes k k' ek' | nat-yes d d' ed = refl
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes _ | yes ek' | no _ | no ¬d
+        rewrite nat-yes k k' ek' | nat-no d d' ¬d =
+      fact-skip fs k d k0 d0 ¬both
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes _ | no _ with d0 ≟ d'
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes _ | no _ | yes _ =
+      fact-skip fs k d k0 d0 ¬both
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | yes _ | no ¬k | no _
+        rewrite nat-no k k' ¬k =
+      fact-skip fs k d k0 d0 ¬both
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | no _ | yes _ with d ≟ d'
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | no _ | yes ek | yes _
+        rewrite nat-yes k k' ek = refl
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | no _ | yes ek | no _
+        rewrite nat-yes k k' ek =
+      fact-skip fs k d k0 d0 ¬both
+    fact-skip ((k' , d') ∷ fs) k d k0 d0 ¬both | no _ | no ¬k
+        rewrite nat-no k k' ¬k =
+      fact-skip fs k d k0 d0 ¬both
+
+    elem-split : ∀ d0 d ds → elem d0 (d ∷ ds) ≡ false → ¬ (d ≡ d0) × elem d0 ds ≡ false
+    elem-split d0 d ds eq with d0 ≟ d
+    ... | yes _ = ⊥-elim (true≢false eq)
+    ... | no ¬p = (λ e → ¬p (sym e)) , eq
+
+    all-drop : ∀ fs k ds k0 d0 → (¬ (k ≡ k0)) ⊎ (elem d0 ds ≡ false) →
+               allUntil (dropFact fs k0 d0) k ds ≡ allUntil fs k ds
+    all-drop fs k [] k0 d0 _ = refl
+    all-drop fs k (d ∷ ds) k0 d0 why =
+      let ¬head = λ { (ek , ed) → head-bad why ek ed }
+          step  = fact-skip fs k d k0 d0 ¬head
+          rest  = all-drop fs k ds k0 d0 (rest-why why)
+      in ∧-cong step rest
+      where
+        head-bad : (¬ (k ≡ k0)) ⊎ (elem d0 (d ∷ ds) ≡ false) →
+                   k ≡ k0 → d ≡ d0 → ⊥
+        head-bad (inj₁ ¬k) ek _ = ¬k ek
+        head-bad (inj₂ el) _ ed =
+          let ¬d , _ = elem-split d0 d ds el
+          in ¬d ed
+
+        rest-why : (¬ (k ≡ k0)) ⊎ (elem d0 (d ∷ ds) ≡ false) →
+                   (¬ (k ≡ k0)) ⊎ (elem d0 ds ≡ false)
+        rest-why (inj₁ ¬k) = inj₁ ¬k
+        rest-why (inj₂ el) = inj₂ (proj₂ (elem-split d0 d ds el))
+
+    oblig-block : ∀ ph → oblig ph ≡ true → blocking ph ≡ true
+    oblig-block vopen refl = refl
+    oblig-block vres  refl = refl
+    oblig-block vheld ()
+
+    no-list : ∀ δ target q → blocks δ target q ≡ false → ¬ (id q ≡ id target) →
+              key q ≡ key target → blocking (phase q) ≡ true →
+              elem (kind target) (whileOf δ (kind q)) ≡ false ×
+              elem (kind target) (untilOf δ (kind q)) ≡ false
+    no-list δ target q eq ¬id ek eb = on-id (id q ≟ id target)
+      where
+        on-id : Dec (id q ≡ id target) →
+                elem (kind target) (whileOf δ (kind q)) ≡ false ×
+                elem (kind target) (untilOf δ (kind q)) ≡ false
+        on-id (yes p) = ⊥-elim (¬id p)
+        on-id (no ¬p)
+            rewrite nat-no (id q) (id target) ¬p
+                  | nat-yes (key q) (key target) ek
+                  | eb =
+          ∨-false (elem (kind target) (whileOf δ (kind q)))
+                  (elem (kind target) (untilOf δ (kind q))) eq
+
+    window-clear : ∀ δ rs r q → anyBlock δ r rs ≡ false → Distinct (vids rs) →
+                   Any (_≡ q) rs → Any (_≡ r) rs → oblig (phase q) ≡ true →
+                   hitOpen r (key q) (openedAt q) (whileOf δ (kind q)) ≡ false
+    window-clear δ rs r q eqb dist mq mr ob = on-id (id q ≟ id r)
+      where
+        on-id : Dec (id q ≡ id r) →
+                hitOpen r (key q) (openedAt q) (whileOf δ (kind q)) ≡ false
+        on-id (yes same) =
+          let q≡r = unique-any dist mq mr same
+          in hitOpen-elem r (key q) (openedAt q) (whileOf δ (kind q))
+               (cong key (sym q≡r))
+               (subst (λ row → elem (kind r) (whileOf δ (kind row)) ≡ false)
+                 (sym q≡r) (while-irrefl δ (kind r)))
+        on-id (no ¬same) =
+          clear (blocks-of δ r rs q eqb mq) ¬same (oblig-block (phase q) ob)
+          where
+            clear : blocks δ r q ≡ false → ¬ (id q ≡ id r) →
+                    blocking (phase q) ≡ true →
+                    hitOpen r (key q) (openedAt q) (whileOf δ (kind q)) ≡ false
+            clear bk ¬id eb with key q ≟ key r
+            ... | no ¬k rewrite nat-no (key r) (key q) (λ e → ¬k (sym e)) = refl
+            ... | yes ek
+                rewrite nat-no (id q) (id r) ¬id
+                      | eb
+                      | proj₁ (∨-false (elem (kind r) (whileOf δ (kind q)))
+                                       (elem (kind r) (untilOf δ (kind q))) bk)
+                      | nat-yes (key r) (key q) (sym ek) = refl
+
+    until-clear : ∀ δ rs r q → anyBlock δ r rs ≡ false → Distinct (vids rs) →
+                  Any (_≡ q) rs → Any (_≡ r) rs → oblig (phase q) ≡ true →
+                  (¬ (key q ≡ key r)) ⊎ (elem (kind r) (untilOf δ (kind q)) ≡ false)
+    until-clear δ rs r q eqb dist mq mr ob = on-id (id q ≟ id r)
+      where
+        on-id : Dec (id q ≡ id r) →
+                (¬ (key q ≡ key r)) ⊎ (elem (kind r) (untilOf δ (kind q)) ≡ false)
+        on-id (yes same) =
+          let q≡r = unique-any dist mq mr same
+          in inj₂ (subst (λ row → elem (kind r) (untilOf δ (kind row)) ≡ false)
+                     (sym q≡r) (until-irrefl δ (kind r)))
+        on-id (no ¬same) = on-key (key q ≟ key r)
+          where
+            on-key : Dec (key q ≡ key r) →
+                     (¬ (key q ≡ key r)) ⊎
+                     (elem (kind r) (untilOf δ (kind q)) ≡ false)
+            on-key (no ¬k) = inj₁ ¬k
+            on-key (yes ek) =
+              let bk = blocks-of δ r rs q eqb mq
+                  eb = oblig-block (phase q) ob
+                  _ , el = no-list δ r q bk ¬same ek eb
+              in inj₂ el
+
+    vfind-any : ∀ ident qs r → vfind ident qs ≡ just r → Any (_≡ r) qs
+    vfind-any ident [] r ()
+    vfind-any ident (q ∷ qs) r eq = found (ident ≟ id q) eq
+      where
+        found : (d : Dec (ident ≡ id q)) →
+                (if ⌊ d ⌋ then just q else vfind ident qs) ≡ just r →
+                Any (_≡ r) (q ∷ qs)
+        found (yes _) refl = here refl
+        found (no _) eq'   = there (vfind-any ident qs r eq')
+
+    open-of : VRow → VRow
+    open-of q = record q { phase = vopen }
+
+    safe-transport : ∀ δ rs fs rs' fs' q →
+                     vwhile rs' (key q) (openedAt q) (whileOf δ (kind q)) ≡
+                       vwhile rs (key q) (openedAt q) (whileOf δ (kind q)) →
+                     allUntil fs' (key q) (untilOf δ (kind q)) ≡
+                       allUntil fs (key q) (untilOf δ (kind q)) →
+                     VSafe δ rs fs q → VSafe δ rs' fs' q
+    safe-transport δ rs fs rs' fs' q ew eu (tw , tu) =
+      T-not-subst (sym ew) tw , T-subst (sym eu) tu
+
+    safe-open : ∀ δ rs fs q → VSafe δ rs fs q → VSafe δ rs fs (open-of q)
+    safe-open δ rs fs q s = s
+
+    image : ℕ → VRow → VRow
+    image ident q = if ⌊ ident ≟ id q ⌋ then open-of q else q
+
+    image-hit : ∀ ident q → ident ≡ id q → image ident q ≡ open-of q
+    image-hit ident q eq = go (id q) eq refl
+      where
+        go : (n : ℕ) → ident ≡ n → n ≡ id q → image ident q ≡ open-of q
+        go n en eqn rewrite sym eqn | nat-yes ident n en = refl
+
+    image-skip : ∀ ident q → ¬ (ident ≡ id q) → image ident q ≡ q
+    image-skip ident q ¬eq = go (id q) ¬eq refl
+      where
+        go : (n : ℕ) → ¬ (ident ≡ n) → n ≡ id q → image ident q ≡ q
+        go n ¬n en rewrite sym en | nat-no ident n ¬n = refl
+
+    flip-hit : ∀ q qs → flipFirst (id q) (q ∷ qs) ≡ open-of q ∷ qs
+    flip-hit q qs =
+      cong (λ b → if b then open-of q ∷ qs else q ∷ flipFirst (id q) qs)
+           (nat-yes (id q) (id q) refl)
+
+    flip-at : ∀ ident q qs → ident ≡ id q →
+              flipFirst ident (q ∷ qs) ≡ open-of q ∷ qs
+    flip-at ident q qs eq =
+      subst (λ i → flipFirst i (q ∷ qs) ≡ open-of q ∷ qs) (sym eq)
+            (flip-hit q qs)
+
+    plain : ∀ {A : Set} {P : A → Set} (xs : List A) →
+            (∀ x → Any (_≡ x) xs → P x) → Every P xs
+    plain []       f = enone
+    plain (x ∷ xs) f =
+      emore (f x (here refl)) (plain xs (λ y m → f y (there m)))
+
+    -- Dropping the reverted kind's fact leaves every other obligation.
+    facts-kept : ∀ δ rs fs r q →
+                 anyBlock δ r rs ≡ false →
+                 Distinct (vids rs) →
+                 Any (_≡ q) rs →
+                 Any (_≡ r) rs →
+                 oblig (phase q) ≡ true →
+                 allUntil (adjust r rs fs) (key q) (untilOf δ (kind q)) ≡
+                 allUntil fs (key q) (untilOf δ (kind q))
+    facts-kept δ rs fs r q eqb dist mq mr ob with uncover (otherRes r rs)
+    ... | reveal true  eq rewrite eq = refl
+    ... | reveal false eq rewrite eq =
+      all-drop fs (key q) (untilOf δ (kind q)) (key r) (kind r)
+        (until-clear δ rs r q eqb dist mq mr ob)
+
+    keep : ∀ δ rs fs r →
+           anyBlock δ r rs ≡ false →
+           phase r ≡ vres →
+           Distinct (vids rs) →
+           Any (_≡ r) rs →
+           Every (VOk δ rs fs) rs →
+           ∀ q → Any (_≡ q) rs →
+           VOk δ (flipFirst (id r) rs) (adjust r rs fs) (image (id r) q)
+    keep δ rs fs r eqb phr dist mr every q mq with id r ≟ id q
+    ... | yes refl = yes-body
+      where
+        q≡r : q ≡ r
+        q≡r = unique-any dist mq mr refl
+
+        phq : phase q ≡ vres
+        phq = subst (λ row → phase row ≡ vres) (sym q≡r) phr
+
+        obq : oblig (phase q) ≡ true
+        obq = subst (λ ph → oblig ph ≡ true) (sym phq) refl
+
+        ho-r : hitOpen r (key q) (openedAt q) (whileOf δ (kind q)) ≡ false
+        ho-r = window-clear δ rs r q eqb dist mq mr obq
+
+        ho-q : hitOpen q (key q) (openedAt q) (whileOf δ (kind q)) ≡ false
+        ho-q =
+          subst
+            (λ row →
+              hitOpen row (key q) (openedAt q) (whileOf δ (kind q)) ≡ false)
+            (sym q≡r) ho-r
+
+        ew : vwhile (flipFirst (id r) rs) (key q) (openedAt q)
+               (whileOf δ (kind q))
+             ≡ vwhile rs (key q) (openedAt q) (whileOf δ (kind q))
+        ew = vwhile-flip rs q (key q) (openedAt q) (whileOf δ (kind q))
+               phq ho-q dist mq
+
+        eu : allUntil (adjust r rs fs) (key q) (untilOf δ (kind q)) ≡
+             allUntil fs (key q) (untilOf δ (kind q))
+        eu = facts-kept δ rs fs r q eqb dist mq mr obq
+
+        safe-q : VSafe δ (flipFirst (id r) rs) (adjust r rs fs) q
+        safe-q =
+          safe-transport δ rs fs (flipFirst (id r) rs) (adjust r rs fs) q
+            ew eu (elookup every mq obq)
+
+        yes-body : VOk δ (flipFirst (id r) rs) (adjust r rs fs) (open-of q)
+        yes-body = λ _ →
+          safe-open δ (flipFirst (id r) rs) (adjust r rs fs) q safe-q
+    ... | no ¬eq = no-body
+      where
+        no-body : VOk δ (flipFirst (id r) rs) (adjust r rs fs) q
+        no-body = λ ob →
+          let ho = window-clear δ rs r q eqb dist mq mr ob
+              ew = vwhile-flip rs r (key q) (openedAt q) (whileOf δ (kind q))
+                     phr ho dist mr
+              eu = facts-kept δ rs fs r q eqb dist mq mr ob
+          in safe-transport δ rs fs (flipFirst (id r) rs) (adjust r rs fs) q
+               ew eu (elookup every mq ob)
+
+    assemble : ∀ δ new fs' ident qs →
+               Distinct (vids qs) →
+               (∀ q → Any (_≡ q) qs → VOk δ new fs' (image ident q)) →
+               Every (VOk δ new fs') (flipFirst ident qs)
+    assemble δ new fs' ident []       _               f = enone
+    assemble δ new fs' ident (q ∷ qs) (fresh , distt) f = go (id q) refl fresh
+      where
+        go : (n : ℕ) → n ≡ id q → ¬ Any (_≡ n) (vids qs) →
+             Every (VOk δ new fs') (flipFirst ident (q ∷ qs))
+        go n en fr = body (ident ≟ n)
+          where
+            body : Dec (ident ≡ n) →
+                   Every (VOk δ new fs') (flipFirst ident (q ∷ qs))
+            body (yes eq) =
+              subst (Every (VOk δ new fs'))
+                    (sym (flip-at ident q qs (trans eq en)))
+                    (emore as-open (plain qs (λ p mem → kept p mem)))
+              where
+                as-open : VOk δ new fs' (open-of q)
+                as-open =
+                  subst (VOk δ new fs')
+                        (image-hit ident q (trans eq en))
+                        (f q (here refl))
+
+                kept : ∀ p → Any (_≡ p) qs → VOk δ new fs' p
+                kept p mem =
+                  subst (VOk δ new fs') (image-skip ident p ¬hit)
+                        (f p (there mem))
+                  where
+                    ¬hit : ¬ (ident ≡ id p)
+                    ¬hit e =
+                      fr (subst (λ i → Any (_≡ i) (vids qs))
+                           (trans (sym e) eq) (id-mem mem))
+
+            body (no ¬eq) =
+              subst (Every (VOk δ new fs'))
+                    (sym (flip-skip ident q qs ¬same))
+                    (emore skipped
+                       (assemble δ new fs' ident qs distt
+                          (λ p mem → f p (there mem))))
+              where
+                ¬same : ¬ (ident ≡ id q)
+                ¬same e = ¬eq (trans e (sym en))
+
+                skipped : VOk δ new fs' q
+                skipped =
+                  subst (VOk δ new fs') (image-skip ident q ¬same)
+                        (f q (here refl))
+
+    flipped : ∀ δ rs fs r →
+              anyBlock δ r rs ≡ false →
+              phase r ≡ vres →
+              Distinct (vids rs) →
+              Any (_≡ r) rs →
+              Every (VOk δ rs fs) rs →
+              Distinct (vids (flipFirst (id r) rs)) ×
+              Every (VOk δ (flipFirst (id r) rs) (adjust r rs fs))
+                    (flipFirst (id r) rs)
+    flipped δ rs fs r eqb phr dist mr every =
+      subst Distinct (sym (vids-flip (id r) rs)) dist
+      , assemble δ (flipFirst (id r) rs) (adjust r rs fs) (id r) rs dist
+          (λ q mq → keep δ rs fs r eqb phr dist mr every q mq)
+
+    -- A resolved row goes back to open when nothing open or resolved
+    -- behind it still names its kind. The fact goes with the last
+    -- resolved row of that key and kind.
+    revert : Dep → VState → ℕ → VState
+    revert δ s ident with vfind ident (rows s)
+    ... | nothing = s
+    ... | just r with phase r
+    ... | vopen = s
+    ... | vheld = s
+    ... | vres with anyBlock δ r (rows s)
+    ... | true  = s
+    ... | false =
+      record s
+        { rows  = flipFirst (id r) (rows s)
+        ; facts = adjust r (rows s) (facts s)
+        ; tick  = suc (tick s)
+        }
+
+    revert-inv : ∀ δ s ident → VInv δ s → VInv δ (revert δ s ident)
+    revert-inv δ s ident (dist , every) with vfind ident (rows s) in eqf
+    ... | nothing = dist , every
+    ... | just r with phase r in eqp
+    ... | vopen = dist , every
+    ... | vheld = dist , every
+    ... | vres with anyBlock δ r (rows s) in eqb
+    ... | true  = dist , every
+    ... | false =
+      flipped δ (rows s) (facts s) r eqb eqp dist
+        (vfind-any ident (rows s) r eqf) every
+
+    ------------------------------------------------------------------------
+    -- The guard is doing the work. Front (kind 0) has resolved, and so
+    -- has the worker that lists it in `until`. Revert without the block
+    -- test drops the only front fact and leaves the worker resolved.
+    -- The guarded step refuses, because the worker is open or resolved.
+    ------------------------------------------------------------------------
+
+    δ₀ : Dep
+    δ₀ = record
+      { whileOf = λ _ → []
+      ; untilOf = λ { zero → [] ; (suc _) → zero ∷ [] }
+      ; rank    = λ n → n
+      ; while↓  = λ k d ()
+      ; until↓  = λ { zero _ ()
+                    ; (suc _) .zero (here refl) → s≤s z≤n
+                    ; (suc _) _ (there ()) }
+      }
+
+    front : VRow
+    front = record
+      { key = zero ; index = zero ; id = zero ; kind = zero
+      ; phase = vres ; born = zero ; openedAt = zero }
+
+    worker : VRow
+    worker = record
+      { key = zero ; index = suc zero ; id = suc zero ; kind = suc zero
+      ; phase = vres ; born = suc zero ; openedAt = suc zero }
+
+    before : VState
+    before = record
+      { rows = front ∷ worker ∷ []
+      ; facts = (zero , zero) ∷ []
+      ; tick = suc (suc zero)
+      }
+
+    broken : VState
+    broken = record
+      { rows = record front { phase = vopen } ∷ worker ∷ []
+      ; facts = []
+      ; tick = suc (suc (suc zero))
+      }
+
+    -- The same transition as `revert`, with the mirror test omitted.
+    unguarded : Dep → VState → ℕ → VState
+    unguarded δ s ident with vfind ident (rows s)
+    ... | nothing = s
+    ... | just r with phase r
+    ... | vopen = s
+    ... | vheld = s
+    ... | vres =
+      record s
+        { rows  = flipFirst (id r) (rows s)
+        ; facts = adjust r (rows s) (facts s)
+        ; tick  = suc (tick s)
+        }
+
+    ¬zero : ¬ Any (_≡ zero) (suc zero ∷ [])
+    ¬zero (here ())
+    ¬zero (there ())
+
+    ¬one : ¬ Any (_≡ suc zero) []
+    ¬one ()
+
+    before-inv : VInv δ₀ before
+    before-inv =
+      (¬zero , (¬one , tt))
+      , emore (λ _ → tt , tt) (emore (λ _ → tt , tt) enone)
+
+    guarded-keeps : revert δ₀ before zero ≡ before
+    guarded-keeps = refl
+
+    unguarded-eq : unguarded δ₀ before zero ≡ broken
+    unguarded-eq = refl
+
+    unguarded-breaks : ¬ VInv δ₀ broken
+    unguarded-breaks (_ , emore _ (emore wok _)) = proj₂ (wok refl)
