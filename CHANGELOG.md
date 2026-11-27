@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.38
+
+The synthesizer's memory budget measures growth of the walk's process, not `:erlang.memory(:total)`. A parallel ExUnit case, or any other process in the same VM, could take the VM total more than 512 MiB past the start of a walk that itself considered only a few hundred programs, and the walk would stop with `memory budget`. The sample is now `Process.info(self(), :memory)` minus the process total at the start of the walk. The bound is still 512 MiB, still a soft sample of current growth, and the report still names `memory budget`.
+
+### Manual
+
+- Synth: the memory budget samples this process, not the VM total.
+
+### Package
+
+- Version 0.22.38.
+
 ## 0.22.37
 
 The Elixir backend truncates a `Bytes`, `Slice`, or `String` literal once it is longer than 4,096 printable bytes (`inspect/2`'s default `printable_limit`), and a non-printable one after 50 bytes (`limit`). The emitted module then contains `...` and either fails to compile or holds the wrong value. The emitter now passes `limit: :infinity` and `printable_limit: :infinity`. A test emits, compiles, and evaluates 5,000-byte printable and non-printable literals for both `Bytes` and `Slice`.
