@@ -224,7 +224,7 @@ defmodule Muro.IR.Check do
     errors = errors ++ verr ++ layout_agree(fun, "let #{x}", infer(val, env, ctx), lay)
     errors = errors ++ reuse_capture_errors(fun, "let #{x}", g, val, env, lay)
 
-    env1 = Map.put(env, x, %{grade: g, lay: lay})
+    env1 = Map.put(env, x, %{grade: g, lay: lay, arg_grade: arg_grade(val)})
     {bpaths, berr} = check_tm(body, env1, fun, ctx)
     gerr = path_grade_errors(fun.name, x, g, bpaths)
 
@@ -282,7 +282,7 @@ defmodule Muro.IR.Check do
 
     {p1, e1} = check_tm(f, env, fun, ctx)
     {p2, e2} = check_tm(a, env, fun, ctx)
-    {seq(p1, p2), errors ++ e1 ++ e2}
+    {seq(p1, p2), errors ++ e1 ++ e2 ++ appv_errors(fun, f, a, env, ctx)}
   end
 
   defp check_tm({:data, _name, args}, env, fun, ctx) when is_list(args) do
@@ -331,7 +331,7 @@ defmodule Muro.IR.Check do
         do: [],
         else: ["#{fun.name}: unknown stream step #{step}"]
 
-    {ps, es ++ step_err}
+    {ps, es ++ step_err ++ cap_errors(fun, caps, step, env, ctx)}
   end
 
   defp check_tm({:bfold, step, caps, z, s}, env, fun, ctx) do
@@ -343,7 +343,7 @@ defmodule Muro.IR.Check do
         do: [],
         else: ["#{fun.name}: unknown fold step #{step}"]
 
-    {ps, es ++ step_err}
+    {ps, es ++ step_err ++ cap_errors(fun, caps, step, env, ctx)}
   end
 
   defp check_tm(:abort, _env, _fun, _ctx), do: {[{:dead, %{}}], []}
@@ -528,6 +528,8 @@ defmodule Muro.IR.Check do
   defp expected_tags(:wbool, _book), do: ["wtrue", "wfalse"]
   defp expected_tags({:opt, _}, _book), do: ["wsome", "wnone"]
 
+  defp expected_tags(:atom, book), do: expected_tags({:data, "Atom"}, book)
+
   defp expected_tags({:data, "Atom"}, book) do
     case Muro.Ast.atoms(book) do
       [] -> nil
@@ -543,6 +545,71 @@ defmodule Muro.IR.Check do
   end
 
   defp expected_tags(_, _), do: nil
+
+  defp appv_errors(fun, f, a, env, ctx) do
+    flay = infer(f, env, ctx)
+
+    agrees =
+      case flay do
+        {:fn, param_lay, _} ->
+          layout_agree(fun, "application argument", infer(a, env, ctx), param_lay)
+
+        _ ->
+          []
+      end
+
+    caps =
+      case {appv_arg_grade(f, env), flay} do
+        {:reuse, {:fn, param_lay, _}} ->
+          reuse_capture_errors(fun, "application argument", :reuse, a, env, param_lay)
+
+        {:reuse, _} ->
+          reuse_capture_errors(fun, "application argument", :reuse, a, env, :unknown)
+
+        _ ->
+          []
+      end
+
+    agrees ++ caps
+  end
+
+  defp appv_arg_grade({:lam, _, _, g, _}, _env) when g in @live_grades, do: g
+
+  defp appv_arg_grade({:var, x}, env) do
+    case env do
+      %{^x => %{arg_grade: g}} -> g
+      _ -> nil
+    end
+  end
+
+  defp appv_arg_grade(_f, _env), do: nil
+
+  defp arg_grade({:lam, _, _, g, _}) when g in @live_grades, do: g
+  defp arg_grade(_tm), do: nil
+
+  # Fold and stream captures are the leading `:reuse` parameters of the
+  # generated step. A non-Data capture that mentions a linear or affine
+  # variable would be copied, as in a `:reuse` call argument.
+  defp cap_errors(fun, caps, step, env, ctx) do
+    case Map.fetch(ctx.by_name, step) do
+      :error ->
+        []
+
+      {:ok, callee} ->
+        caps
+        |> Enum.zip(callee.params)
+        |> Enum.flat_map(fn {{_n, tm}, p} ->
+          reuse_capture_errors(
+            fun,
+            "capture #{IR.param_name(p)}",
+            IR.param_grade(p),
+            tm,
+            env,
+            IR.param_lay(p)
+          )
+        end)
+    end
+  end
 
   # -- calls and constructors ------------------------------------------
 

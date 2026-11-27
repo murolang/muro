@@ -389,6 +389,89 @@ defmodule Muro.IRShareTest do
 
   defp shared_body(funs, name, opts \\ []), do: body(Muro.IR.Share.funs(funs, opts), name)
 
+  defp find_lam({:lam, name, lay, g, body}) when is_binary(name) and is_atom(g),
+    do: {:lam, name, lay, g, body}
+
+  defp find_lam({:lam, name, lay, body}) when is_binary(name), do: {:lam, name, lay, body}
+  defp find_lam({:let, _, _, _, v, b}), do: find_lam(v) || find_lam(b)
+  defp find_lam(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.find_value(&find_lam/1)
+  defp find_lam(t) when is_list(t), do: Enum.find_value(t, &find_lam/1)
+  defp find_lam(_), do: nil
+
+  defp find_suc_arm({:arm, "suc", names, tm}), do: {:arm, "suc", names, tm}
+  defp find_suc_arm({:let, _, _, _, v, b}), do: find_suc_arm(v) || find_suc_arm(b)
+
+  defp find_suc_arm(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.find_value(&find_suc_arm/1)
+
+  defp find_suc_arm(t) when is_list(t), do: Enum.find_value(t, &find_suc_arm/1)
+  defp find_suc_arm(_), do: nil
+
+  test "inlining freshens a λ binder that shares a parameter name" do
+    # `idwrap` is heavy only because it calls `count`; the caller repeats
+    # that count so Share inlines it, and must freshen the λ so the
+    # parameter `x` cannot be captured as `x_s1` under a still-named `x`.
+    idwrap =
+      run(
+        "idwrap",
+        [{"x", :nat}, {"s", :slice}],
+        add(
+          cnt("s"),
+          {:appv, {:lam, "x", :nat, :affine, {:var, "x"}}, {:var, "x"}}
+        )
+      )
+
+    use =
+      run(
+        "use",
+        [{"n", :nat}, {"s", :slice}],
+        add({:call, "idwrap", [{:var, "n"}, {:var, "s"}]}, cnt("s"))
+      )
+
+    body = shared_body(image([idwrap, use]), "use")
+    assert {:lam, name, :nat, inner} = find_lam(body)
+    assert inner == {:var, name}
+    refute name == "x"
+  end
+
+  test "inlining freshens a typed-match arm binder that shares a parameter name" do
+    idwrap =
+      run(
+        "idwrap",
+        [{"x", :nat}, {"s", :slice}],
+        add(
+          cnt("s"),
+          {:match, {:var, "x"}, :nat,
+           [{:arm, "suc", ["x"], {:var, "x"}}, {:arm, "zero", [], :ze}]}
+        )
+      )
+
+    use =
+      run(
+        "use",
+        [{"n", :nat}, {"s", :slice}],
+        add({:call, "idwrap", [{:var, "n"}, {:var, "s"}]}, cnt("s"))
+      )
+
+    body = shared_body(image([idwrap, use]), "use")
+    assert {:arm, "suc", [name], inner} = find_suc_arm(body)
+    assert inner == {:var, name}
+    refute name == "x"
+  end
+
+  test "Share relaxes an unused linear λ parameter to affine" do
+    fun = %{
+      name: "go",
+      export: true,
+      params: [],
+      ret: {:fn, :nat, :nat},
+      body: {:lam, "n", :nat, :linear, :ze}
+    }
+
+    out = Muro.IR.Share.funs([fun])
+    assert {:lam, "n", :nat, :affine, :ze} = hd(out).body
+  end
+
   test "an arm that aborts is a path: nothing the other arms make is hoisted above it" do
     rep = add(cnt("s"), cnt("s"))
     m = {:match, {:var, "p"}, [{:arm, "yes", [], rep}, {:arm, "no", [], :abort}]}

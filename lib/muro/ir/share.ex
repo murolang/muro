@@ -1136,6 +1136,23 @@ defmodule Muro.IR.Share do
     {:match, rename_tm(scrut, env, ctx), arms}
   end
 
+  defp rename_tm({:match, scrut, lay, arms}, env, ctx)
+       when is_list(arms) and not is_list(lay) do
+    arms =
+      Enum.map(arms, fn {:arm, c, names, tm} ->
+        fs = Enum.map(names, &fresh(&1, ctx))
+        env1 = Enum.zip(names, fs) |> Enum.reduce(env, fn {n, f}, e -> Map.put(e, n, f) end)
+        {:arm, c, fs, rename_tm(tm, env1, ctx)}
+      end)
+
+    {:match, rename_tm(scrut, env, ctx), lay, arms}
+  end
+
+  defp rename_tm({:lam, name, lay, g, body}, env, ctx) when is_binary(name) do
+    f = fresh(name, ctx)
+    {:lam, f, lay, g, rename_tm(body, Map.put(env, name, f), ctx)}
+  end
+
   defp rename_tm(t, env, ctx), do: map_children(t, &rename_tm(&1, env, ctx))
 
   defp fresh(base, ctx) do
@@ -2324,8 +2341,10 @@ defmodule Muro.IR.Share do
   end
 
   defp relax_tm({:lam, name, lay, g, body})
-       when is_binary(name) and g in [:linear, :affine, :reuse],
-       do: {:lam, name, lay, g, relax_tm(body)}
+       when is_binary(name) and g in [:linear, :affine, :reuse] do
+    body = relax_tm(body)
+    {:lam, name, lay, relax_grade(g, name, body), body}
+  end
 
   defp relax_tm(t), do: map_children(t, &relax_tm/1)
 

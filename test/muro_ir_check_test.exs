@@ -574,6 +574,128 @@ defmodule Muro.IRCheckTest do
     assert Enum.any?(errors, &(&1 =~ "unknown constructor nope"))
   end
 
+  test "application arguments agree with the function domain and reuse-capture" do
+    ok =
+      fun(
+        "go",
+        [{"n", :nat, :affine}],
+        :nat,
+        {:appv, {:lam, "x", :nat, :affine, {:var, "x"}}, {:var, "n"}}
+      )
+
+    assert :ok = Check.check([ok], closures: true)
+
+    bad_lay =
+      fun(
+        "go",
+        [{"s", :string, :affine}],
+        :nat,
+        {:appv, {:lam, "x", :nat, :affine, {:var, "x"}}, {:var, "s"}}
+      )
+
+    assert {:error, errors} = Check.check([bad_lay], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "application argument"))
+    assert Enum.any?(errors, &(&1 =~ "expected :nat"))
+
+    # Data at + copies by value, so an affine nat is allowed.
+    data =
+      fun(
+        "go",
+        [{"n", :nat, :affine}],
+        :nat,
+        {:appv, {:lam, "x", :nat, :reuse, {:var, "x"}}, {:var, "n"}}
+      )
+
+    assert :ok = Check.check([data], closures: true)
+
+    capture =
+      fun(
+        "go",
+        [{"y", :nat, :linear}],
+        {:fn, :nat, :nat},
+        {:appv, {:lam, "f", {:fn, :nat, :nat}, :reuse, {:var, "f"}},
+         {:lam, "n", :nat, :affine, {:var, "y"}}}
+      )
+
+    assert {:error, errors} = Check.check([capture], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "uses y as reusable"))
+
+    # A let-bound reuse λ is tracked the same way.
+    bound =
+      fun(
+        "go",
+        [{"y", :nat, :linear}],
+        {:fn, :nat, :nat},
+        {:let, "h", {:fn, {:fn, :nat, :nat}, {:fn, :nat, :nat}}, :affine,
+         {:lam, "f", {:fn, :nat, :nat}, :reuse, {:var, "f"}},
+         {:appv, {:var, "h"}, {:lam, "n", :nat, :affine, {:var, "y"}}}}
+      )
+
+    assert {:error, errors} = Check.check([bound], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "uses y as reusable"))
+  end
+
+  test "a closures atom match is exhaustive against the book's atoms" do
+    book = atom_book()
+
+    missing =
+      fun(
+        "go",
+        [{"a", :atom, :affine}],
+        :nat,
+        {:match, {:var, "a"}, :atom, [{:arm, "hello", [], :ze}]}
+      )
+
+    assert {:error, errors} = Check.check([missing], book: book, closures: true)
+    assert Enum.any?(errors, &(&1 =~ "missing arm(s) world"))
+
+    covered =
+      fun(
+        "go",
+        [{"a", :atom, :affine}],
+        :nat,
+        {:match, {:var, "a"}, :atom, [{:arm, "hello", [], :ze}, {:arm, "world", [], {:su, :ze}}]}
+      )
+
+    assert :ok = Check.check([covered], book: book, closures: true)
+  end
+
+  test "a reuse fold capture may not mention a linear variable" do
+    step =
+      fun(
+        "step0",
+        [
+          {"f", {:fn, :nat, :nat}, :reuse},
+          {"b", :u8, :affine},
+          {"r", :slice, :reuse},
+          {"acc", :u64, :reuse}
+        ],
+        :u64,
+        {:var, "acc"}
+      )
+
+    bad =
+      fun(
+        "go",
+        [{"x", :nat, :linear}, {"s", :slice, :reuse}],
+        :u64,
+        {:bfold, "step0", [{"f", {:lam, "n", :nat, :affine, {:var, "x"}}}], wrd(0), {:var, "s"}}
+      )
+
+    assert {:error, errors} = Check.check([bad, step], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "uses x as reusable"))
+
+    ok =
+      fun(
+        "go",
+        [{"s", :slice, :reuse}],
+        :u64,
+        {:bfold, "step0", [{"f", {:lam, "n", :nat, :affine, :ze}}], wrd(0), {:var, "s"}}
+      )
+
+    assert :ok = Check.check([ok, step], closures: true)
+  end
+
   test "corpus elaborations and Share images check" do
     {ok, skipped, failures} =
       Enum.reduce(corpus_paths(), {0, 0, []}, fn path, {ok, skipped, failures} ->
@@ -634,6 +756,13 @@ defmodule Muro.IRCheckTest do
   defp reuse_let?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&reuse_let?/1)
   defp reuse_let?(t) when is_list(t), do: Enum.any?(t, &reuse_let?/1)
   defp reuse_let?(_), do: false
+
+  defp atom_book do
+    [
+      %{name: "hello", type: :atom, body: {:atom, "hello"}},
+      %{name: "world", type: :atom, body: {:atom, "world"}}
+    ]
+  end
 
   defp reuse_fn_box_book do
     [
