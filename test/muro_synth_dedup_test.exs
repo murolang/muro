@@ -3,9 +3,8 @@ defmodule Muro.SynthDedupTest do
 
   alias Muro.Synth
 
-  # `Muro.check_file/1` and `cegis_loop/2` raise `:erlang.memory(:total)`.
-  # Parallel `enumerate_sized/6` walks in other async tests measure that
-  # total against a 512 MiB growth bound, so these stay in this module.
+  # `Muro.check_file/1` and `cegis_loop/2` are heavier than a unit walk,
+  # so these stay in this non-async module.
 
   test "a duplicate stem column stays in the family and otherp reads it" do
     path = "test/fixtures/synth_quant_dup.muro"

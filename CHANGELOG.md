@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.38
+## 0.22.39
 
 `Muro.IR` now carries a live grade (`:linear`, `:affine`, or `:reuse`) on every parameter and `let`, taken from `Muro.Grade.kernel_qty/1`. A binder whose quantity is erased (`:erased`, or a grade pair whose compute grade is 0) is dropped and does not appear as a live parameter. `Muro.IR.Share` preserves those grades through CSE, inlining, and known-scrutinee pruning: a hoisted let is `:reuse`, and `relax_fun/1` downgrades an unused `:linear` binder (a body let, or a parameter whose only use was a dropped let after inlining or a prune) to `:affine`. `Muro.IR.Check` treats `:abort` as bottom for path-grade joins, so a linear binder used on every live arm still checks after Share rewrites a dead arm to `:abort`; uses that already happened on that path still count. Match-arm field grades come from the constructor telescope and fold-step parameters from `peel_fold`, so a linear or affine field or fold binder is accounted. Closures charge captures at formation, as in `Muro.Grade`; a `:reuse` binding, argument, or constructor field may not mention a linear or affine variable. `letp` binders are `:affine`. A `suc` or `wsome` predecessor takes `pred_qty` from the scrutinee (`:reuse` under a `:reuse` variable). Without a book, constructor field grades are not defaulted to `:reuse`. Closures applications check the argument layout and reuse-capture; atom matches are exhaustive on `:atom`; Share freshens λ and typed-match binders, relaxes unused linear λ parameters, and Check guards reuse fold/stream captures. The C, Rust, Zig, JavaScript, and assembly emitters ignore the grade, so emitted bytes are unchanged.
 
@@ -9,6 +9,18 @@
 ### Manual
 
 - Extending: a live parameter is `{name, layout, grade}` and a let is `{:let, name, layout, grade, val, body}`. `Muro.IR.Check` is the checker for that image.
+
+### Package
+
+- Version 0.22.39.
+
+## 0.22.38
+
+The synthesizer's memory budget measures growth of the walk's process, not `:erlang.memory(:total)`. A parallel ExUnit case, or any other process in the same VM, could take the VM total more than 512 MiB past the start of a walk that itself considered only a few hundred programs, and the walk would stop with `memory budget`. The sample is now `Process.info(self(), :memory)` minus the process total at the start of the walk. The bound is still 512 MiB, still a soft sample of current growth, and the report still names `memory budget`.
+
+### Manual
+
+- Synth: the memory budget samples this process, not the VM total.
 
 ### Package
 
@@ -166,7 +178,6 @@ Generated synthesis books no longer use fixed binders that can shadow an environ
 ### Package
 
 - Version 0.22.28.
-
 
 ## 0.22.27
 
