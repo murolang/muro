@@ -4,7 +4,7 @@ defmodule Muro.EmitInspectTest do
   # Elixir's inspect/2 defaults: printable_limit 4096, limit 50 (non-printable).
   @len 5000
 
-  test "Elixir emits a Bytes or Slice literal past inspect's limits" do
+  test "Elixir emits a Bytes, Slice, or String literal past inspect's limits" do
     ascii = String.duplicate("a", @len)
     raw = binary_part(:binary.copy(<<0, 1, 2, 255>>, div(@len, 4) + 1), 0, @len)
 

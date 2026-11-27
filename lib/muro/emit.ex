@@ -214,7 +214,7 @@ defmodule Muro.Emit do
     except =
       case kernel_clashes(runs, names) do
         [] -> ""
-        clashes -> "import Kernel, except: #{inspect(clashes)}\n"
+        clashes -> "import Kernel, except: #{inspect(clashes, limit: :infinity)}\n"
       end
 
     String.trim(except <> "\n" <> funs)
@@ -315,7 +315,7 @@ defmodule Muro.Emit do
     except =
       case kernel_clashes(runs, names) do
         [] -> ""
-        clashes -> "  import Kernel, except: #{inspect(clashes)}\n"
+        clashes -> "  import Kernel, except: #{inspect(clashes, limit: :infinity)}\n"
       end
 
     source = """
@@ -605,7 +605,7 @@ defmodule Muro.Emit do
   defp emit_db({:word, op, args}, d, book, names), do: emit_word(op, args, d, book, names)
 
   defp emit_db({:slit, bin}, _, _book, _names) when is_binary(bin),
-    do: inspect(bin, limit: :infinity, printable_limit: :infinity)
+    do: inspect_full(bin)
 
   defp emit_db({:scat, a, b}, d, book, names) do
     "(#{emit_db(a, d, book, names)}) <> (#{emit_db(b, d, book, names)})"
@@ -620,7 +620,7 @@ defmodule Muro.Emit do
   end
 
   defp emit_db({:blit, bin}, _, _book, _names) when is_binary(bin),
-    do: inspect(bin, limit: :infinity, printable_limit: :infinity)
+    do: inspect_full(bin)
 
   defp emit_db({:bcat, a, b}, d, book, names) do
     "(#{emit_db(a, d, book, names)}) <> (#{emit_db(b, d, book, names)})"
@@ -677,6 +677,8 @@ defmodule Muro.Emit do
     {_, _, body} = Enum.find(bs, fn {n, _, _} -> n == name end)
     body
   end
+
+  defp inspect_full(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
 
   defp byte_size_of(s), do: "byte_size(#{s})"
   defp bytes_eq(a, b), do: "(#{a}) == (#{b})"
