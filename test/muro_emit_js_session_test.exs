@@ -247,6 +247,30 @@ defmodule Muro.EmitJSSessionTest do
     assert reason =~ "function and function_k spell one JavaScript identifier"
   end
 
+  test "a seen of a choreography is a JavaScript stepper" do
+    for {path, names} <- [
+          {"examples/two-phase-commit.muro", ~w(ca ac cb bc ab ba)},
+          {"examples/release-plan.muro", ~w(rf rw)}
+        ] do
+      book = book!(path)
+      assert {:ok, image} = Emit.Fsm.image(book, path, [])
+      assert Enum.map(image.sessions, & &1.name) == names
+      assert {:ok, source, types} = Emit.JS.render(book, stem(path), path: path)
+      assert source =~ "export function kept("
+      assert Map.keys(session_exports(source)) |> Enum.sort() == Enum.sort(names)
+
+      for name <- names do
+        assert types =~ "export const #{name}: SessionStepper;"
+      end
+    end
+  end
+
+  @tag skip: @node_skip
+  test "a seen of a choreography follows the fsm trace in JavaScript" do
+    differ!("examples/two-phase-commit.muro")
+    differ!("examples/release-plan.muro")
+  end
+
   @tag skip: @node_skip
   test "meet steppers follow the fsm trace and keep the run" do
     path = "examples/meet.muro"

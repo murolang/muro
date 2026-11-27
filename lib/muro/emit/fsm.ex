@@ -72,7 +72,9 @@ defmodule Muro.Emit.Fsm do
 
   @doc false
   def image(book, path, opts \\ []) when is_list(book) do
-    case plan(book, path, opts) do
+    # Session images only: a choreography's monitor is not a session, so
+    # its planning does not decide whether the sessions have an image.
+    case plan_sessions(book, path, opts) do
       {:ok, %{sessions: []} = st} ->
         {:error, "#{st.label} has no session to emit"}
 
@@ -2887,6 +2889,7 @@ defmodule Muro.Emit.Fsm do
       case muro_fsm_g_prep(key, state) do
         {:ok, {:end, _}} -> :ok
         {:ok, g} -> {:error, {index, {:incomplete, elem(g, 1), muro_fsm_g_expect(g)}}}
+        :bad -> {:error, {index, {:incomplete, muro_fsm_g_end(key), :done}}}
       end
     end
 

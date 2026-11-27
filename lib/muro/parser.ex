@@ -911,7 +911,8 @@ defmodule Muro.Parser do
         end
 
       true ->
-        {:error, err(s, "expected send or recv")}
+        {:error,
+         err(s, "expected send or recv, or a choreography move a -> b : label or p chooses label")}
     end
   end
 

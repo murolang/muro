@@ -313,6 +313,29 @@ defmodule Muro.ChoreoFsmTest do
       assert monitor.done?(s)
     end
 
+    test "a session image does not depend on planning a choreography" do
+      {:ok, book} =
+        Parser.parse("""
+        choreography plan
+          roles a, a
+          a -> a : go
+
+        session ping := recv Nat end
+        """)
+
+      book = Muro.Prelude.for_emit(book)
+      assert {:ok, image} = Muro.Emit.Fsm.image(book, "split.muro", [])
+      assert Enum.map(image.sessions, & &1.name) == ["ping"]
+      assert {:error, _} = Muro.Emit.Fsm.render(book, "split.muro", ChoreoFsmTSplit)
+    end
+
+    test "a malformed choreography move names both move forms" do
+      assert {:error, msg} = Parser.parse("prefix p : plan :=\n  a front : go\n")
+
+      assert msg ==
+               "2:3: expected send or recv, or a choreography move a -> b : label or p chooses label"
+    end
+
     test "two roles that reach one atom are refused, naming both" do
       text = """
       choreography deploy

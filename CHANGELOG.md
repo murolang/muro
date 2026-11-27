@@ -14,6 +14,8 @@ A role and a choice label are atoms in the monitor, so two roles of one choreogr
 
 - `test/muro_choreo_fsm_test.exs`: role and choice-label spelling clashes, the release-plan monitor, `check_trace` (prefix, complete, a non-list trace), projections as session children, payloads and choices, bad states, a choreography-only book, a book with no choreography, alias and atom spelling, two-phase commit, the outline, and the prefix judgment (empty, partial, whole, choices, out of order, wrong label, payload, role, and choice, past the end, a session move, a position, `Muro.Choreo.prefix/3`).
 - `test/muro_emit_c_session_test.exs`: `two-phase-commit.muro` and `release-plan.muro` emit as state machines and C session images.
+- `test/muro_emit_js_session_test.exs`: the `seen` sessions of `two-phase-commit.muro` and `release-plan.muro` are JavaScript steppers, and they follow the state machine's trace.
+- `test/muro_emit_reserve_test.exs`: the monitor's `muro_fsm_g_done?` and `muro_fsm_g_node?` helpers are host names a run cannot take.
 - `test/fixtures/emit-examples.digest`: `release-plan.muro`, and the session images of `two-phase-commit.muro`.
 
 ### Manual
