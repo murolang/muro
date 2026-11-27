@@ -1,0 +1,232 @@
+-- ir_eval_ops.muro — one run per word, string, and bytes operation.
+-- test/muro_ir_diff_test.exs applies each run to the edge values of
+-- its argument kinds and compares Muro.Check.normalize/3 with
+-- Muro.IR.Eval on the default, shared, and closure images.
+import "std:maybe.muro"
+
+def addiu8 : run Π (x : U8) → Π (y : U8) → U8 := λ (x : U8) → λ (y : U8) → addi x y
+
+def subiu8 : run Π (x : U8) → Π (y : U8) → U8 := λ (x : U8) → λ (y : U8) → subi x y
+
+def muliu8 : run Π (x : U8) → Π (y : U8) → U8 := λ (x : U8) → λ (y : U8) → muli x y
+
+def andiu8 : run Π (x : U8) → Π (y : U8) → U8 := λ (x : U8) → λ (y : U8) → andi x y
+
+def oriu8 : run Π (x : U8) → Π (y : U8) → U8 := λ (x : U8) → λ (y : U8) → ori x y
+
+def xoriu8 : run Π (x : U8) → Π (y : U8) → U8 := λ (x : U8) → λ (y : U8) → xori x y
+
+def addcu8 : run Π (x : U8) → Π (y : U8) → Opt U8 := λ (x : U8) → λ (y : U8) → addc x y
+
+def subcu8 : run Π (x : U8) → Π (y : U8) → Opt U8 := λ (x : U8) → λ (y : U8) → subc x y
+
+def mulcu8 : run Π (x : U8) → Π (y : U8) → Opt U8 := λ (x : U8) → λ (y : U8) → mulc x y
+
+def diviu8 : run Π (x : U8) → Π (y : U8) → Opt U8 := λ (x : U8) → λ (y : U8) → divi x y
+
+def remiu8 : run Π (x : U8) → Π (y : U8) → Opt U8 := λ (x : U8) → λ (y : U8) → remi x y
+
+def eqiu8 : run Π (x : U8) → Π (y : U8) → WBool := λ (x : U8) → λ (y : U8) → eqi x y
+
+def ltiu8 : run Π (x : U8) → Π (y : U8) → WBool := λ (x : U8) → λ (y : U8) → lti x y
+
+def leiu8 : run Π (x : U8) → Π (y : U8) → WBool := λ (x : U8) → λ (y : U8) → lei x y
+
+def notiu8 : run Π (x : U8) → U8 := λ (x : U8) → noti x
+
+def shliu8 : run Π (x : U8) → Π (n : Nat) → U8 := λ (x : U8) → λ (n : Nat) → shli x n
+
+def shriu8 : run Π (x : U8) → Π (n : Nat) → U8 := λ (x : U8) → λ (n : Nat) → shri x n
+
+def ofu8 : run Π (n : Nat) → U8 := λ (n : Nat) → toU8 n
+
+def tonu8 : run Π (x : U8) → Nat := λ (x : U8) → toNat x
+
+def asu8ofu8 : run Π (x : U8) → U8 := λ (x : U8) → asU8 x
+
+def asu32ofu8 : run Π (x : U8) → U32 := λ (x : U8) → asU32 x
+
+def asu64ofu8 : run Π (x : U8) → U64 := λ (x : U8) → asU64 x
+
+def asi64ofu8 : run Π (x : U8) → I64 := λ (x : U8) → asI64 x
+
+def addiu32 : run Π (x : U32) → Π (y : U32) → U32 := λ (x : U32) → λ (y : U32) → addi x y
+
+def subiu32 : run Π (x : U32) → Π (y : U32) → U32 := λ (x : U32) → λ (y : U32) → subi x y
+
+def muliu32 : run Π (x : U32) → Π (y : U32) → U32 := λ (x : U32) → λ (y : U32) → muli x y
+
+def andiu32 : run Π (x : U32) → Π (y : U32) → U32 := λ (x : U32) → λ (y : U32) → andi x y
+
+def oriu32 : run Π (x : U32) → Π (y : U32) → U32 := λ (x : U32) → λ (y : U32) → ori x y
+
+def xoriu32 : run Π (x : U32) → Π (y : U32) → U32 := λ (x : U32) → λ (y : U32) → xori x y
+
+def addcu32 : run Π (x : U32) → Π (y : U32) → Opt U32 := λ (x : U32) → λ (y : U32) → addc x y
+
+def subcu32 : run Π (x : U32) → Π (y : U32) → Opt U32 := λ (x : U32) → λ (y : U32) → subc x y
+
+def mulcu32 : run Π (x : U32) → Π (y : U32) → Opt U32 := λ (x : U32) → λ (y : U32) → mulc x y
+
+def diviu32 : run Π (x : U32) → Π (y : U32) → Opt U32 := λ (x : U32) → λ (y : U32) → divi x y
+
+def remiu32 : run Π (x : U32) → Π (y : U32) → Opt U32 := λ (x : U32) → λ (y : U32) → remi x y
+
+def eqiu32 : run Π (x : U32) → Π (y : U32) → WBool := λ (x : U32) → λ (y : U32) → eqi x y
+
+def ltiu32 : run Π (x : U32) → Π (y : U32) → WBool := λ (x : U32) → λ (y : U32) → lti x y
+
+def leiu32 : run Π (x : U32) → Π (y : U32) → WBool := λ (x : U32) → λ (y : U32) → lei x y
+
+def notiu32 : run Π (x : U32) → U32 := λ (x : U32) → noti x
+
+def shliu32 : run Π (x : U32) → Π (n : Nat) → U32 := λ (x : U32) → λ (n : Nat) → shli x n
+
+def shriu32 : run Π (x : U32) → Π (n : Nat) → U32 := λ (x : U32) → λ (n : Nat) → shri x n
+
+def ofu32 : run Π (n : Nat) → U32 := λ (n : Nat) → toU32 n
+
+def tonu32 : run Π (x : U32) → Nat := λ (x : U32) → toNat x
+
+def asu8ofu32 : run Π (x : U32) → U8 := λ (x : U32) → asU8 x
+
+def asu32ofu32 : run Π (x : U32) → U32 := λ (x : U32) → asU32 x
+
+def asu64ofu32 : run Π (x : U32) → U64 := λ (x : U32) → asU64 x
+
+def asi64ofu32 : run Π (x : U32) → I64 := λ (x : U32) → asI64 x
+
+def addiu64 : run Π (x : U64) → Π (y : U64) → U64 := λ (x : U64) → λ (y : U64) → addi x y
+
+def subiu64 : run Π (x : U64) → Π (y : U64) → U64 := λ (x : U64) → λ (y : U64) → subi x y
+
+def muliu64 : run Π (x : U64) → Π (y : U64) → U64 := λ (x : U64) → λ (y : U64) → muli x y
+
+def andiu64 : run Π (x : U64) → Π (y : U64) → U64 := λ (x : U64) → λ (y : U64) → andi x y
+
+def oriu64 : run Π (x : U64) → Π (y : U64) → U64 := λ (x : U64) → λ (y : U64) → ori x y
+
+def xoriu64 : run Π (x : U64) → Π (y : U64) → U64 := λ (x : U64) → λ (y : U64) → xori x y
+
+def addcu64 : run Π (x : U64) → Π (y : U64) → Opt U64 := λ (x : U64) → λ (y : U64) → addc x y
+
+def subcu64 : run Π (x : U64) → Π (y : U64) → Opt U64 := λ (x : U64) → λ (y : U64) → subc x y
+
+def mulcu64 : run Π (x : U64) → Π (y : U64) → Opt U64 := λ (x : U64) → λ (y : U64) → mulc x y
+
+def diviu64 : run Π (x : U64) → Π (y : U64) → Opt U64 := λ (x : U64) → λ (y : U64) → divi x y
+
+def remiu64 : run Π (x : U64) → Π (y : U64) → Opt U64 := λ (x : U64) → λ (y : U64) → remi x y
+
+def eqiu64 : run Π (x : U64) → Π (y : U64) → WBool := λ (x : U64) → λ (y : U64) → eqi x y
+
+def ltiu64 : run Π (x : U64) → Π (y : U64) → WBool := λ (x : U64) → λ (y : U64) → lti x y
+
+def leiu64 : run Π (x : U64) → Π (y : U64) → WBool := λ (x : U64) → λ (y : U64) → lei x y
+
+def notiu64 : run Π (x : U64) → U64 := λ (x : U64) → noti x
+
+def shliu64 : run Π (x : U64) → Π (n : Nat) → U64 := λ (x : U64) → λ (n : Nat) → shli x n
+
+def shriu64 : run Π (x : U64) → Π (n : Nat) → U64 := λ (x : U64) → λ (n : Nat) → shri x n
+
+def ofu64 : run Π (n : Nat) → U64 := λ (n : Nat) → toU64 n
+
+def tonu64 : run Π (x : U64) → Nat := λ (x : U64) → toNat x
+
+def asu8ofu64 : run Π (x : U64) → U8 := λ (x : U64) → asU8 x
+
+def asu32ofu64 : run Π (x : U64) → U32 := λ (x : U64) → asU32 x
+
+def asu64ofu64 : run Π (x : U64) → U64 := λ (x : U64) → asU64 x
+
+def asi64ofu64 : run Π (x : U64) → I64 := λ (x : U64) → asI64 x
+
+def addii64 : run Π (x : I64) → Π (y : I64) → I64 := λ (x : I64) → λ (y : I64) → addi x y
+
+def subii64 : run Π (x : I64) → Π (y : I64) → I64 := λ (x : I64) → λ (y : I64) → subi x y
+
+def mulii64 : run Π (x : I64) → Π (y : I64) → I64 := λ (x : I64) → λ (y : I64) → muli x y
+
+def andii64 : run Π (x : I64) → Π (y : I64) → I64 := λ (x : I64) → λ (y : I64) → andi x y
+
+def orii64 : run Π (x : I64) → Π (y : I64) → I64 := λ (x : I64) → λ (y : I64) → ori x y
+
+def xorii64 : run Π (x : I64) → Π (y : I64) → I64 := λ (x : I64) → λ (y : I64) → xori x y
+
+def addci64 : run Π (x : I64) → Π (y : I64) → Opt I64 := λ (x : I64) → λ (y : I64) → addc x y
+
+def subci64 : run Π (x : I64) → Π (y : I64) → Opt I64 := λ (x : I64) → λ (y : I64) → subc x y
+
+def mulci64 : run Π (x : I64) → Π (y : I64) → Opt I64 := λ (x : I64) → λ (y : I64) → mulc x y
+
+def divii64 : run Π (x : I64) → Π (y : I64) → Opt I64 := λ (x : I64) → λ (y : I64) → divi x y
+
+def remii64 : run Π (x : I64) → Π (y : I64) → Opt I64 := λ (x : I64) → λ (y : I64) → remi x y
+
+def eqii64 : run Π (x : I64) → Π (y : I64) → WBool := λ (x : I64) → λ (y : I64) → eqi x y
+
+def ltii64 : run Π (x : I64) → Π (y : I64) → WBool := λ (x : I64) → λ (y : I64) → lti x y
+
+def leii64 : run Π (x : I64) → Π (y : I64) → WBool := λ (x : I64) → λ (y : I64) → lei x y
+
+def notii64 : run Π (x : I64) → I64 := λ (x : I64) → noti x
+
+def shlii64 : run Π (x : I64) → Π (n : Nat) → I64 := λ (x : I64) → λ (n : Nat) → shli x n
+
+def shrii64 : run Π (x : I64) → Π (n : Nat) → I64 := λ (x : I64) → λ (n : Nat) → shri x n
+
+def ofi64 : run Π (n : Nat) → I64 := λ (n : Nat) → toI64 n
+
+def toni64 : run Π (x : I64) → Nat := λ (x : I64) → toNat x
+
+def asu8ofi64 : run Π (x : I64) → U8 := λ (x : I64) → asU8 x
+
+def asu32ofi64 : run Π (x : I64) → U32 := λ (x : I64) → asU32 x
+
+def asu64ofi64 : run Π (x : I64) → U64 := λ (x : I64) → asU64 x
+
+def asi64ofi64 : run Π (x : I64) → I64 := λ (x : I64) → asI64 x
+
+def scat : run Π (a : String) → Π (b : String) → String := λ (a : String) → λ (b : String) → strCat a b
+
+def slen : run Π (a : String) → Nat := λ (a : String) → strLen a
+
+def seq : run Π (a : String) → Π (b : String) → WBool := λ (a : String) → λ (b : String) → strEq a b
+
+def sbytes : run Π (a : String) → Bytes := λ (a : String) → strBytes a
+
+def bcat : run Π (a : Bytes) → Π (b : Bytes) → Bytes := λ (a : Bytes) → λ (b : Bytes) → bytesCat a b
+
+def blen : run Π (a : Slice) → U64 := λ (a : Slice) → sliceLen a
+
+def beq : run Π (a : Slice) → Π (b : Slice) → WBool := λ (a : Slice) → λ (b : Slice) → sliceEq a b
+
+def bsub : run Π (s : Slice) → Π (o : U64) → Π (n : U64) → Slice := λ (s : Slice) → λ (o : U64) → λ (n : U64) → slice s o n
+
+def bget : run Π (s : Slice) → Π (i : U64) → Opt U8 := λ (s : Slice) → λ (i : U64) → sliceGet s i
+
+def bunc : run Π (s : Slice) → Maybe (U8 × Slice) := λ (s : Slice) → sliceUncons s
+
+def btil : run Π (s : Slice) → Π (b : U8) → Slice := λ (s : Slice) → λ (b : U8) → sliceUntil s b
+
+def baft : run Π (s : Slice) → Π (b : U8) → Slice := λ (s : Slice) → λ (b : U8) → sliceAfter s b
+
+def bsum : run Π (s : Slice) → U64 :=
+  λ (s : Slice) → sliceFold U64 (toU64 0) (λ (b : U8) → λ (rest : Slice) → λ (n : U64) → addi (muli n (toU64 31)) (asU64 b)) s
+
+def bcount : run Π (s : Slice) → Π (c : U8) → U64 :=
+  λ (s : Slice) → λ (c : U8) →
+    sliceFold U64 (toU64 0) (λ (b : U8) → λ (rest : Slice) → λ (n : U64) →
+      match (eqi b c) motive (λ _ → U64)
+        | wtrue => addi n (sliceLen rest)
+        | wfalse => n) s
+
+def unwrap : run Π (o : Opt U64) → Π (d : U64) → U64 :=
+  λ (o : Opt U64) → λ (d : U64) →
+    match o motive (λ _ → U64)
+      | wsome x => x
+      | wnone => d
+
+def swap : run Π (p : U8 × String) → String × U8 :=
+  λ (p : U8 × String) → let (a, b) = p in (b, a)

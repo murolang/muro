@@ -1,0 +1,1740 @@
+-- Pinned from doctorcorral/muro-http priv/muro/http/request.muro at 1050ea3 for
+-- test/muro_ir_http_diff_test.exs. Evidence definitions are removed;
+-- every run and data declaration is verbatim.
+-- Request classifier over a host receive buffer.
+--
+-- The buffer is a Slice of the request line, the headers, and whatever
+-- body bytes have arrived. Views are sub-slices of that buffer.
+-- A byte or word test is match on WBool (eqi, lti, sliceEq). A byte
+-- read is match on Opt (sliceGet). Those matches allocate nothing.
+-- methodView, targetView, pathView, and versionView are only
+-- sliceUntil / sliceAfter / slice.
+--
+-- The header scan carries one unboxed HSt, nine machine words passed
+-- by value. The fold rebuilds that product when a colon or a line end
+-- changes phase, flags, or a mark, and returns the same value on an
+-- ordinary byte. Neither allocates.
+-- The byte index is the buffer length minus the unconsumed tail.
+-- classify reads that one scan. Loops over a slice are sliceFold of a
+-- machine word, not toNat.
+--
+-- The scan is app-agnostic. It does not name a route. Method, target,
+-- path, query, version, header values, and the body are views.
+-- HTTP/1.1 needs one Host header. A second Host is malformed on any
+-- version. HTTP/1.0 may omit Host. A body declared longer than 16384
+-- is not buffered here: the host streams it. Chunked bodies are a
+-- separate scan. Transfer-Encoding together with Content-Length is
+-- malformed.
+import "std:bool.muro"
+
+data Status : Type where
+  status-ok : Status
+  status-malformed : Status
+  status-need-more : Status
+  status-unimplemented : Status
+
+data Keep : Type where
+  keep-yes : Keep
+  keep-no : Keep
+
+data Classified : Type where
+  classified : Status → Keep → Classified
+
+unboxed data HSt : Type where
+  hst : Π (+ a : U64) → Π (+ b : U64) → Π (+ c : U64) → Π (+ d : U64) → Π (+ e : U64) → Π (+ f : U64) → Π (+ g : U64) → Π (+ h : U64) → Π (+ i : U64) → HSt
+
+-- A second unboxed walk. ph is 0 on the request line, 1 in the
+-- headers, and 3 after the blank line. col is the colon index, or 0
+-- when the line has no colon. n counts headers. a0 and a1 are the
+-- selected span. hit is 1 when that span was stored.
+unboxed data Hd : Type where
+  hd : Π (+ ph : U64) → Π (+ n : U64) → Π (+ ls : U64) → Π (+ col : U64) → Π (+ a0 : U64) → Π (+ a1 : U64) → Π (+ hit : U64) → Hd
+
+-- i, lineStart, phase, flags, content-length, hostCount, unused, which, mark
+
+def u8nil : run Π (b : U8) → Bool :=
+  λ (b : U8) →
+    match (eqi b (toU8 0)) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+
+def u8eq : run Π (x : U8) → Π (y : U8) → Bool :=
+  λ (x : U8) → λ (y : U8) →
+    match (eqi x y) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+
+def u8lt : run Π (x : U8) → Π (y : U8) → Bool :=
+  λ (x : U8) → λ (y : U8) →
+    match (lti x y) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+
+def u64eq : run Π (x : U64) → Π (y : U64) → Bool :=
+  λ (x : U64) → λ (y : U64) →
+    match (eqi x y) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+
+def u64nil : run Π (n : U64) → Bool :=
+  λ (n : U64) → u64eq n (toU64 0)
+
+def u64lt : run Π (x : U64) → Π (y : U64) → Bool :=
+  λ (x : U64) → λ (y : U64) →
+    match (lti x y) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+
+-- True when n > 16384. A header block of 16384 is still legal.
+-- A declared body longer than this is streamed, not rejected.
+def gt16384 : run Π (n : U64) → Bool :=
+  λ (n : U64) → u64lt (toU64 16384) n
+
+-- floor((2^64-1)/10). A larger accumulator cannot take another digit.
+def clLim : run U64 :=
+  toU64 1844674407370955161
+
+-- floor((2^64-1)/16). A larger hex accumulator cannot take another digit.
+def hexLim : run U64 :=
+  toU64 1152921504606846975
+
+def byteAt : run Π (+ s : Slice) → Π (i : U64) → U8 :=
+  λ (+ s : Slice) → λ (i : U64) →
+    match (sliceGet s i) motive (λ _ → U8)
+      | wsome b => b
+      | wnone => toU8 0
+
+def methodView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    sliceUntil (sliceUntil s (toU8 10)) (toU8 32)
+
+def targetView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    sliceUntil (sliceAfter (sliceUntil s (toU8 10)) (toU8 32)) (toU8 32)
+
+def pathView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    sliceUntil (targetView s) (toU8 63)
+
+-- Bytes after `?`. Empty when the target has no query.
+def queryView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    sliceAfter (targetView s) (toU8 63)
+
+def versionView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    slice (sliceAfter (sliceAfter (sliceUntil s (toU8 10)) (toU8 32)) (toU8 32)) (toU64 0) (toU64 8)
+
+def isEmpty : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → u64eq (sliceLen s) (toU64 0)
+
+def crFlag : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (sliceGet s (subi (sliceLen s) (toU64 1))) motive (λ _ → U64)
+      | wsome b =>
+          (match (eqi b (toU8 13)) motive (λ _ → U64)
+            | wtrue => toU64 1
+            | wfalse => toU64 0)
+      | wnone => toU64 0
+
+def dropCR : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    match (sliceGet s (subi (sliceLen s) (toU64 1))) motive (λ _ → Slice)
+      | wsome b =>
+          (match (eqi b (toU8 13)) motive (λ _ → Slice)
+            | wtrue => slice s (toU64 0) (subi (sliceLen s) (toU64 1))
+            | wfalse => s)
+      | wnone => s
+
+def lineOf : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) → dropCR (sliceUntil s (toU8 10))
+
+def versionTok : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    sliceAfter (sliceAfter (lineOf s) (toU8 32)) (toU8 32)
+
+def lower : run Π (+ b : U8) → U8 :=
+  λ (+ b : U8) →
+    match (and (not (u8lt b (toU8 65))) (not (u8lt (toU8 90) b))) motive (λ _ → U8)
+      | true => addi b (toU8 32)
+      | false => b
+
+def spanEq : run Π (+ s : Slice) → Π (+ w : Slice) → Bool :=
+  λ (+ s : Slice) → λ (+ w : Slice) →
+    match (sliceEq s w) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+-- Index of the byte whose unconsumed tail is rest. sliceFold hands
+-- the step that tail, so the scan does not store a moving index.
+def byteIndex : run Π (+ s : Slice) → Π (+ rest : Slice) → U64 :=
+  λ (+ s : Slice) → λ (+ rest : Slice) →
+    subi (sliceLen s) (addi (sliceLen rest) (toU64 1))
+
+-- The fold binder is affine, so the comparison lives in a helper that
+-- may read the accumulator again after the test.
+def nameStep : run Π (s : Slice) → Π (w : Slice) → Π (b : U8) → Π (r : Slice) → Π (+ acc : U64) → U64 :=
+  λ (s : Slice) → λ (w : Slice) → λ (b : U8) → λ (r : Slice) → λ (+ acc : U64) →
+    match (u64nil acc) motive (λ _ → U64)
+      | true =>
+          (match (u8eq (lower b) (lower (byteAt w (byteIndex s r)))) motive (λ _ → U64)
+            | true => toU64 0
+            | false => toU64 1)
+      | false => acc
+
+def nameFold : run Π (+ s : Slice) → Π (+ w : Slice) → U64 :=
+  λ (+ s : Slice) → λ (+ w : Slice) →
+    sliceFold U64 (toU64 0)
+      (λ (b : U8) → λ (r : Slice) → λ (acc : U64) → nameStep s w b r acc)
+      s
+
+def nameEq : run Π (+ s : Slice) → Π (+ w : Slice) → Bool :=
+  λ (+ s : Slice) → λ (+ w : Slice) →
+    match (u64eq (sliceLen s) (sliceLen w)) motive (λ _ → Bool)
+      | true => u64nil (nameFold s w)
+      | false => false
+
+-- Comma-separated list of tokens (RFC 9110). OWS and comma separate.
+-- A match is one whole token, compared without regard to ASCII case.
+-- A longer token does not match a shorter word: enclose is not close.
+-- ph 0 is between tokens, ph 1 is inside one. idx is how far the word
+-- matched, or one past its length once the token is longer. hit stays
+-- 1 after a separator or the end sees an exact match.
+unboxed data Tok : Type where
+  tok : Π (+ ph : U64) → Π (+ idx : U64) → Π (+ hit : U64) → Tok
+
+def tokPast : run Π (+ w : Slice) → U64 :=
+  λ (+ w : Slice) → addi (sliceLen w) (toU64 1)
+
+def tokSep : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) →
+    or (or (u8eq b (toU8 32)) (u8eq b (toU8 9))) (u8eq b (toU8 44))
+
+def tokAdvance : run Π (+ w : Slice) → Π (+ idx : U64) → Π (+ b : U8) → U64 :=
+  λ (+ w : Slice) → λ (+ idx : U64) → λ (+ b : U8) →
+    match (u64eq idx (tokPast w)) motive (λ _ → U64)
+      | true => idx
+      | false =>
+          (match (u64lt idx (sliceLen w)) motive (λ _ → U64)
+            | true =>
+                (match (u8eq (lower b) (lower (byteAt w idx))) motive (λ _ → U64)
+                  | true => addi idx (toU64 1)
+                  | false => tokPast w)
+            | false => tokPast w)
+
+def tokMark : run Π (+ w : Slice) → Π (+ idx : U64) → Π (+ hit : U64) → U64 :=
+  λ (+ w : Slice) → λ (+ idx : U64) → λ (+ hit : U64) →
+    match (u64eq hit (toU64 1)) motive (λ _ → U64)
+      | true => toU64 1
+      | false =>
+          (match (u64eq idx (sliceLen w)) motive (λ _ → U64)
+            | true => toU64 1
+            | false => toU64 0)
+
+def tokByte : run Π (+ w : Slice) → Π (+ st : Tok) → Π (+ b : U8) → Tok :=
+  λ (+ w : Slice) → λ (+ st : Tok) → λ (+ b : U8) →
+    match st motive (λ _ → Tok)
+      | tok ph idx hit =>
+          (match (u64eq hit (toU64 1)) motive (λ _ → Tok)
+            | true => st
+            | false =>
+                (match (tokSep b) motive (λ _ → Tok)
+                  | true =>
+                      (match (u64eq ph (toU64 1)) motive (λ _ → Tok)
+                        | true => tok (toU64 0) (toU64 0) (tokMark w idx hit)
+                        | false => tok (toU64 0) (toU64 0) hit)
+                  | false =>
+                      (match (u64eq ph (toU64 0)) motive (λ _ → Tok)
+                        | true => tok (toU64 1) (tokAdvance w (toU64 0) b) hit
+                        | false => tok (toU64 1) (tokAdvance w idx b) hit)))
+
+def tokFinish : run Π (+ w : Slice) → Π (+ st : Tok) → U64 :=
+  λ (+ w : Slice) → λ (+ st : Tok) →
+    match st motive (λ _ → U64)
+      | tok ph idx hit =>
+          (match (u64eq ph (toU64 1)) motive (λ _ → U64)
+            | true => tokMark w idx hit
+            | false => hit)
+
+-- A value that is exactly the word never enters the token fold.
+-- That fold is what makes a 10-byte hit too slow to reduce.
+-- Commas and extra words still take the fold.
+def hasToken : run Π (+ s : Slice) → Π (+ w : Slice) → Bool :=
+  λ (+ s : Slice) → λ (+ w : Slice) →
+    match (isEmpty w) motive (λ _ → Bool)
+      | true => false
+      | false =>
+          (match (nameEq s w) motive (λ _ → Bool)
+            | true => true
+            | false =>
+                not (u64nil (tokFinish w (sliceFold Tok (tok (toU64 0) (toU64 0) (toU64 0))
+                  (λ (b : U8) → λ (_r : Slice) → λ (st : Tok) → tokByte w st b)
+                  s))))
+
+def isDigit : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) →
+    and (not (u8lt b (toU8 48))) (not (u8lt (toU8 57) b))
+
+def isAlpha : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) →
+    or (and (not (u8lt b (toU8 65))) (not (u8lt (toU8 90) b)))
+      (and (not (u8lt b (toU8 97))) (not (u8lt (toU8 122) b)))
+
+-- RFC 9110 tchar marks, besides ALPHA and DIGIT.
+def isMark : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) →
+    or (u8eq b (toU8 33))
+      (or (u8eq b (toU8 35))
+        (or (u8eq b (toU8 36))
+          (or (u8eq b (toU8 37))
+            (or (u8eq b (toU8 38))
+              (or (u8eq b (toU8 39))
+                (or (u8eq b (toU8 42))
+                  (or (u8eq b (toU8 43))
+                    (or (u8eq b (toU8 45))
+                      (or (u8eq b (toU8 46))
+                        (or (u8eq b (toU8 94))
+                          (or (u8eq b (toU8 95))
+                            (or (u8eq b (toU8 96))
+                              (or (u8eq b (toU8 124))
+                                (u8eq b (toU8 126)))))))))))))))
+
+def isTchar : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) → or (or (isAlpha b) (isDigit b)) (isMark b)
+
+def leadWS : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) → or (u8eq b (toU8 32)) (u8eq b (toU8 9))
+
+def trailWS : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) → or (leadWS b) (u8eq b (toU8 13))
+
+-- Bit 63 freezes the count at the first byte that is not leading space.
+-- A closed word, so the C emit is a literal and not a Nat walk.
+def leadStop : run U64 :=
+  toU64 9223372036854775808
+
+def leadStep : run Π (b : U8) → Π (+ acc : U64) → U64 :=
+  λ (b : U8) → λ (+ acc : U64) →
+    match (u64nil (andi acc leadStop)) motive (λ _ → U64)
+      | true =>
+          (match (leadWS b) motive (λ _ → U64)
+            | true => addi acc (toU64 1)
+            | false => ori acc leadStop)
+      | false => acc
+
+def leadCount : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    andi (sliceFold U64 (toU64 0)
+      (λ (b : U8) → λ (_r : Slice) → λ (acc : U64) → leadStep b acc)
+      s) (noti leadStop)
+
+def trailEnd : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    sliceFold U64 (toU64 0)
+      (λ (b : U8) → λ (r : Slice) → λ (acc : U64) →
+        match (trailWS b) motive (λ _ → U64)
+          | true => acc
+          | false => addi (byteIndex s r) (toU64 1))
+      s
+
+def trimmed : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    slice (slice s (leadCount s) (subi (sliceLen s) (leadCount s))) (toU64 0) (trailEnd (slice s (leadCount s) (subi (sliceLen s) (leadCount s))))
+
+def packEnd : run Π (st : U64) → Π (i : U64) → U64 :=
+  λ (st : U64) → λ (i : U64) →
+    ori (andi st (toU64 7)) (muli i (toU64 8))
+
+def endSt : run Π (a : U64) → U64 :=
+  λ (a : U64) → andi a (toU64 7)
+
+def endIx : run Π (a : U64) → U64 :=
+  λ (a : U64) →
+    match (divi a (toU64 8)) motive (λ _ → U64)
+      | wsome q => q
+      | wnone => toU64 0
+
+def crlfByte : run Π (+ b : U8) → Π (+ a : U64) → U64 :=
+  λ (+ b : U8) → λ (+ a : U64) →
+    match (u64eq (endSt a) (toU64 4)) motive (λ _ → U64)
+      | true => a
+      | false =>
+          (match (u8eq b (toU8 13)) motive (λ _ → U64)
+            | true =>
+                (match (u64eq (endSt a) (toU64 2)) motive (λ _ → U64)
+                  | true => packEnd (toU64 3) (addi (endIx a) (toU64 1))
+                  | false => packEnd (toU64 1) (addi (endIx a) (toU64 1)))
+            | false =>
+                (match (u8eq b (toU8 10)) motive (λ _ → U64)
+                  | true =>
+                      (match (u64eq (endSt a) (toU64 1)) motive (λ _ → U64)
+                        | true => packEnd (toU64 2) (addi (endIx a) (toU64 1))
+                        | false =>
+                            (match (u64eq (endSt a) (toU64 3)) motive (λ _ → U64)
+                              | true => packEnd (toU64 4) (addi (endIx a) (toU64 1))
+                              | false => packEnd (toU64 0) (addi (endIx a) (toU64 1))))
+                  | false => packEnd (toU64 0) (addi (endIx a) (toU64 1))))
+
+def lfByte : run Π (+ b : U8) → Π (+ a : U64) → U64 :=
+  λ (+ b : U8) → λ (+ a : U64) →
+    match (u64eq (endSt a) (toU64 2)) motive (λ _ → U64)
+      | true => a
+      | false =>
+          (match (u8eq b (toU8 10)) motive (λ _ → U64)
+            | true =>
+                (match (u64eq (endSt a) (toU64 1)) motive (λ _ → U64)
+                  | true => packEnd (toU64 2) (addi (endIx a) (toU64 1))
+                  | false => packEnd (toU64 1) (addi (endIx a) (toU64 1)))
+            | false => packEnd (toU64 0) (addi (endIx a) (toU64 1)))
+
+def crlfFold : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    sliceFold U64 (packEnd (toU64 0) (toU64 0))
+      (λ (b : U8) → λ (_r : Slice) → λ (a : U64) → crlfByte b a)
+      s
+
+def lfFold : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    sliceFold U64 (packEnd (toU64 0) (toU64 0))
+      (λ (b : U8) → λ (_r : Slice) → λ (a : U64) → lfByte b a)
+      s
+
+def takeEnd : run Π (+ a : U64) → Π (done : U64) → Π (miss : U64) → U64 :=
+  λ (+ a : U64) → λ (done : U64) → λ (miss : U64) →
+    match (u64eq (endSt a) done) motive (λ _ → U64)
+      | true => endIx a
+      | false => miss
+
+def crlfEnd : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → takeEnd (crlfFold s) (toU64 4) (addi (sliceLen s) (toU64 1))
+
+def lfEnd : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → takeEnd (lfFold s) (toU64 2) (addi (sliceLen s) (toU64 1))
+
+def pickEnd : run Π (+ s : Slice) → Π (+ c : U64) → Π (+ l : U64) → U64 :=
+  λ (+ s : Slice) → λ (+ c : U64) → λ (+ l : U64) →
+    match (u64lt c (addi (sliceLen s) (toU64 1))) motive (λ _ → U64)
+      | true => c
+      | false =>
+          (match (u64lt l (addi (sliceLen s) (toU64 1))) motive (λ _ → U64)
+            | true => l
+            | false => addi (sliceLen s) (toU64 1))
+
+-- RFC 9112 2.2: the header block ends at CRLF CRLF. A bare LF is
+-- not a framing boundary, even though lfEnd can still see one.
+-- classify rejects that buffer. headerEnd does not consume it, so
+-- streamTake stays 0 and the host does not copy a prefix.
+def headerEnd : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → pickEnd s (crlfEnd s) (addi (sliceLen s) (toU64 1))
+
+def headersDone : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → not (u64eq (headerEnd s) (addi (sliceLen s) (toU64 1)))
+
+def has : run Π (f : U64) → Π (bit : U64) → Bool :=
+  λ (f : U64) → λ (bit : U64) → not (u64nil (andi f bit))
+
+def withBit : run Π (f : U64) → Π (bit : U64) → U64 :=
+  λ (f : U64) → λ (bit : U64) → ori f bit
+
+def noBit : run Π (f : U64) → Π (bit : U64) → U64 :=
+  λ (f : U64) → λ (bit : U64) → andi f (noti bit)
+
+-- 2^32 is not a Content-Length. A well-formed length is below it.
+-- The test is the value, not one bit: 2^33 is above the bound too.
+-- Overflow during the digit fold returns this same sentinel.
+-- A declared body longer than 16384, and still below the bound, is
+-- streamed by the host when the length is within --max-body.
+-- Above that max the host answers 413 and does not read the body.
+-- A closed word, so the C emit is a literal and not a Nat walk.
+def clBad : run U64 :=
+  toU64 4294967296
+
+def clRejected : run Π (v : U64) → Bool :=
+  λ (v : U64) → not (u64lt v clBad)
+
+-- Reject before the multiply when another digit cannot fit in U64.
+-- clLim * 10 + 5 is 2^64-1. A larger digit overflows.
+def clPush : run Π (+ acc : U64) → Π (+ b : U8) → U64 :=
+  λ (+ acc : U64) → λ (+ b : U8) →
+    match (clRejected acc) motive (λ _ → U64)
+      | true => acc
+      | false =>
+          (match (u64lt clLim acc) motive (λ _ → U64)
+            | true => clBad
+            | false =>
+                (match (and (u64eq acc clLim) (u8lt (toU8 53) b)) motive (λ _ → U64)
+                  | true => clBad
+                  | false => addi (muli acc (toU64 10)) (asU64 (subi b (toU8 48)))))
+
+def digitStep : run Π (+ b : U8) → Π (+ acc : U64) → U64 :=
+  λ (+ b : U8) → λ (+ acc : U64) →
+    match (clRejected acc) motive (λ _ → U64)
+      | true => acc
+      | false =>
+          (match (isDigit b) motive (λ _ → U64)
+            | true => clPush acc b
+            | false => clBad)
+
+def digitsVal : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (isEmpty s) motive (λ _ → U64)
+      | true => clBad
+      | false =>
+          sliceFold U64 (toU64 0)
+            (λ (b : U8) → λ (_r : Slice) → λ (acc : U64) → digitStep b acc)
+            s
+
+-- A trimmed value of 32 bytes or more is rejected here. The old length
+-- guard inside the digit fold only fired past 16385.
+def digitsOrLong : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (u64lt (toU64 31) (sliceLen s)) motive (λ _ → U64)
+      | true => clBad
+      | false => digitsVal s
+
+-- Content-Length is 1*DIGIT (RFC 9110 8.6). A leading plus is not a digit.
+def parseCL : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (isEmpty s) motive (λ _ → U64)
+      | true => clBad
+      | false =>
+          (match (u8eq (byteAt s (toU64 0)) (toU8 43)) motive (λ _ → U64)
+            | true => clBad
+            | false => digitsOrLong s)
+
+def missingSpace : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) →
+    or (u64eq (sliceLen (methodView s)) (sliceLen (sliceUntil s (toU8 10))))
+      (u64eq (sliceLen (targetView s)) (sliceLen (sliceAfter (sliceUntil s (toU8 10)) (toU8 32))))
+
+def versionOk : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) →
+    or (spanEq (versionTok s) b"HTTP/1.1") (spanEq (versionTok s) b"HTTP/1.0")
+
+-- The request-target is not optional. OPTIONS * is a target. A second
+-- space, as in `GET  HTTP/1.1`, leaves the target empty.
+def lineOk : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) →
+    and (not (isEmpty (targetView s))) (and (not (missingSpace s)) (versionOk s))
+
+def keepDefault : run Π (+ s : Slice) → Keep :=
+  λ (+ s : Slice) →
+    match (spanEq (versionTok s) b"HTTP/1.0") motive (λ _ → Keep)
+      | true => keep-no
+      | false => keep-yes
+
+def blank : run HSt :=
+  hst (toU64 0) (toU64 0) (toU64 4) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def stick : run Π (i : U64) → Π (ls : U64) → Π (ph : U64) → Π (fl : U64) → Π (cl : U64) → Π (aS : U64) → Π (aL : U64) → Π (wh : U64) → Π (mark : U64) → HSt :=
+  λ (i : U64) → λ (ls : U64) → λ (ph : U64) → λ (fl : U64) → λ (cl : U64) → λ (aS : U64) → λ (aL : U64) → λ (wh : U64) → λ (mark : U64) →
+    hst i ls ph fl cl aS aL wh mark
+
+-- 1 content-length, 2 host, 3 connection, 4 transfer-encoding,
+-- 6 expect, 5 other.
+def whichOf : run Π (+ name : Slice) → U64 :=
+  λ (+ name : Slice) →
+    match (nameEq name b"content-length") motive (λ _ → U64)
+      | true => toU64 1
+      | false =>
+          (match (nameEq name b"host") motive (λ _ → U64)
+            | true => toU64 2
+            | false =>
+                (match (nameEq name b"connection") motive (λ _ → U64)
+                  | true => toU64 3
+                  | false =>
+                      (match (nameEq name b"transfer-encoding") motive (λ _ → U64)
+                        | true => toU64 4
+                        | false =>
+                            (match (nameEq name b"expect") motive (λ _ → U64)
+                              | true => toU64 6
+                              | false => toU64 5))))
+
+def valueSlice : run Π (+ buf : Slice) → Π (+ mark : U64) → Π (endI : U64) → Slice :=
+  λ (+ buf : Slice) → λ (+ mark : U64) → λ (endI : U64) →
+    trimmed (slice buf mark (subi endI mark))
+
+-- A second Content-Length rejects. Content-Length after
+-- Transfer-Encoding is the same request twice (bit 128).
+def clFlags : run Π (+ fl : U64) → Π (+ raw : Slice) → U64 :=
+  λ (+ fl : U64) → λ (+ raw : Slice) →
+    match (has fl (toU64 2)) motive (λ _ → U64)
+      | true => withBit fl (toU64 32)
+      | false =>
+          (match (clRejected (parseCL raw)) motive (λ _ → U64)
+            | true => withBit fl (toU64 32)
+            | false =>
+                (match (has fl (toU64 4)) motive (λ _ → U64)
+                  | true => withBit (withBit fl (toU64 2)) (toU64 128)
+                  | false => withBit fl (toU64 2)))
+
+def clValue : run Π (fl : U64) → Π (cl : U64) → Π (+ raw : Slice) → U64 :=
+  λ (fl : U64) → λ (cl : U64) → λ (+ raw : Slice) →
+    match (has fl (toU64 2)) motive (λ _ → U64)
+      | true => cl
+      | false =>
+          (match (clRejected (parseCL raw)) motive (λ _ → U64)
+            | true => cl
+            | false => parseCL raw)
+
+-- RFC 9110: close in any Connection field closes the connection.
+-- Bit 64 means a Connection field chose close or keep-alive.
+-- Bit 16 means keep-alive. Close clears 16. A later keep-alive
+-- does not set 16 again once close has cleared it. Close in this
+-- field still clears a keep-alive from an earlier field.
+-- 80 is bits 16 and 64. Equal to 64 means close already won, so
+-- this keep-alive leaves the flags. fl is unrestricted, same as
+-- clFlags, because the test and the result both read it.
+def finishConn : run Π (+ raw : Slice) → Π (+ fl : U64) → U64 :=
+  λ (+ raw : Slice) → λ (+ fl : U64) →
+    match (hasToken (trimmed raw) b"close") motive (λ _ → U64)
+      | true => withBit (noBit (withBit fl (toU64 64)) (toU64 16)) (toU64 64)
+      | false =>
+          (match (hasToken (trimmed raw) b"keep-alive") motive (λ _ → U64)
+            | true =>
+                (match (u64eq (andi fl (toU64 80)) (toU64 64)) motive (λ _ → U64)
+                  | true => fl
+                  | false => withBit (withBit fl (toU64 64)) (toU64 16))
+            | false => fl)
+
+-- One Host is 1. A second Host saturates at 2. The count lives in aS.
+def hostBump : run Π (+ n : U64) → U64 :=
+  λ (+ n : U64) →
+    match (u64eq n (toU64 0)) motive (λ _ → U64)
+      | true => toU64 1
+      | false => toU64 2
+
+def contentEnd : run Π (+ buf : Slice) → Π (+ i : U64) → Π (ls : U64) → U64 :=
+  λ (+ buf : Slice) → λ (+ i : U64) → λ (ls : U64) →
+    match (u64eq i ls) motive (λ _ → U64)
+      | true => i
+      | false =>
+          (match (u8eq (byteAt buf (subi i (toU64 1))) (toU8 13)) motive (λ _ → U64)
+            | true => subi i (toU64 1)
+            | false => i)
+
+def nextLine : run Π (+ i : U64) → Π (fl : U64) → Π (cl : U64) → Π (aS : U64) → Π (aL : U64) → HSt :=
+  λ (+ i : U64) → λ (fl : U64) → λ (cl : U64) → λ (aS : U64) → λ (aL : U64) →
+    hst (addi i (toU64 1)) (addi i (toU64 1)) (toU64 0) (noBit fl (toU64 1)) cl aS aL (toU64 0) (toU64 0)
+
+def finishLine : run Π (+ buf : Slice) → Π (+ i : U64) → Π (+ ls : U64) → Π (+ ph : U64) → Π (+ fl : U64) → Π (+ cl : U64) → Π (+ aS : U64) → Π (+ aL : U64) → Π (wh : U64) → Π (mark : U64) → HSt :=
+  λ (+ buf : Slice) → λ (+ i : U64) → λ (+ ls : U64) → λ (+ ph : U64) → λ (+ fl : U64) → λ (+ cl : U64) → λ (+ aS : U64) → λ (+ aL : U64) → λ (wh : U64) → λ (mark : U64) →
+    match (u64eq ph (toU64 4)) motive (λ _ → HSt)
+      | true => nextLine i fl cl aS aL
+      | false =>
+          (match (or (u64eq ph (toU64 2)) (u64eq ph (toU64 3))) motive (λ _ → HSt)
+            | true => hst i ls ph fl cl aS aL wh mark
+            | false =>
+                (match (u64eq (contentEnd buf i ls) ls) motive (λ _ → HSt)
+                  | true => hst (addi i (toU64 1)) (addi i (toU64 1)) (toU64 2) fl cl aS aL (toU64 0) (toU64 0)
+                  | false =>
+                      (match (has fl (toU64 1)) motive (λ _ → HSt)
+                        | true => finishKnown buf i ls fl cl aS aL wh mark
+                        | false => hst i ls (toU64 3) (withBit fl (toU64 32)) cl aS aL wh mark)))
+-- Transfer-Encoding token class.
+-- ph 0 before a token, 1 inside, 2 after it.
+-- A ';' is bad. RFC 9112 7.1 says chunked defines no parameters and
+-- their presence SHOULD be an error. RFC 9112 7.2 says the same
+-- SHOULD for a compression coding. The parameter is rejected.
+-- Ignoring it, or letting a proxy strip it, would disagree about
+-- where the body ends. chunked;q=1, chunked ; q=1, gzip;q=1,
+-- chu;nked, and chu;n=1 are all bad framing.
+-- fl: 1 bad, 2 a coding other than chunked, 4 one
+-- chunked, 8 chunked twice, 16 a comma still needs a token,
+-- 32 the last coding was chunked.
+unboxed data TeSt : Type where
+  teSt : Π (+ ph : U64) → Π (+ idx : U64) → Π (+ fl : U64) → TeSt
+
+def teStart : run TeSt :=
+  teSt (toU64 0) (toU64 0) (toU64 0)
+
+def chunkedByte : run Π (+ i : U64) → U8 :=
+  λ (+ i : U64) →
+    match (u64eq i (toU64 0)) motive (λ _ → U8)
+      | true => toU8 99
+      | false =>
+          (match (u64eq i (toU64 1)) motive (λ _ → U8)
+            | true => toU8 104
+            | false =>
+                (match (u64eq i (toU64 2)) motive (λ _ → U8)
+                  | true => toU8 117
+                  | false =>
+                      (match (u64eq i (toU64 3)) motive (λ _ → U8)
+                        | true => toU8 110
+                        | false =>
+                            (match (u64eq i (toU64 4)) motive (λ _ → U8)
+                              | true => toU8 107
+                              | false =>
+                                  (match (u64eq i (toU64 5)) motive (λ _ → U8)
+                                    | true => toU8 101
+                                    | false =>
+                                        (match (u64eq i (toU64 6)) motive (λ _ → U8)
+                                          | true => toU8 100
+                                          | false => toU8 0))))))
+
+def teChar : run Π (+ idx : U64) → Π (+ b : U8) → U64 :=
+  λ (+ idx : U64) → λ (+ b : U8) →
+    match (u64eq idx (toU64 8)) motive (λ _ → U64)
+      | true => toU64 8
+      | false =>
+          (match (u8eq (lower b) (chunkedByte idx)) motive (λ _ → U64)
+            | true => addi idx (toU64 1)
+            | false => toU64 8)
+
+def teClose : run Π (+ st : TeSt) → TeSt :=
+  λ (+ st : TeSt) →
+    match st motive (λ _ → TeSt)
+      | teSt _ph idx fl =>
+          (match (has fl (toU64 1)) motive (λ _ → TeSt)
+            | true => st
+            | false =>
+                (match (u64eq idx (toU64 7)) motive (λ _ → TeSt)
+                  | true =>
+                      (match (has fl (toU64 4)) motive (λ _ → TeSt)
+                        | true => teSt (toU64 2) idx (noBit (withBit (withBit fl (toU64 8)) (toU64 32)) (toU64 16))
+                        | false => teSt (toU64 2) idx (noBit (withBit (withBit fl (toU64 4)) (toU64 32)) (toU64 16)))
+                  | false =>
+                      (match (u64eq idx (toU64 0)) motive (λ _ → TeSt)
+                        | true => teSt (toU64 2) idx (withBit fl (toU64 1))
+                        | false => teSt (toU64 2) idx (noBit (noBit (withBit fl (toU64 2)) (toU64 16)) (toU64 32)))))
+
+def teComma : run Π (+ st : TeSt) → TeSt :=
+  λ (+ st : TeSt) →
+    match st motive (λ _ → TeSt)
+      | teSt _ph _idx fl =>
+          (match (has fl (toU64 1)) motive (λ _ → TeSt)
+            | true => st
+            | false => teSt (toU64 0) (toU64 0) (withBit fl (toU64 16)))
+
+def teBefore : run Π (+ fl : U64) → Π (+ b : U8) → TeSt :=
+  λ (+ fl : U64) → λ (+ b : U8) →
+    match (leadWS b) motive (λ _ → TeSt)
+      | true => teSt (toU64 0) (toU64 0) fl
+      | false =>
+          (match (u8eq b (toU8 44)) motive (λ _ → TeSt)
+            | true => teSt (toU64 0) (toU64 0) (withBit fl (toU64 1))
+            | false => teSt (toU64 1) (teChar (toU64 0) b) (noBit fl (toU64 16)))
+
+def teInside : run Π (+ idx : U64) → Π (+ fl : U64) → Π (+ b : U8) → TeSt :=
+  λ (+ idx : U64) → λ (+ fl : U64) → λ (+ b : U8) →
+    match (leadWS b) motive (λ _ → TeSt)
+      | true => teClose (teSt (toU64 1) idx fl)
+      | false =>
+          (match (u8eq b (toU8 44)) motive (λ _ → TeSt)
+            | true => teComma (teClose (teSt (toU64 1) idx fl))
+            | false =>
+                (match (isTchar b) motive (λ _ → TeSt)
+                  | true => teSt (toU64 1) (teChar idx b) fl
+                  | false => teSt (toU64 1) idx (withBit fl (toU64 1))))
+
+def teAfter : run Π (+ fl : U64) → Π (+ b : U8) → TeSt :=
+  λ (+ fl : U64) → λ (+ b : U8) →
+    match (leadWS b) motive (λ _ → TeSt)
+      | true => teSt (toU64 2) (toU64 0) fl
+      | false =>
+          (match (u8eq b (toU8 44)) motive (λ _ → TeSt)
+            | true => teSt (toU64 0) (toU64 0) (withBit fl (toU64 16))
+            | false => teSt (toU64 2) (toU64 0) (withBit fl (toU64 1)))
+
+def teByte : run Π (+ st : TeSt) → Π (+ b : U8) → TeSt :=
+  λ (+ st : TeSt) → λ (+ b : U8) →
+    match st motive (λ _ → TeSt)
+      | teSt ph idx fl =>
+          (match (has fl (toU64 1)) motive (λ _ → TeSt)
+            | true => st
+            | false =>
+                (match (u64eq ph (toU64 0)) motive (λ _ → TeSt)
+                  | true => teBefore fl b
+                  | false =>
+                      (match (u64eq ph (toU64 1)) motive (λ _ → TeSt)
+                        | true => teInside idx fl b
+                        | false => teAfter fl b)))
+
+-- Phase 2 is a finished coding. 0 still needs a token.
+-- 1 closes the coding. ';' already set the bad bit.
+def teFinish : run Π (+ st : TeSt) → TeSt :=
+  λ (+ st : TeSt) →
+    match st motive (λ _ → TeSt)
+      | teSt ph idx fl =>
+          (match (u64eq ph (toU64 1)) motive (λ _ → TeSt)
+            | true => teClose (teSt ph idx fl)
+            | false =>
+                (match (u64eq ph (toU64 0)) motive (λ _ → TeSt)
+                  | true => teSt ph idx (withBit fl (toU64 1))
+                  | false => st))
+
+def teFl : run Π (+ st : TeSt) → U64 :=
+  λ (+ st : TeSt) →
+    match st motive (λ _ → U64)
+      | teSt _ph _idx fl => fl
+
+-- 128 bad. That includes chunked twice, and chunked that is not the
+-- final coding (RFC 9112 6.1). 256 is a coding other than chunked
+-- when chunked is absent or is the final coding. 512 is one chunked
+-- coding and it is final. Bit 32 means the last token was chunked.
+def teClass : run Π (+ fl : U64) → U64 :=
+  λ (+ fl : U64) →
+    match (has fl (toU64 1)) motive (λ _ → U64)
+      | true => toU64 128
+      | false =>
+          (match (has fl (toU64 8)) motive (λ _ → U64)
+            | true => toU64 128
+            | false =>
+                (match (and (has fl (toU64 2)) (and (has fl (toU64 4)) (not (has fl (toU64 32))))) motive (λ _ → U64)
+                  | true => toU64 128
+                  | false =>
+                      (match (has fl (toU64 2)) motive (λ _ → U64)
+                        | true => toU64 256
+                        | false =>
+                            (match (has fl (toU64 4)) motive (λ _ → U64)
+                              | true => toU64 512
+                              | false => toU64 128))))
+
+def teBits : run Π (+ raw : Slice) → U64 :=
+  λ (+ raw : Slice) →
+    match (isEmpty raw) motive (λ _ → U64)
+      | true => toU64 128
+      | false =>
+          teClass (teFl (teFinish (sliceFold TeSt teStart
+            (λ (b : U8) → λ (_r : Slice) → λ (st : TeSt) → teByte st b)
+            raw)))
+
+-- Bit 4 records Transfer-Encoding. A second field, a field after
+-- Content-Length, or HTTP/1.0 is bad (bit 128). Otherwise the value
+-- class is OR-ed in: 128 bad, 256 unknown, 512 chunked.
+def teApply : run Π (+ buf : Slice) → Π (+ fl : U64) → Π (+ raw : Slice) → U64 :=
+  λ (+ buf : Slice) → λ (+ fl : U64) → λ (+ raw : Slice) →
+    match (or (has fl (toU64 4)) (or (has fl (toU64 2)) (spanEq (versionTok buf) b"HTTP/1.0"))) motive (λ _ → U64)
+      | true => withBit (withBit fl (toU64 4)) (toU64 128)
+      | false => withBit (ori fl (teBits raw)) (toU64 4)
+
+-- 1024 saw Expect. 2048 the value is 100-continue. 4096 it is not,
+-- including a second Expect. The host checks 4096 first.
+def expApply : run Π (+ fl : U64) → Π (+ raw : Slice) → U64 :=
+  λ (+ fl : U64) → λ (+ raw : Slice) →
+    match (has fl (toU64 1024)) motive (λ _ → U64)
+      | true => withBit fl (toU64 4096)
+      | false =>
+          (match (nameEq (trimmed raw) b"100-continue") motive (λ _ → U64)
+            | true => withBit (withBit fl (toU64 1024)) (toU64 2048)
+            | false => withBit (withBit fl (toU64 1024)) (toU64 4096))
+
+def finishKnown : run Π (+ buf : Slice) → Π (+ i : U64) → Π (+ ls : U64) → Π (+ fl : U64) → Π (+ cl : U64) → Π (+ aS : U64) → Π (+ aL : U64) → Π (+ wh : U64) → Π (+ mark : U64) → HSt :=
+  λ (+ buf : Slice) → λ (+ i : U64) → λ (+ ls : U64) → λ (+ fl : U64) → λ (+ cl : U64) → λ (+ aS : U64) → λ (+ aL : U64) → λ (+ wh : U64) → λ (+ mark : U64) →
+    match (u64eq wh (toU64 1)) motive (λ _ → HSt)
+      | true => nextLine i (clFlags fl (valueSlice buf mark (contentEnd buf i ls))) (clValue fl cl (valueSlice buf mark (contentEnd buf i ls))) aS aL
+      | false =>
+          (match (u64eq wh (toU64 2)) motive (λ _ → HSt)
+            | true => nextLine i fl cl (hostBump aS) (toU64 0)
+            | false =>
+                (match (u64eq wh (toU64 3)) motive (λ _ → HSt)
+                  | true => nextLine i (finishConn (slice buf mark (subi (contentEnd buf i ls) mark)) fl) cl aS aL
+                  | false =>
+                      (match (u64eq wh (toU64 4)) motive (λ _ → HSt)
+                        | true => nextLine i (teApply buf fl (valueSlice buf mark (contentEnd buf i ls))) cl aS aL
+                        | false =>
+                            (match (u64eq wh (toU64 6)) motive (λ _ → HSt)
+                              | true => nextLine i (expApply fl (valueSlice buf mark (contentEnd buf i ls))) cl aS aL
+                              | false => nextLine i fl cl aS aL))))
+
+-- RFC 9112: no whitespace between the field name and the colon.
+-- A space or tab there must not be a Content-Length for one path
+-- and a different length for the other. Bit 32 rejects the request.
+-- The name is not classified, so the length is not recorded.
+def nameBare : run Π (+ buf : Slice) → Π (+ ls : U64) → Π (+ i : U64) → Bool :=
+  λ (+ buf : Slice) → λ (+ ls : U64) → λ (+ i : U64) →
+    match (u64nil (subi i ls)) motive (λ _ → Bool)
+      | true => true
+      | false =>
+          and (not (leadWS (byteAt buf ls))) (not (trailWS (byteAt buf (subi i (toU64 1)))))
+
+def onColon : run Π (+ buf : Slice) → Π (+ i : U64) → Π (+ ls : U64) → Π (fl : U64) → Π (cl : U64) → Π (aS : U64) → Π (aL : U64) → HSt :=
+  λ (+ buf : Slice) → λ (+ i : U64) → λ (+ ls : U64) → λ (fl : U64) → λ (cl : U64) → λ (aS : U64) → λ (aL : U64) →
+    match (nameBare buf ls i) motive (λ _ → HSt)
+      | true => hst (addi i (toU64 1)) ls (toU64 1) (withBit fl (toU64 1)) cl aS aL (whichOf (slice buf ls (subi i ls))) (addi i (toU64 1))
+      | false => hst (addi i (toU64 1)) ls (toU64 1) (withBit (withBit fl (toU64 1)) (toU64 32)) cl aS aL (toU64 5) (addi i (toU64 1))
+
+-- A line feed that is not preceded by CR is a bare LF. Index 0 has
+-- no predecessor. RFC 9112 2.2 requires CRLF in the request line and
+-- the header section. Bit 8192 records that. The body is not scanned:
+-- phase 2 or 3 returns the same state before this test.
+def crBefore : run Π (+ buf : Slice) → Π (+ i : U64) → Bool :=
+  λ (+ buf : Slice) → λ (+ i : U64) →
+    match (u64nil i) motive (λ _ → Bool)
+      | true => false
+      | false => u8eq (byteAt buf (subi i (toU64 1))) (toU8 13)
+
+def stepB : run Π (+ buf : Slice) → Π (+ b : U8) → Π (+ i : U64) → Π (+ st : HSt) → HSt :=
+  λ (+ buf : Slice) → λ (+ b : U8) → λ (+ i : U64) → λ (+ st : HSt) →
+    match st motive (λ _ → HSt)
+      | hst _i ls ph fl cl aS aL wh mark =>
+          (match (or (u64eq ph (toU64 2)) (u64eq ph (toU64 3))) motive (λ _ → HSt)
+            | true => st
+            | false =>
+                (match (u8eq b (toU8 10)) motive (λ _ → HSt)
+                  | true =>
+                      (match (crBefore buf i) motive (λ _ → HSt)
+                        | true => finishLine buf i ls ph fl cl aS aL wh mark
+                        | false => finishLine buf i ls ph (withBit fl (toU64 8192)) cl aS aL wh mark)
+                  | false =>
+                      (match (u64eq ph (toU64 4)) motive (λ _ → HSt)
+                        | true => st
+                        | false =>
+                            (match (and (u64eq ph (toU64 0)) (u8eq b (toU8 58))) motive (λ _ → HSt)
+                              | true => onColon buf i ls fl cl aS aL
+                              | false => st))))
+
+def scan : run Π (+ s : Slice) → HSt :=
+  λ (+ s : Slice) →
+    sliceFold HSt blank
+      (λ (b : U8) → λ (r : Slice) → λ (st : HSt) → stepB s b (byteIndex s r) st)
+      s
+
+def scanPh : run Π (st : HSt) → U64 :=
+  λ (st : HSt) →
+    match st motive (λ _ → U64)
+      | hst _i _ls ph _fl _cl _aS _aL _wh _mark => ph
+
+def scanFl : run Π (st : HSt) → U64 :=
+  λ (st : HSt) →
+    match st motive (λ _ → U64)
+      | hst _i _ls _ph fl _cl _aS _aL _wh _mark => fl
+
+def scanCL : run Π (st : HSt) → U64 :=
+  λ (st : HSt) →
+    match st motive (λ _ → U64)
+      | hst _i _ls _ph _fl cl _aS _aL _wh _mark => cl
+
+def scanAS : run Π (st : HSt) → U64 :=
+  λ (st : HSt) →
+    match st motive (λ _ → U64)
+      | hst _i _ls _ph _fl _cl aS _aL _wh _mark => aS
+
+def scanAL : run Π (st : HSt) → U64 :=
+  λ (st : HSt) →
+    match st motive (λ _ → U64)
+      | hst _i _ls _ph _fl _cl _aS aL _wh _mark => aL
+
+def headersOkSt : run Π (+ st : HSt) → Bool :=
+  λ (+ st : HSt) →
+    and (u64eq (scanPh st) (toU64 2)) (not (has (scanFl st) (toU64 32)))
+
+def sawTESt : run Π (st : HSt) → Bool :=
+  λ (st : HSt) → has (scanFl st) (toU64 4)
+
+def sawCLSt : run Π (st : HSt) → Bool :=
+  λ (st : HSt) → has (scanFl st) (toU64 2)
+
+def contentLengthSt : run Π (+ st : HSt) → U64 :=
+  λ (+ st : HSt) →
+    match (sawCLSt st) motive (λ _ → U64)
+      | true => scanCL st
+      | false => toU64 0
+
+-- aS is the Host count: 0, 1, or 2 (a second header saturates).
+def hostCountSt : run Π (st : HSt) → U64 :=
+  λ (st : HSt) → scanAS st
+
+-- HTTP/1.0 may omit Host. HTTP/1.1 needs exactly one. Two is always bad.
+def hostBadSt : run Π (+ st : HSt) → Π (+ s : Slice) → Bool :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (spanEq (versionTok s) b"HTTP/1.0") motive (λ _ → Bool)
+      | true => u64eq (hostCountSt st) (toU64 2)
+      | false => not (u64eq (hostCountSt st) (toU64 1))
+
+def keepOfSt : run Π (+ st : HSt) → Π (+ s : Slice) → Keep :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (has (scanFl st) (toU64 64)) motive (λ _ → Keep)
+      | true =>
+          (match (has (scanFl st) (toU64 16)) motive (λ _ → Keep)
+            | true => keep-yes
+            | false => keep-no)
+      | false => keepDefault s
+
+def bodyShortSt : run Π (+ st : HSt) → Π (+ s : Slice) → Bool :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    and (sawCLSt st) (u64lt (sliceLen s) (addi (headerEnd s) (contentLengthSt st)))
+
+def headersOk : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → headersOkSt (scan s)
+
+def sawTE : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → sawTESt (scan s)
+
+def sawCL : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → sawCLSt (scan s)
+
+def contentLength : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → contentLengthSt (scan s)
+
+def keepOf : run Π (+ s : Slice) → Keep :=
+  λ (+ s : Slice) → keepOfSt (scan s) s
+
+def bodyShort : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → bodyShortSt (scan s) s
+
+def bodyAt : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (headersDone s) motive (λ _ → U64)
+      | true => headerEnd s
+      | false => addi (sliceLen s) (toU64 1)
+
+def bodyLenSt : run Π (+ st : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (headersDone s) motive (λ _ → U64)
+      | true =>
+          (match (and (sawCLSt st) (not (bodyShortSt st s))) motive (λ _ → U64)
+            | true => contentLengthSt st
+            | false => toU64 0)
+      | false => toU64 0
+
+def bodyLen : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → bodyLenSt (scan s) s
+
+def bodyViewSt : run Π (+ st : HSt) → Π (+ s : Slice) → Slice :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (headersDone s) motive (λ _ → Slice)
+      | true =>
+          (match (and (sawCLSt st) (not (bodyShortSt st s))) motive (λ _ → Slice)
+            | true => slice s (headerEnd s) (contentLengthSt st)
+            | false => slice s (headerEnd s) (toU64 0))
+      | false => slice s (addi (sliceLen s) (toU64 1)) (toU64 0)
+
+def bodyView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) → bodyViewSt (scan s) s
+
+-- 0 a known method, 1 well-formed but not one we implement, 2 a bad
+-- token. GET HEAD POST PUT DELETE OPTIONS PATCH are known, and the
+-- match is case-sensitive. OPTIONS * is known. Any other method whose
+-- target is * is malformed. CONNECT and TRACE are 1.
+def methStep : run Π (+ b : U8) → Π (+ acc : U64) → U64 :=
+  λ (+ b : U8) → λ (+ acc : U64) →
+    match (u64eq acc (toU64 2)) motive (λ _ → U64)
+      | true => acc
+      | false =>
+          (match (isTchar b) motive (λ _ → U64)
+            | true => toU64 0
+            | false => toU64 2)
+
+def methFold : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (isEmpty s) motive (λ _ → U64)
+      | true => toU64 2
+      | false =>
+          sliceFold U64 (toU64 0)
+            (λ (b : U8) → λ (_r : Slice) → λ (acc : U64) → methStep b acc)
+            s
+
+def knownMethod : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) →
+    or (spanEq s b"GET")
+      (or (spanEq s b"HEAD")
+        (or (spanEq s b"POST")
+          (or (spanEq s b"PUT")
+            (or (spanEq s b"DELETE")
+              (or (spanEq s b"OPTIONS")
+                (spanEq s b"PATCH"))))))
+
+def methodCode : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (u64eq (methFold (methodView s)) (toU64 2)) motive (λ _ → U64)
+      | true => toU64 2
+      | false =>
+          (match (and (spanEq (targetView s) b"*") (not (spanEq (methodView s) b"OPTIONS"))) motive (λ _ → U64)
+            | true => toU64 2
+            | false =>
+                (match (knownMethod (methodView s)) motive (λ _ → U64)
+                  | true => toU64 0
+                  | false => toU64 1))
+
+def methodBad : run Π (+ s : Slice) → Bool :=
+  λ (+ s : Slice) → u64eq (methodCode s) (toU64 2)
+
+-- 0 none, 1 chunked, 2 unknown coding, 3 bad framing.
+def teBadSt : run Π (+ st : HSt) → Bool :=
+  λ (+ st : HSt) → has (scanFl st) (toU64 128)
+
+def teUnkSt : run Π (+ st : HSt) → Bool :=
+  λ (+ st : HSt) → and (has (scanFl st) (toU64 256)) (not (has (scanFl st) (toU64 128)))
+
+def teChunkSt : run Π (+ st : HSt) → Bool :=
+  λ (+ st : HSt) →
+    and (has (scanFl st) (toU64 512))
+      (and (not (has (scanFl st) (toU64 128))) (not (has (scanFl st) (toU64 256))))
+
+def teCodeSt : run Π (+ st : HSt) → U64 :=
+  λ (+ st : HSt) →
+    match (teBadSt st) motive (λ _ → U64)
+      | true => toU64 3
+      | false =>
+          (match (teUnkSt st) motive (λ _ → U64)
+            | true => toU64 2
+            | false =>
+                (match (teChunkSt st) motive (λ _ → U64)
+                  | true => toU64 1
+                  | false => toU64 0))
+
+def teCode : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → teCodeSt (scan s)
+
+-- 0 none, 1 100-continue, 2 any other Expect value.
+def expectCodeSt : run Π (+ st : HSt) → U64 :=
+  λ (+ st : HSt) →
+    match (has (scanFl st) (toU64 4096)) motive (λ _ → U64)
+      | true => toU64 2
+      | false =>
+          (match (has (scanFl st) (toU64 2048)) motive (λ _ → U64)
+            | true => toU64 1
+            | false => toU64 0)
+
+def expectCode : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → expectCodeSt (scan s)
+
+-- A body the header scan will not buffer. Headers must be finished,
+-- Content-Length must be past 16384, and those bytes must not all be
+-- here yet. 16384 itself stays on the buffered path.
+def streamLenSt : run Π (+ st : HSt) → Π (+ s : Slice) → Bool :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    and (headersDone s) (and (bodyShortSt st s) (gt16384 (contentLengthSt st)))
+
+def hexVal : run Π (+ b : U8) → U64 :=
+  λ (+ b : U8) →
+    match (isDigit b) motive (λ _ → U64)
+      | true => asU64 (subi b (toU8 48))
+      | false =>
+          (match (and (not (u8lt (lower b) (toU8 97))) (not (u8lt (toU8 102) (lower b)))) motive (λ _ → U64)
+            | true => asU64 (subi (lower b) (toU8 87))
+            | false => toU64 16)
+
+def isHex : run Π (+ b : U8) → Bool :=
+  λ (+ b : U8) → u64lt (hexVal b) (toU64 16)
+
+-- Chunk framing over the bytes after the header block.
+-- ph: 0 size, 1 extension, 2 the LF after the size line, 3 data,
+-- 4 the CR after data, 5 the LF after data, 6 a trailer line,
+-- 7 the LF after a trailer line, 8 done, 9 bad.
+-- fl: 4 this is the last chunk, 8 a size digit was seen, 16 the
+-- trailer line has a colon, 32 the trailer line has a byte, 64 the
+-- trailer line is the blank line. Extensions are skipped. Trailers
+-- are checked for one colon and then dropped. A size that does not
+-- fit in U64 is bad. The host compares rem and total with max body.
+unboxed data Ck : Type where
+  ck : Π (+ ph : U64) → Π (+ acc : U64) → Π (+ rem : U64) → Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Ck
+
+def ckStart : run Ck :=
+  ck (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def ckFail : run Π (+ total : U64) → Π (+ at : U64) → Ck :=
+  λ (+ total : U64) → λ (+ at : U64) →
+    ck (toU64 9) (toU64 0) (toU64 0) total (toU64 0) at
+
+def ckSize : run Π (+ acc : U64) → Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ acc : U64) → λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (isHex b) motive (λ _ → Ck)
+      | true =>
+          (match (u64lt hexLim acc) motive (λ _ → Ck)
+            | true => ckFail total (addi at (toU64 1))
+            | false => ck (toU64 0) (addi (muli acc (toU64 16)) (hexVal b)) (toU64 0) total (withBit fl (toU64 8)) (addi at (toU64 1)))
+      | false =>
+          (match (u8eq b (toU8 59)) motive (λ _ → Ck)
+            | true =>
+                (match (has fl (toU64 8)) motive (λ _ → Ck)
+                  | true => ck (toU64 1) (toU64 0) acc total (noBit fl (toU64 8)) (addi at (toU64 1))
+                  | false => ckFail total (addi at (toU64 1)))
+            | false =>
+                (match (u8eq b (toU8 13)) motive (λ _ → Ck)
+                  | true =>
+                      (match (has fl (toU64 8)) motive (λ _ → Ck)
+                        | true =>
+                            (match (u64nil acc) motive (λ _ → Ck)
+                              | true => ck (toU64 2) (toU64 0) acc total (withBit (noBit fl (toU64 8)) (toU64 4)) (addi at (toU64 1))
+                              | false => ck (toU64 2) (toU64 0) acc total (noBit fl (toU64 8)) (addi at (toU64 1)))
+                        | false => ckFail total (addi at (toU64 1)))
+                  | false => ckFail total (addi at (toU64 1))))
+
+def ckExt : run Π (+ rem : U64) → Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ rem : U64) → λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (u8eq b (toU8 13)) motive (λ _ → Ck)
+      | true =>
+          (match (u64nil rem) motive (λ _ → Ck)
+            | true => ck (toU64 2) (toU64 0) rem total (withBit fl (toU64 4)) (addi at (toU64 1))
+            | false => ck (toU64 2) (toU64 0) rem total fl (addi at (toU64 1)))
+      | false =>
+          (match (u8eq b (toU8 10)) motive (λ _ → Ck)
+            | true => ckFail total (addi at (toU64 1))
+            | false => ck (toU64 1) (toU64 0) rem total fl (addi at (toU64 1)))
+
+def ckSizeLf : run Π (+ rem : U64) → Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ rem : U64) → λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (u8eq b (toU8 10)) motive (λ _ → Ck)
+      | true =>
+          (match (has fl (toU64 4)) motive (λ _ → Ck)
+            | true => ck (toU64 6) (toU64 0) rem total fl (addi at (toU64 1))
+            | false => ck (toU64 3) (toU64 0) rem total fl (addi at (toU64 1)))
+      | false => ckFail total (addi at (toU64 1))
+
+def ckData : run Π (+ rem : U64) → Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Ck :=
+  λ (+ rem : U64) → λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) →
+    match (u64nil rem) motive (λ _ → Ck)
+      | true => ckFail total at
+      | false =>
+          (match (u64nil (subi rem (toU64 1))) motive (λ _ → Ck)
+            | true => ck (toU64 4) (toU64 0) (toU64 0) (addi total (toU64 1)) fl (addi at (toU64 1))
+            | false => ck (toU64 3) (toU64 0) (subi rem (toU64 1)) (addi total (toU64 1)) fl (addi at (toU64 1)))
+
+def ckDataCr : run Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (u8eq b (toU8 13)) motive (λ _ → Ck)
+      | true => ck (toU64 5) (toU64 0) (toU64 0) total fl (addi at (toU64 1))
+      | false => ckFail total (addi at (toU64 1))
+
+def ckDataLf : run Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (u8eq b (toU8 10)) motive (λ _ → Ck)
+      | true => ck (toU64 0) (toU64 0) (toU64 0) total (noBit (noBit fl (toU64 8)) (toU64 4)) (addi at (toU64 1))
+      | false => ckFail total (addi at (toU64 1))
+
+def ckTr : run Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (u8eq b (toU8 13)) motive (λ _ → Ck)
+      | true =>
+          (match (has fl (toU64 32)) motive (λ _ → Ck)
+            | true =>
+                (match (has fl (toU64 16)) motive (λ _ → Ck)
+                  | true => ck (toU64 7) (toU64 0) (toU64 0) total (noBit fl (toU64 64)) (addi at (toU64 1))
+                  | false => ckFail total (addi at (toU64 1)))
+            | false => ck (toU64 7) (toU64 0) (toU64 0) total (withBit fl (toU64 64)) (addi at (toU64 1)))
+      | false =>
+          (match (u8eq b (toU8 10)) motive (λ _ → Ck)
+            | true => ckFail total (addi at (toU64 1))
+            | false =>
+                (match (u8eq b (toU8 58)) motive (λ _ → Ck)
+                  | true => ck (toU64 6) (toU64 0) (toU64 0) total (withBit (withBit fl (toU64 16)) (toU64 32)) (addi at (toU64 1))
+                  | false => ck (toU64 6) (toU64 0) (toU64 0) total (withBit fl (toU64 32)) (addi at (toU64 1))))
+
+def ckTrLf : run Π (+ total : U64) → Π (+ fl : U64) → Π (+ at : U64) → Π (+ b : U8) → Ck :=
+  λ (+ total : U64) → λ (+ fl : U64) → λ (+ at : U64) → λ (+ b : U8) →
+    match (u8eq b (toU8 10)) motive (λ _ → Ck)
+      | true =>
+          (match (has fl (toU64 64)) motive (λ _ → Ck)
+            | true => ck (toU64 8) (toU64 0) (toU64 0) total fl (addi at (toU64 1))
+            | false => ck (toU64 6) (toU64 0) (toU64 0) total (noBit (noBit (noBit fl (toU64 16)) (toU64 32)) (toU64 64)) (addi at (toU64 1)))
+      | false => ckFail total (addi at (toU64 1))
+
+def ckByte : run Π (+ st : Ck) → Π (+ b : U8) → Ck :=
+  λ (+ st : Ck) → λ (+ b : U8) →
+    match st motive (λ _ → Ck)
+      | ck ph acc rem total fl at =>
+          (match (or (u64eq ph (toU64 8)) (u64eq ph (toU64 9))) motive (λ _ → Ck)
+            | true => st
+            | false =>
+                (match (u64eq ph (toU64 0)) motive (λ _ → Ck)
+                  | true => ckSize acc total fl at b
+                  | false =>
+                      (match (u64eq ph (toU64 1)) motive (λ _ → Ck)
+                        | true => ckExt rem total fl at b
+                        | false =>
+                            (match (u64eq ph (toU64 2)) motive (λ _ → Ck)
+                              | true => ckSizeLf rem total fl at b
+                              | false =>
+                                  (match (u64eq ph (toU64 3)) motive (λ _ → Ck)
+                                    | true => ckData rem total fl at
+                                    | false =>
+                                        (match (u64eq ph (toU64 4)) motive (λ _ → Ck)
+                                          | true => ckDataCr total fl at b
+                                          | false =>
+                                              (match (u64eq ph (toU64 5)) motive (λ _ → Ck)
+                                                | true => ckDataLf total fl at b
+                                                | false =>
+                                                    (match (u64eq ph (toU64 6)) motive (λ _ → Ck)
+                                                      | true => ckTr total fl at b
+                                                      | false => ckTrLf total fl at b))))))))
+
+def ckPh : run Π (+ st : Ck) → U64 :=
+  λ (+ st : Ck) →
+    match st motive (λ _ → U64)
+      | ck ph _acc _rem _total _fl _at => ph
+
+def ckAt : run Π (+ st : Ck) → U64 :=
+  λ (+ st : Ck) →
+    match st motive (λ _ → U64)
+      | ck _ph _acc _rem _total _fl at => at
+
+def ckRem : run Π (+ st : Ck) → U64 :=
+  λ (+ st : Ck) →
+    match st motive (λ _ → U64)
+      | ck _ph _acc rem _total _fl _at => rem
+
+def ckTotal : run Π (+ st : Ck) → U64 :=
+  λ (+ st : Ck) →
+    match st motive (λ _ → U64)
+      | ck _ph _acc _rem total _fl _at => total
+
+def ckDone : run Π (+ st : Ck) → Bool :=
+  λ (+ st : Ck) → u64eq (ckPh st) (toU64 8)
+
+def ckBad : run Π (+ st : Ck) → Bool :=
+  λ (+ st : Ck) → u64eq (ckPh st) (toU64 9)
+
+def bodyTail : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    match (headersDone s) motive (λ _ → Slice)
+      | true => slice s (headerEnd s) (subi (sliceLen s) (headerEnd s))
+      | false => b""
+
+def tailLen : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    match (headersDone s) motive (λ _ → U64)
+      | true => subi (sliceLen s) (headerEnd s)
+      | false => toU64 0
+
+-- A stored end is the header block already found, so the fold
+-- does not run again. 0 means unknown: a complete header block
+-- is never at offset 0 (CRLF CRLF is at least four bytes). A
+-- stored end must also sit inside the current slice (hend <=
+-- sliceLen). A value past the slice is treated as unknown. The
+-- adapter clears hend before consume() slides the buffer:
+-- finishWrite resets it to 0 and remember stores that Out, then
+-- consume moves the tail. The bound check is the cheap fallback
+-- if that ever fails.
+def endKnown : run Π (+ hend : U64) → Π (+ s : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    and (not (u64eq hend (toU64 0))) (not (u64lt (sliceLen s) hend))
+
+def headerEndAt : run Π (+ hend : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → U64)
+      | true => hend
+      | false => headerEnd s
+
+def headersDoneAt : run Π (+ hend : U64) → Π (+ s : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → Bool)
+      | true => true
+      | false => headersDone s
+
+-- Map a measured headerEnd to the stored form: the incomplete
+-- sentinel (sliceLen + 1) becomes 0, and a real end is kept.
+def storedEnd : run Π (+ h : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ h : U64) → λ (+ s : Slice) →
+    match (u64eq h (addi (sliceLen s) (toU64 1))) motive (λ _ → U64)
+      | true => toU64 0
+      | false => h
+
+-- Bind headerEnd once. Callers should remember before statusOfAt
+-- so a complete first read takes the known-end arms and does not
+-- fold the header again at every headersDoneAt / headerEndAt site.
+def rememberEnd : run Π (+ hend : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → U64)
+      | true => hend
+      | false => storedEnd (headerEnd s) s
+
+def bodyTailAt : run Π (+ hend : U64) → Π (+ s : Slice) → Slice :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (headersDoneAt hend s) motive (λ _ → Slice)
+      | true =>
+          slice s (headerEndAt hend s) (subi (sliceLen s) (headerEndAt hend s))
+      | false => b""
+
+def chunkScanAt : run Π (+ hend : U64) → Π (+ s : Slice) → Ck :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    sliceFold Ck ckStart
+      (λ (b : U8) → λ (_r : Slice) → λ (st : Ck) → ckByte st b)
+      (bodyTailAt hend s)
+
+
+def tailLenAt : run Π (+ hend : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (headersDoneAt hend s) motive (λ _ → U64)
+      | true => subi (sliceLen s) (headerEndAt hend s)
+      | false => toU64 0
+
+def bodyAtAt : run Π (+ hend : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (headersDoneAt hend s) motive (λ _ → U64)
+      | true => headerEndAt hend s
+      | false => addi (sliceLen s) (toU64 1)
+
+def bodyShortAt : run Π (+ hend : U64) → Π (+ st : HSt) → Π (+ s : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ st : HSt) → λ (+ s : Slice) →
+    and (sawCLSt st) (u64lt (sliceLen s) (addi (headerEndAt hend s) (contentLengthSt st)))
+
+def streamLenAt : run Π (+ hend : U64) → Π (+ st : HSt) → Π (+ s : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ st : HSt) → λ (+ s : Slice) →
+    and (headersDoneAt hend s) (and (bodyShortAt hend st s) (gt16384 (contentLengthSt st)))
+
+def bodyLenAt : run Π (+ hend : U64) → Π (+ st : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ st : HSt) → λ (+ s : Slice) →
+    match (headersDoneAt hend s) motive (λ _ → U64)
+      | true =>
+          (match (and (sawCLSt st) (not (bodyShortAt hend st s))) motive (λ _ → U64)
+            | true => contentLengthSt st
+            | false => toU64 0)
+      | false => toU64 0
+
+def chunkStatusAt : run Π (+ hend : U64) → Π (+ s : Slice) → Status :=
+  λ (+ hend : U64) → λ (+ s : Slice) →
+    match (chunkScanAt hend s) motive (λ _ → Status)
+      | ck ph _acc _rem _total _fl _at =>
+          (match (u64eq ph (toU64 9)) motive (λ _ → Status)
+            | true => status-malformed
+            | false =>
+                (match (u64eq ph (toU64 8)) motive (λ _ → Status)
+                  | true => status-ok
+                  | false =>
+                      (match (u64lt (toU64 16384) (tailLenAt hend s)) motive (λ _ → Status)
+                        | true => status-ok
+                        | false => status-need-more)))
+
+def statusOfAt : run Π (+ hend : U64) → Π (+ st : HSt) → Π (+ s : Slice) → Status :=
+  λ (+ hend : U64) → λ (+ st : HSt) → λ (+ s : Slice) →
+    match (has (scanFl st) (toU64 8192)) motive (λ _ → Status)
+      | true => status-malformed
+      | false =>
+          (match (headersDoneAt hend s) motive (λ _ → Status)
+            | true =>
+                (match (gt16384 (headerEndAt hend s)) motive (λ _ → Status)
+                  | true => status-malformed
+                  | false =>
+                      (match (lineOk s) motive (λ _ → Status)
+                        | true =>
+                            (match (headersOkSt st) motive (λ _ → Status)
+                              | true =>
+                                  (match (or (methodBad s) (or (teBadSt st) (hostBadSt st s))) motive (λ _ → Status)
+                                    | true => status-malformed
+                                    | false =>
+                                        (match (teUnkSt st) motive (λ _ → Status)
+                                          | true => status-unimplemented
+                                          | false =>
+                                              (match (teChunkSt st) motive (λ _ → Status)
+                                                | true => chunkStatusAt hend s
+                                                | false =>
+                                                    (match (streamLenAt hend st s) motive (λ _ → Status)
+                                                      | true => status-ok
+                                                      | false =>
+                                                          (match (bodyShortAt hend st s) motive (λ _ → Status)
+                                                            | true => status-need-more
+                                                            | false => status-ok)))))
+                              | false => status-malformed)
+                        | false => status-malformed))
+            | false =>
+                (match (gt16384 (sliceLen s)) motive (λ _ → Status)
+                  | true => status-malformed
+                  | false => status-need-more))
+
+-- 1 when the first scan saw a chunked Transfer-Encoding, else 0.
+def teBit : run Π (+ st : HSt) → U64 :=
+  λ (+ st : HSt) →
+    match (teChunkSt st) motive (λ _ → U64)
+      | true => toU64 1
+      | false => toU64 0
+
+-- 1 when the first scan saw Content-Length, else 0.
+def sawCLBit : run Π (+ st : HSt) → U64 :=
+  λ (+ st : HSt) →
+    match (sawCLSt st) motive (λ _ → U64)
+      | true => toU64 1
+      | false => toU64 0
+
+-- Framing facts are stored next to hend. They are only used when
+-- that end is known for this slice; otherwise they are 0.
+def teWhen : run Π (+ hend : U64) → Π (+ hs : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ hs : HSt) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → U64)
+      | true => teBit hs
+      | false => toU64 0
+
+def sawCLWhen : run Π (+ hend : U64) → Π (+ hs : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ hs : HSt) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → U64)
+      | true => sawCLBit hs
+      | false => toU64 0
+
+def clWhen : run Π (+ hend : U64) → Π (+ hs : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ hs : HSt) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → U64)
+      | true => contentLengthSt hs
+      | false => toU64 0
+
+-- bodyShort / streamLen / bodyLen from stored facts, not a new scan.
+def bodyShortFacts : run Π (+ hend : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ s : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ s : Slice) →
+    and (u64eq sawCL (toU64 1)) (u64lt (sliceLen s) (addi (headerEndAt hend s) cl))
+
+def streamLenFacts : run Π (+ hend : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ s : Slice) → Bool :=
+  λ (+ hend : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ s : Slice) →
+    and (headersDoneAt hend s) (and (bodyShortFacts hend sawCL cl s) (gt16384 cl))
+
+def bodyLenFacts : run Π (+ hend : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ s : Slice) →
+    match (headersDoneAt hend s) motive (λ _ → U64)
+      | true =>
+          (match (and (u64eq sawCL (toU64 1)) (not (bodyShortFacts hend sawCL cl s))) motive (λ _ → U64)
+            | true => cl
+            | false => toU64 0)
+      | false => toU64 0
+
+-- Same arms as the old HSt form, but the first-scan facts are
+-- arguments. A later finish does not fold the headers again.
+def framedEndHs : run Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ s : Slice) →
+    match (u64eq te (toU64 1)) motive (λ _ → U64)
+      | true =>
+          (match (chunkScanAt hend s) motive (λ _ → U64)
+            | ck ph _acc _rem _total _fl at =>
+                (match (u64eq ph (toU64 8)) motive (λ _ → U64)
+                  | true => addi (headerEndAt hend s) at
+                  | false => sliceLen s))
+      | false =>
+          (match (streamLenFacts hend sawCL cl s) motive (λ _ → U64)
+            | true => sliceLen s
+            | false => addi (bodyAtAt hend s) (bodyLenFacts hend sawCL cl s))
+
+-- Fallback when the stored end is unknown or past this slice:
+-- one scan, then the same arms.
+def framedEndStAt : run Π (+ hend : U64) → Π (+ st : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ st : HSt) → λ (+ s : Slice) →
+    framedEndHs hend (teBit st) (sawCLBit st) (contentLengthSt st) s
+
+-- When the stored end is in (0, sliceLen], use the stored facts
+-- and do not scan. Otherwise scan once and ignore those facts.
+def framedEndAt : run Π (+ hend : U64) → Π (+ te : U64) → Π (+ sawCL : U64) → Π (+ cl : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ hend : U64) → λ (+ te : U64) → λ (+ sawCL : U64) → λ (+ cl : U64) → λ (+ s : Slice) →
+    match (endKnown hend s) motive (λ _ → U64)
+      | true => framedEndHs hend te sawCL cl s
+      | false => framedEndStAt hend (scan s) s
+
+def chunkScan : run Π (+ s : Slice) → Ck :=
+  λ (+ s : Slice) →
+    sliceFold Ck ckStart
+      (λ (b : U8) → λ (_r : Slice) → λ (st : Ck) → ckByte st b)
+      (bodyTail s)
+
+-- One scan. Bad framing is malformed. A finished body is ok. A tail
+-- already longer than 16384 is ok so the host can stream it. Anything
+-- shorter, including a header block with no chunk bytes yet, waits.
+def chunkStatus : run Π (+ s : Slice) → Status :=
+  λ (+ s : Slice) →
+    match (chunkScan s) motive (λ _ → Status)
+      | ck ph _acc _rem _total _fl _at =>
+          (match (u64eq ph (toU64 9)) motive (λ _ → Status)
+            | true => status-malformed
+            | false =>
+                (match (u64eq ph (toU64 8)) motive (λ _ → Status)
+                  | true => status-ok
+                  | false =>
+                      (match (u64lt (toU64 16384) (tailLen s)) motive (λ _ → Status)
+                        | true => status-ok
+                        | false => status-need-more)))
+
+-- A bare LF is malformed even when the header block is unfinished.
+-- An unknown transfer coding is status-unimplemented here, so a
+-- caller that only reads classify cannot treat it as success.
+-- Chunked that is not final is teBad and stays malformed.
+def statusOfSt : run Π (+ st : HSt) → Π (+ s : Slice) → Status :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (has (scanFl st) (toU64 8192)) motive (λ _ → Status)
+      | true => status-malformed
+      | false =>
+          (match (headersDone s) motive (λ _ → Status)
+            | true =>
+                (match (gt16384 (headerEnd s)) motive (λ _ → Status)
+                  | true => status-malformed
+                  | false =>
+                      (match (lineOk s) motive (λ _ → Status)
+                        | true =>
+                            (match (headersOkSt st) motive (λ _ → Status)
+                              | true =>
+                                  (match (or (methodBad s) (or (teBadSt st) (hostBadSt st s))) motive (λ _ → Status)
+                                    | true => status-malformed
+                                    | false =>
+                                        (match (teUnkSt st) motive (λ _ → Status)
+                                          | true => status-unimplemented
+                                          | false =>
+                                              (match (teChunkSt st) motive (λ _ → Status)
+                                                | true => chunkStatus s
+                                                | false =>
+                                                    (match (streamLenSt st s) motive (λ _ → Status)
+                                                      | true => status-ok
+                                                      | false =>
+                                                          (match (bodyShortSt st s) motive (λ _ → Status)
+                                                            | true => status-need-more
+                                                            | false => status-ok)))))
+                              | false => status-malformed)
+                        | false => status-malformed))
+            | false =>
+                (match (gt16384 (sliceLen s)) motive (λ _ → Status)
+                  | true => status-malformed
+                  | false => status-need-more))
+
+def statusOf : run Π (+ s : Slice) → Status :=
+  λ (+ s : Slice) → statusOfSt (scan s) s
+
+def classifySt : run Π (+ st : HSt) → Π (+ s : Slice) → Classified :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    classified (statusOfSt st s) (keepOfSt st s)
+
+def classify : run Π (+ s : Slice) → Classified :=
+  λ (+ s : Slice) → classifySt (scan s) s
+
+-- First byte after this request. A finished chunked message ends at
+-- the last chunk byte. A body the host will stream ends at the last
+-- byte currently buffered, so that prefix is not parsed again.
+-- Everything else is the old headerEnd + Content-Length.
+def framedEndSt : run Π (+ st : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (teChunkSt st) motive (λ _ → U64)
+      | true =>
+          (match (chunkScan s) motive (λ _ → U64)
+            | ck ph _acc _rem _total _fl at =>
+                (match (u64eq ph (toU64 8)) motive (λ _ → U64)
+                  | true => addi (headerEnd s) at
+                  | false => sliceLen s))
+      | false =>
+          (match (streamLenSt st s) motive (λ _ → U64)
+            | true => sliceLen s
+            | false => addi (bodyAt s) (bodyLenSt st s))
+
+def framedEnd : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → framedEndSt (scan s) s
+
+-- 1 when the host must copy the buffered prefix and read the rest
+-- from the socket. 0 when this buffer already holds the message,
+-- or the message is not one the host streams.
+def streamTakeSt : run Π (+ st : HSt) → Π (+ s : Slice) → U64 :=
+  λ (+ st : HSt) → λ (+ s : Slice) →
+    match (streamLenSt st s) motive (λ _ → U64)
+      | true => toU64 1
+      | false =>
+          (match (and (headersDone s) (teChunkSt st)) motive (λ _ → U64)
+            | true =>
+                (match (chunkScan s) motive (λ _ → U64)
+                  | ck ph _acc _rem _total _fl _at =>
+                      (match (or (u64eq ph (toU64 8)) (u64eq ph (toU64 9))) motive (λ _ → U64)
+                        | true => toU64 0
+                        | false =>
+                            (match (u64lt (toU64 16384) (tailLen s)) motive (λ _ → U64)
+                              | true => toU64 1
+                              | false => toU64 0)))
+            | false => toU64 0)
+
+def streamTake : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → streamTakeSt (scan s) s
+
+-- Header walk. Mode 0 counts. Mode 1 stores the first value whose
+-- name matches, ignoring ASCII case. The name is the raw span, the
+-- same bytes the scan classifies, so a space before the colon is
+-- not a match. Values are trimmed. Mode 2 stores the name at an
+-- index. Mode 3 stores the value at an index. A missing header is
+-- an empty slice past the buffer. An empty value is an empty slice
+-- inside it. The fold is unboxed, so the walk allocates nothing.
+def hdBlank : run Hd :=
+  hd (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0) (toU64 0)
+
+def trimAt : run Π (+ buf : Slice) → Π (+ at : U64) → Π (+ n : U64) → U64 :=
+  λ (+ buf : Slice) → λ (+ at : U64) → λ (+ n : U64) →
+    addi at (leadCount (slice buf at n))
+
+def trimN : run Π (+ buf : Slice) → Π (+ at : U64) → Π (+ n : U64) → U64 :=
+  λ (+ buf : Slice) → λ (+ at : U64) → λ (+ n : U64) →
+    trailEnd (slice buf (trimAt buf at n) (subi n (subi (trimAt buf at n) at)))
+
+def valLenOf : run Π (+ ce : U64) → Π (+ col : U64) → U64 :=
+  λ (+ ce : U64) → λ (+ col : U64) →
+    match (u64lt ce (addi col (toU64 1))) motive (λ _ → U64)
+      | true => toU64 0
+      | false => subi ce (addi col (toU64 1))
+
+def takeHdr : run Π (+ mode : U64) → Π (+ want : Slice) → Π (+ index : U64) → Π (+ buf : Slice) → Π (+ n : U64) → Π (+ nameAt : U64) → Π (+ nameN : U64) → Π (+ hit : U64) → Bool :=
+  λ (+ mode : U64) → λ (+ want : Slice) → λ (+ index : U64) → λ (+ buf : Slice) → λ (+ n : U64) → λ (+ nameAt : U64) → λ (+ nameN : U64) → λ (+ hit : U64) →
+    match (or (u64eq mode (toU64 0)) (not (u64nil hit))) motive (λ _ → Bool)
+      | true => false
+      | false =>
+          (match (u64eq mode (toU64 1)) motive (λ _ → Bool)
+            | true => nameEq (slice buf nameAt nameN) want
+            | false =>
+                (match (or (u64eq mode (toU64 2)) (u64eq mode (toU64 3))) motive (λ _ → Bool)
+                  | true => u64eq n index
+                  | false => false))
+
+def recordAt : run Π (+ mode : U64) → Π (+ nameAt : U64) → Π (+ valAt : U64) → U64 :=
+  λ (+ mode : U64) → λ (+ nameAt : U64) → λ (+ valAt : U64) →
+    match (u64eq mode (toU64 2)) motive (λ _ → U64)
+      | true => nameAt
+      | false => valAt
+
+def recordN : run Π (+ mode : U64) → Π (+ nameN : U64) → Π (+ valN : U64) → U64 :=
+  λ (+ mode : U64) → λ (+ nameN : U64) → λ (+ valN : U64) →
+    match (u64eq mode (toU64 2)) motive (λ _ → U64)
+      | true => nameN
+      | false => valN
+
+def applyHdr : run Π (+ buf : Slice) → Π (+ mode : U64) → Π (+ want : Slice) → Π (+ index : U64) → Π (+ i : U64) → Π (+ n : U64) → Π (+ ls : U64) → Π (+ col : U64) → Π (+ ce : U64) → Π (+ a0 : U64) → Π (+ a1 : U64) → Π (+ hit : U64) → Hd :=
+  λ (+ buf : Slice) → λ (+ mode : U64) → λ (+ want : Slice) → λ (+ index : U64) → λ (+ i : U64) → λ (+ n : U64) → λ (+ ls : U64) → λ (+ col : U64) → λ (+ ce : U64) → λ (+ a0 : U64) → λ (+ a1 : U64) → λ (+ hit : U64) →
+    match (takeHdr mode want index buf n ls (subi col ls) hit) motive (λ _ → Hd)
+      | true =>
+          hd (toU64 1) (addi n (toU64 1)) (addi i (toU64 1)) (toU64 0)
+            (recordAt mode ls (trimAt buf (addi col (toU64 1)) (valLenOf ce col)))
+            (recordN mode (subi col ls) (trimN buf (addi col (toU64 1)) (valLenOf ce col)))
+            (toU64 1)
+      | false => hd (toU64 1) (addi n (toU64 1)) (addi i (toU64 1)) (toU64 0) a0 a1 hit
+
+def onHdrLf : run Π (+ buf : Slice) → Π (+ mode : U64) → Π (+ want : Slice) → Π (+ index : U64) → Π (+ i : U64) → Π (+ ph : U64) → Π (+ n : U64) → Π (+ ls : U64) → Π (+ col : U64) → Π (+ a0 : U64) → Π (+ a1 : U64) → Π (+ hit : U64) → Hd :=
+  λ (+ buf : Slice) → λ (+ mode : U64) → λ (+ want : Slice) → λ (+ index : U64) → λ (+ i : U64) → λ (+ ph : U64) → λ (+ n : U64) → λ (+ ls : U64) → λ (+ col : U64) → λ (+ a0 : U64) → λ (+ a1 : U64) → λ (+ hit : U64) →
+    match (u64eq ph (toU64 0)) motive (λ _ → Hd)
+      | true => hd (toU64 1) n (addi i (toU64 1)) (toU64 0) a0 a1 hit
+      | false =>
+          (match (u64eq (contentEnd buf i ls) ls) motive (λ _ → Hd)
+            | true => hd (toU64 3) n ls col a0 a1 hit
+            | false =>
+                (match (u64eq col (toU64 0)) motive (λ _ → Hd)
+                  | true => hd (toU64 1) n (addi i (toU64 1)) (toU64 0) a0 a1 hit
+                  | false => applyHdr buf mode want index i n ls col (contentEnd buf i ls) a0 a1 hit))
+
+def stepHd : run Π (+ buf : Slice) → Π (+ mode : U64) → Π (+ want : Slice) → Π (+ index : U64) → Π (+ b : U8) → Π (+ i : U64) → Π (+ st : Hd) → Hd :=
+  λ (+ buf : Slice) → λ (+ mode : U64) → λ (+ want : Slice) → λ (+ index : U64) → λ (+ b : U8) → λ (+ i : U64) → λ (+ st : Hd) →
+    match st motive (λ _ → Hd)
+      | hd ph n ls col a0 a1 hit =>
+          (match (u64eq ph (toU64 3)) motive (λ _ → Hd)
+            | true => st
+            | false =>
+                (match (u8eq b (toU8 10)) motive (λ _ → Hd)
+                  | true => onHdrLf buf mode want index i ph n ls col a0 a1 hit
+                  | false =>
+                      (match (and (u64eq ph (toU64 1)) (and (u8eq b (toU8 58)) (u64eq col (toU64 0)))) motive (λ _ → Hd)
+                        | true => hd ph n ls i a0 a1 hit
+                        | false => st)))
+
+def headerWalk : run Π (+ buf : Slice) → Π (+ mode : U64) → Π (+ want : Slice) → Π (+ index : U64) → Hd :=
+  λ (+ buf : Slice) → λ (+ mode : U64) → λ (+ want : Slice) → λ (+ index : U64) →
+    sliceFold Hd hdBlank
+      (λ (b : U8) → λ (r : Slice) → λ (st : Hd) → stepHd buf mode want index b (byteIndex buf r) st)
+      buf
+
+def hdCount : run Π (st : Hd) → U64 :=
+  λ (st : Hd) →
+    match st motive (λ _ → U64)
+      | hd _ph n _ls _col _a0 _a1 _hit => n
+
+def spanOrMiss : run Π (+ buf : Slice) → Π (st : Hd) → Slice :=
+  λ (+ buf : Slice) → λ (st : Hd) →
+    match st motive (λ _ → Slice)
+      | hd _ph _n _ls _col a0 a1 hit =>
+          (match (u64eq hit (toU64 1)) motive (λ _ → Slice)
+            | true => slice buf a0 a1
+            | false => slice buf (addi (sliceLen buf) (toU64 1)) (toU64 0))
+
+def headerCount : run Π (+ buf : Slice) → U64 :=
+  λ (+ buf : Slice) → hdCount (headerWalk buf (toU64 0) b"" (toU64 0))
+
+def headerName : run Π (+ buf : Slice) → Π (+ index : U64) → Slice :=
+  λ (+ buf : Slice) → λ (+ index : U64) →
+    spanOrMiss buf (headerWalk buf (toU64 2) b"" index)
+
+def headerValue : run Π (+ buf : Slice) → Π (+ index : U64) → Slice :=
+  λ (+ buf : Slice) → λ (+ index : U64) →
+    spanOrMiss buf (headerWalk buf (toU64 3) b"" index)
+
+def findHeader : run Π (+ buf : Slice) → Π (+ name : Slice) → Slice :=
+  λ (+ buf : Slice) → λ (+ name : Slice) →
+    spanOrMiss buf (headerWalk buf (toU64 1) name (toU64 0))

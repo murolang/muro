@@ -820,6 +820,16 @@ defmodule Muro.IR.Check do
   defp infer({:pair, a, b}, env, ctx), do: {:pair, infer(a, env, ctx), infer(b, env, ctx)}
   defp infer({:call, name, _}, _env, ctx), do: call_ret(ctx, name)
   defp infer({:con, d, _, _}, _env, _ctx), do: {:data, d}
+  # `{:wrd, k, op, args}` carries the word kind, not the result. The
+  # result follows `Muro.IR`'s word images: checked arithmetic and
+  # division give an option, comparisons a boolean, `ton` a Nat. A
+  # bare `none` has no payload kind, so it agrees with any option.
+  defp infer({:wrd, k, op, _}, _env, _ctx) when op in [:cadd, :csub, :cmul, :div, :rem, :some],
+    do: {:opt, k}
+
+  defp infer({:wrd, _, op, _}, _env, _ctx) when op in [:eq, :lt, :le, true, false], do: :wbool
+  defp infer({:wrd, _, :ton, _}, _env, _ctx), do: :nat
+  defp infer({:wrd, _, :none, _}, _env, _ctx), do: :unknown
   defp infer({:wrd, lay, _, _}, _env, _ctx), do: lay
 
   defp infer({:let, x, lay, _g, _v, b}, env, ctx) do

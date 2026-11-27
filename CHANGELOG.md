@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.22.40
+
+`Muro.IR.Eval` is a call-by-value interpreter of a `Muro.IR` image. `call/4` runs one function on argument values and returns `{:ok, value}` or `{:error, reason}`; `eval/4` evaluates a term under an environment, `take/4` reads the first heads of a stream, and `apply_value/4` applies a closure. It reads every image `Muro.IR` produces: the default image of `Muro.IR.elaborate/2`, that image after `Muro.IR.Share.funs/2`, and the closures image (`{:lam, ...}`, `{:appv, ...}`, typed matches). Values are `{:nat, n}`, `:tt`, `{:word, k, residue}`, `true`/`false`, `{:some, v}`/`:none`, `{:str, utf8}`, `{:bytes, bin}`, `{:pair, a, b}`, `{:con, data, ctor, live_fields}` (an atom is `{:con, "Atom", name, []}`), `{:stream, step, caps, seed}`, `{:clo, env, x, body}`, and `:erased` for an erased constructor field's `let`. Every call, closure application, stream `uncons`, and `bfold` octet spends one unit of fuel (default 1,000,000), so a run that does not stop ends in `{:error, :out_of_fuel}`. Other errors are `:abort`, `{:unbound, x}`, `{:unknown_fun, f}`, `{:arity, f, want, got}`, `{:no_arm, v}`, `{:type, want, v}`, `{:stuck_word, op, args}`, and `{:unknown_term, t}`. A word operation is handed to `Muro.Word.step/2` on the literal terms of its argument values, so wrapping, signed order, total shifts, checked arithmetic, and division by zero are the checker's own reductions. Strings and bytes use `Muro.Print.scalar_count/1` and `Muro.Bytes`. A generated fold or stream step is looked up apart from source runs, as in `Muro.IR.Share`. `sliceUncons` is the book's `Maybe` (`just (octet, rest)` or `nothing`).
+
+`Muro.IR.Eval.Ref` is the bridge to `Muro.Check.normalize/3`. `of_normal/2` reads a closed normal form as an `Eval` value, dropping erased constructor fields as elaboration does; a λ, a stream, or a stuck term is `{:error, {:not_value, t}}`. `to_term/3` writes a first-order value back as a closed de Bruijn term.
+
+No emitter changed. Emitted bytes for every backend are the same.
+
+`Muro.IR.Check` infers the result layout of a word term from its operation, as `Muro.IR` does, instead of the word kind: checked add/sub/mul, `div`, `rem`, and `some` give `{:opt, k}`, comparisons and `true`/`false` give `:wbool`, `toNat` gives `:nat`, and a bare `none` agrees with any layout. A run that returns `addc x y` or `eqi x y` directly no longer fails the return-layout check. The ops fixture found it.
+
+### Tests
+
+- `test/muro_ir_eval_test.exs`: every IR form, fuel exhaustion, closures, folds, streams, words, strings, bytes, options, pairs, atoms, data matches, error cases, and the bridge.
+- `test/muro_ir_diff_test.exs`: `normalize == Eval(elaborate) == Eval(Share(elaborate)) == Eval(elaborate(closures: true))` on every run of `examples`, `test/fixtures`, and `lib/muro/std` (over 1,100 runs), on four seeded inputs each generated from the run's Π telescope (data with its parameters, type aliases, words at their edges, strings, bytes, options, pairs, atoms, and function arguments for the closures image). Each run is elaborated with only the runs it reaches, so one refused run does not drop its book. A stream result is compared on its first three heads. Books that do not check and books with no elaborated run are listed in the test. One run (`vec.muro` `lookup`) never reaches a value under `normalize` because the generator does not tie its two indices.
+- `test/fixtures/ir_eval_ops.muro`: one run per word operation and kind (add, sub, mul, and, or, xor, checked add/sub/mul, div, rem, eq, lt, le, not, shl, shr, `toK`, `toNat`, every cast) and per string, bytes, option, and pair operation, compared on every combination of edge values (over 8,000 cases).
+- `test/muro_ir_http_diff_test.exs`: the HTTP step book of `doctorcorral/muro-http` (`priv/muro/http/step.muro` and `request.muro` at 1050ea3, evidence removed, runs and data verbatim) under `test/http_step`. `step0` and `stepFact` on HTTP request bytes from every phase and fact, and every closed run of the book, agree with `normalize` on all three images. Four closed runs that read 16 KiB buffers compare the images with one another.
+
+### Manual
+
+- Extending: `Muro.IR.Eval` and `Muro.IR.Eval.Ref`.
+
+### Package
+
+- Version 0.22.40.
+
 ## 0.22.39
 
 `Muro.IR` now carries a live grade (`:linear`, `:affine`, or `:reuse`) on every parameter and `let`, taken from `Muro.Grade.kernel_qty/1`. A binder whose quantity is erased (`:erased`, or a grade pair whose compute grade is 0) is dropped and does not appear as a live parameter. `Muro.IR.Share` preserves those grades through CSE, inlining, and known-scrutinee pruning: a hoisted let is `:reuse`, and `relax_fun/1` downgrades an unused `:linear` binder (a body let, or a parameter whose only use was a dropped let after inlining or a prune) to `:affine`. `Muro.IR.Check` treats `:abort` as bottom for path-grade joins, so a linear binder used on every live arm still checks after Share rewrites a dead arm to `:abort`; uses that already happened on that path still count. Match-arm field grades come from the constructor telescope and fold-step parameters from `peel_fold`, so a linear or affine field or fold binder is accounted. Closures charge captures at formation, as in `Muro.Grade`; a `:reuse` binding, argument, or constructor field may not mention a linear or affine variable. `letp` binders are `:affine`. A `suc` or `wsome` predecessor takes `pred_qty` from the scrutinee (`:reuse` under a `:reuse` variable). Without a book, constructor field grades are not defaulted to `:reuse`. Closures applications check the argument layout and reuse-capture; atom matches are exhaustive on `:atom`; Share freshens λ and typed-match binders, relaxes unused linear λ parameters, and Check guards reuse fold/stream captures. The C, Rust, Zig, JavaScript, and assembly emitters ignore the grade, so emitted bytes are unchanged.
