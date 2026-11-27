@@ -52,7 +52,7 @@ defmodule Muro.Prefix do
     }
 
     if at in [:start, {:name, "start"}] do
-      case Muro.Choreo.check(chor.name, chor.roles, chor.body, book) do
+      case Muro.Choreo.check_decl(chor, book) do
         {:error, msg} -> {:error, blamed(loc, name, "#{chor.name}: #{msg}")}
         {:ok, _lines} -> judge_global_moves(chor, moves, st)
       end

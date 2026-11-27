@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.22.44
+
+A family can range over a choreography (#310). `family rollout : plan per key`, with no kind and no hold rule, runs one instance of the global type `plan` per key, any number of keys at once, independent across keys. The checker prints `family rollout: plan per key`.
+
+`roles release shared, front, worker` marks a role as one party for every key. A message between two shared roles, or a choice by a shared role, written before any other step is the shared preamble: it happens once, before any key steps, and a choice there picks the branch every key starts in. Every later step is per key, including a message between a shared role and a per-key role (`release -> front : deploy`) and a choice by a shared role (`release chooses keep or undo` is decided per site). A message between two shared roles after a per-key step is refused on the choreography: `<from> -> <to> : <label> is between shared roles after a per-key step; a message between shared roles belongs in the shared preamble`. `shared` changes nothing else: a choreography with marks and no family checks, projects, and emits its #308 monitor byte for byte as it does without them. `shared` is a mark only right after a role in `roles`; `shared -> a : x` is still a role named `shared`.
+
+A family of a choreography is refused with `unknown choreography <name>`, `<name> is a meeting: a family of a meeting names its kind, per key of <Kind>`, `<name> is a choreography: a family of a choreography is per key, with no kind and no hold rules` (the #310 report, which used to be `unknown meeting plan`), `a family of a choreography has no hold rules`, `may redeliver is a mark on a family of a meeting`, `skipped because <name> does not check` (the choreography's own #308 refusals, atom-spelling clashes included, stay on the choreography), and `every role of <name> is shared, so no step runs per key`. A contract on it is `<family> ranges over a choreography: a contract names a family of a meeting`.
+
+A temporal declaration may name the family: `forall (k : key)` with the atoms `done k (a -> b : label)` (the payload written when it is not `Unit`) and `done k (p chooses label)`, combined with `not`, `and`, `or`, `implies`, under `always`, `eventually`, or `leads_to`. The check is one key and the shared preamble, which is exact: keys share nothing after the finite preamble, and the global type has no recursion. The count is the positions of the global type and its interactions, plus one self-loop per end. A safety refusal is the breadth-first path, with preamble steps marked `(shared)`, then `next <interaction>` or `end`; a liveness refusal is a path to an end, then `then forever: the key has finished: end`. A second key binder, an unbound key, an interaction or choice the choreography does not write, and any other atom are refused. `done k (…)` over a meeting is `done names an interaction of a choreography family`. `done done` stays the role atom.
+
+`--backend fsm` emits one dispatcher child per family of a choreography that checks, named for the family, beside the #308 monitor. `init/0`; `step_shared/4,5` and `choose_shared/3` for the preamble; `step(state, key, from, to, label)`, `step(state, key, from, to, label, value)`, and `choose(state, key, role, label)` per key; `expected_shared/1`, `shared_done?/1`, `expected/2` (`{:shared, expected}` while the preamble is open), `done?/2`, `keys/1`; and `check_trace/1,2` over `{:shared, event}` and `{:key, key, event}`. A key's step before the preamble is done is `{:error, {:key, key, {:preamble, step, expected, event}}}`; a wrong per-key event is `{:error, {:key, key, {:unexpected, step, expected, event}}}`; a shared event after the preamble is `{:unexpected, step, :done, event}`. `check_trace(trace, complete: true)` asks for the end of the preamble and of every key that stepped (`{:incomplete, :shared | {:key, key}, step, expected}`). A bad state, a non-list trace, and an unknown event never raise. A book with no family of a choreography emits the same bytes as before.
+
+### Tests
+
+- `test/muro_choreo_family_test.exs`: parsing (`shared`, a role named `shared`, `per key` with no kind, the `done k (…)` atom), checking (the family line, every refusal, the mid-rollout shared message, a shared choice per key, a plain marked choreography keeps its #308 lines), temporal formulas (holding, `always`/`eventually`/`leads_to` counterexamples with exact traces, binder and atom refusals), and the dispatcher (preamble barrier, independent keys, choices in the preamble, payloads, `check_trace` across interleaved keys, bad states, the outline, byte-identical #308 output with and without marks).
+- `test/muro_emit_reserve_test.exs`: `muro_fsm_cf_done?` and `muro_fsm_cf_pre?` are host names a run cannot take.
+- `test/fixtures/emit-examples.digest`: `release-rollout.muro`.
+
+### Manual
+
+- Choreography: a family of a choreography, `shared`, the preamble, refusals. Temporal: a family of a choreography. State machines: a family of a choreography. Grammar, Emit, Limits, Examples (`release-rollout.muro`), For agents, AGENTS.md, llms.txt.
+
+### Package
+
+- Version 0.22.44.
+
 ## 0.22.43
 
 `Muro.IR.Loop.funs/2` turns every byte fold into a loop. `{:bfold, step, caps, z, s}` becomes `{:loop, caps, octet, rest, acc, z, s, stop, body}`: the generated fold step's captures, each bound once before the first octet; its octet, rest, and accumulator parameters with their grades; the start and the input; the early exit of `Muro.IR.Share.stop/2` as `{v, test}` or `:none`; and the step's body, inlined. The body sees only the loop's binders. A fold step no fold names any more is dropped from the image.

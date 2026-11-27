@@ -2,7 +2,7 @@
 title: Temporal
 slug: temporal
 order: 24
-summary: always, eventually, and leads_to on one buffered meeting, and a family per key of a closed kind.
+summary: always, eventually, and leads_to on one buffered meeting, a family per key of a closed kind, and a family of a choreography.
 ---
 
 # Temporal
@@ -106,7 +106,7 @@ A meeting that does not mark a party keeps the graph this page has described so 
 
 ## A keyed family
 
-A family is spec. It names one buffered meeting and one closed kind, and one rule for each constructor of that kind. The state machine emits one dispatcher for a family that checks. `resolved` drops the instance. The family child has `finish`. `:resolve` drops the instance. `:rerun` keeps it unresolved, and a later `:resolve` drops it. There is no bound on reruns. Each end of the meeting has `finish` too. When one family uses that end, it is the same outcome. When two families share the end, that call names `finish` on the family child and does not resolve. The dispatcher's `check_trace` replays that end together with `arrive`, `resolved`, `rerun`, and `withdraw`. Every other emitter skips the family. It adds nothing to a term. The dispatcher is [State machines](fsm.md#a-keyed-family).
+A family is spec. It names one buffered meeting and one closed kind, and one rule for each constructor of that kind. A family may instead range over a choreography, with no kind and no rule: [A family of a choreography](#a-family-of-a-choreography). The state machine emits one dispatcher for a family that checks. `resolved` drops the instance. The family child has `finish`. `:resolve` drops the instance. `:rerun` keeps it unresolved, and a later `:resolve` drops it. There is no bound on reruns. Each end of the meeting has `finish` too. When one family uses that end, it is the same outcome. When two families share the end, that call names `finish` on the family child and does not resolve. The dispatcher's `check_trace` replays that end together with `arrive`, `resolved`, `rerun`, and `withdraw`. Every other emitter skips the family. It adds nothing to a term. The dispatcher is [State machines](fsm.md#a-keyed-family).
 
 ```
 family slots : slot per key of Event
@@ -201,9 +201,50 @@ The 171649 reachable states and 729184 transitions, and the 370 states and 835 t
 
 The program that writes the dispatcher is not proved. `Muro.Family.Step` follows the proof. `hold_of` is `holdOf`. `blocked?` is `earlierBlocked?`. `any_blocked?` is `anyBlocked?` under `NoDupIx` and held subjects on release: Elixir takes `(rows, key, index)` and skips same-index rows, while Agda takes `(rs, k)` and counts `opened` rows; they need not agree off-invariant. `decide` is `decide` for a kind that is never held or held while an earlier instance is unresolved, and `decideMode` when the hold is `held while any unresolved`. `on_key` is `onKey`. `arrive` is `arriveTo` and `arriveMode`, plus the departed-index refusal, which is not `arriveTo`. `resolve` is `resolveTo` and `resolveMode`. `withdraw` is `withdrawTo` on the successful path; Elixir returns richer error atoms (`:resolved`, `:unknown`, `:opened`) while Agda returns `nothing`. `touch`, `rerun`, and `meet` are `touchTo` and `touchMode`. `no_overtake?` is `NoOvertake` and `NoOvertakeR`. `bad_open?` is `BadOpen`. Both check the `mearlier` shape only. The two-open-`many` case of `BadFamily` is `at_most_one_any?` (`AtMostOne`) and `ResolvedAny`. `held_blocked?` is `HeldBlocked`. A held instance of `held while any unresolved` need not have a smaller index, so `invariant?` does not ask for it. `at_most_one_any?` is `AtMostOne`. `earlier_resolved?` is `EarlierResolved`. `invariant?` is `RulesInv`. It is written to match those definitions. It is not extracted from them. The tests drive the generated `Events` and `Commands` modules against it, and the same walk for a family whose rule is `held while any unresolved` and for a family that uses both rules, including `{:withdraw, id}`. `check_trace` accepts a trace when every family step is that relation and every rerun, and every resolve that has started a session, lands on `done`. `{:withdraw, id}` does not read the session map. The done-session condition is the dispatcher's. It is not the Agda step. `:open` on the dispatcher is `opened` in the proof.
 
+## A family of a choreography
+
+A temporal declaration may name a family of a choreography, `family rollout : plan per key` ([Choreography](choreography.md#a-family-of-a-choreography)). The formula binds one key, `forall (k : key)`, and its atoms name an interaction or a choice label of the choreography:
+
+```
+temporal front-first : rollout :=
+  forall (k : key). always ((done k (release -> worker : deploy)) implies (done k (front -> release : deployed)))
+temporal published-first : rollout :=
+  forall (k : key). always ((done k (release -> front : deploy)) implies (done k (registry -> release : published)))
+temporal decided : rollout :=
+  forall (k : key). (done k (worker -> release : deployed)) leads_to ((done k (release chooses keep)) or (done k (release chooses undo)))
+```
+
+`done k (a -> b : label)` holds once that message has happened in the run of key `k`, or in the shared preamble. The message is written as the choreography writes it, with the payload when it is not `Unit`. `done k (p chooses label)` holds once `p` has picked `label` for `k`. `done` is a keyword in this atom only when a key and `(` follow: `done done` stays the role atom. The alphabet is the interactions and choice labels of the choreography, which is finite. `true`, `false`, `not`, `and`, `or`, and `implies` combine atoms as on a meeting. `always`, `eventually`, and `leads_to` are the formulas.
+
+The check is one key and the shared preamble. After the preamble the keys share nothing: each key's next step reads only its own position. The preamble is finite, and a global type has no recursion. So a run of one key, with the preamble before it, is what any key sees in a run of any number of keys, and the check is exact, not a model hypothesis. A run steps the key to the end of the global type and then stays there. There is no fairness between keys: a key that is never stepped again is not a run here.
+
+`examples/release-rollout.muro` holds all three. Each line is the count of that one-key graph: the positions of the global type, and its interactions plus one self-loop at each end.
+
+```
+family rollout: plan per key
+temporal front-first: holds in 13 reachable states, 14 transitions
+```
+
+A safety refusal is the breadth-first path, then the next interaction, or `end`. A step of the preamble is marked `(shared)`:
+
+```
+worker-first: always ((done k (release -> front : deploy)) implies (done k (worker -> release : deployed))) fails in rollout after release -> registry : publish (shared), registry -> release : published (shared), release -> front : deploy: next front -> release : deployed
+```
+
+An `eventually` or `leads_to` refusal is a path to an end on which the goal never holds, then `then forever: the key has finished: end`.
+
+A refusal of the formula, with the declaration as position:
+
+- a binder that is not `key`: `forall over <type> is not a key`; a second `forall (j : key)`: `a formula over a choreography family binds one key`;
+- a key that is not bound: `unbound key <name>`;
+- a message the choreography does not write: `<choreography> has no interaction <a -> b : label>`; a label no choice of that role has: `<choreography> has no choice <p chooses label>`;
+- any other atom (`opened`, `held`, a role atom): `a formula over a choreography family names done <key> (<interaction>)`.
+
+A family of a meeting refuses `done k (…)` with its own list of atoms. A formula over a meeting refuses it with `done names an interaction of a choreography family`. A formula over a family that does not check is `skipped because <family> does not check`. A family of a choreography has no contract, so `relies` is refused there.
+
 ## Fairness
 
-`Satisfies`, `solo-bounded`, and `every-run-fair` cover meetings only. The book formulas of a keyed family are checked in Elixir, and that check has no fairness filter. The hold rule is [The hold rule](#the-hold-rule).
+`Satisfies`, `solo-bounded`, and `every-run-fair` cover meetings only. The book formulas of a keyed family, and of a family of a choreography, are checked in Elixir, and that check has no fairness filter. The hold rule is [The hold rule](#the-hold-rule).
 
 `may redeliver` adds a self-loop on the family graph. It is not a fairness premise, and a formula does not rely on it. The account is [State machines](fsm.md#an-external-contract).
 
@@ -227,7 +268,7 @@ A meeting that reaches `done` and then stutters refuses `eventually false` with 
 
 ## What the checker prints
 
-After `Muro v…`, and before `All terms check. Evidence never becomes a run.`, one line per keyed family and one line per temporal declaration, in book order:
+After `Muro v…`, and before `All terms check. Evidence never becomes a run.`, one line per keyed family and one line per temporal declaration, in book order. A family of a choreography prints `family <name>: <choreography> per key`:
 
 ```
 family slots: slot per key of Event

@@ -2,7 +2,7 @@
 title: State machines
 slug: fsm
 order: 22
-summary: Each session endpoint is a pure state machine, a keyed family is one dispatcher, and a choreography is one monitor. The transport stays with the host.
+summary: Each session endpoint is a pure state machine, a keyed family is one dispatcher, a choreography is one monitor, and a family of a choreography is that monitor per key. The transport stays with the host.
 ---
 
 # State machines
@@ -303,6 +303,46 @@ The state is opaque plain data, like a session's. A value that is not a state of
 
 The monitor checks a run a host recorded. It does not order the roles, and it does not start a process. The book judgment for a list of interactions is `prefix`: [Choreography](choreography.md#a-legal-prefix).
 
+## A family of a choreography
+
+A family of a choreography that checks, `family rollout : plan per key`, is one more child, named for the family. `examples/release-rollout.muro` is `ReleaseRolloutFsm.Rollout`, beside the monitor `ReleaseRolloutFsm.Plan`. It is the [monitor](#a-choreography) of `plan`, replicated per key, behind the shared preamble ([Choreography](choreography.md#a-family-of-a-choreography)). Sessions claim a module name first, then keyed families, then choreographies, then families of a choreography.
+
+```elixir
+alias ReleaseRolloutFsm.Rollout
+state = Rollout.init()
+{:error,
+ {:key, "eu",
+  {:preamble, "examples/release-rollout.muro:13 choreography plan: first release -> registry : publish",
+   {:message, :release, :registry, :publish, :unit},
+   {:release, :front, :deploy}}}} = Rollout.step(state, "eu", :release, :front, :deploy)
+{:ok, state} = Rollout.step_shared(state, :release, :registry, :publish)
+{:ok, state} = Rollout.step_shared(state, :registry, :release, :published)
+true = Rollout.shared_done?(state)
+{:ok, state} = Rollout.step(state, "eu", :release, :front, :deploy)
+{:ok, state} = Rollout.step(state, "us", :release, :front, :deploy)
+["eu", "us"] = Rollout.keys(state)
+```
+
+| Call | Event |
+| --- | --- |
+| `step_shared(state, from, to, label)`, `step_shared(state, from, to, label, value)` | a message of the shared preamble |
+| `choose_shared(state, role, label)` | a choice of the shared preamble |
+| `step(state, key, from, to, label)`, `step(state, key, from, to, label, value)` | a message of `key` |
+| `choose(state, key, role, label)` | a choice of `key` |
+
+The key is any term, compared with `==`. The shared calls have their own names, so no key collides with the preamble. A key that has not stepped is at the end of the preamble. Each key follows the written order of the rest of the global type on its own: `eu` may be at its choice while `us` has not deployed its front. A choice in the preamble picks the branch every key starts in.
+
+- A shared call returns `{:ok, state}` or the monitor's `{:error, {:unexpected, step, expected, event}}`. After the preamble, `expected` is `:done`, and `step` is the first per-key step.
+- A key's call returns `{:ok, state}` or `{:error, {:key, key, reason}}`. `reason` is the monitor's `{:unexpected, step, expected, event}` for that key, or `{:preamble, step, expected, event}` while the preamble is not done, with the preamble's next step and expected event.
+- `expected_shared/1` is the preamble's next event in the monitor's terms, or `:done`. `shared_done?/1` is `expected_shared(state) == :done`. A choreography with no shared role has no preamble, and `shared_done?` is true at `init/0`.
+- `expected(state, key)` is that key's next event, `:done` at its end, or `{:shared, expected}` while the preamble is not done. `done?(state, key)` is true at that key's end. `keys(state)` is the keys that have stepped, sorted.
+
+`check_trace/1` replays a run from `init/0`. An event is `{:shared, event}` or `{:key, key, event}`, with `event` a monitor event: `{from, to, label}`, `{from, to, label, value}`, or `{role, label}`. It returns `:ok` or `{:error, {index, reason}}` for the first bad event, with `reason` the call's reason. Any other term is `{:event, term}`. `check_trace(trace, complete: true)` also asks for the end of the preamble and of every key that stepped. Otherwise it is `{:error, {length, {:incomplete, :shared, step, expected}}}` for the preamble, or `{:incomplete, {:key, key}, step, expected}` for the first such key in key order. A trace that is not a list is `{:error, {:trace, trace}}`.
+
+The state is opaque plain data. A value that is not a state of this family, or a key whose position is not one, is the error with the choreography's `end` step and `:done`; `expected` is `:done`, `done?` is false, and `keys` is `[]`. Nothing raises.
+
+The dispatcher checks a run a host recorded. It does not run the roles, and it does not order the keys. A book with no family of a choreography emits the text it emitted before.
+
 ## What emit refuses
 
 The refusal is the whole module. A book that does not check is refused by the checker, with the checker's message. A book that checks, and that the machine cannot represent, is refused with `<file>:<line> session <name>: <reason>` (a missing session name has no line).
@@ -326,7 +366,7 @@ The refusal is the whole module. A book that does not check is refused by the ch
 
 A book with a choreography and no session emits the monitor alone here. `Muro.Emit.Fsm.image/3`, the session image the C and JavaScript session emitters read, still answers `<file> has no session to emit` for that book: the monitor is Elixir only, in `--backend fsm`.
 
-`examples/talk.muro` and `examples/seated.muro` are refused because the protocol is a `seen` of a talk. A `seen` of a choreography is the projected session: `examples/two-phase-commit.muro` and `examples/release-plan.muro` emit completely, with one monitor each. `examples/meet.muro`, `examples/indexed.muro`, and `examples/recursive.muro` emit completely, and so do the other session examples whose protocols are the forms above. `--node` with this backend is refused (`--node writes the placement calls`). `--imports` with this backend is refused.
+`examples/talk.muro` and `examples/seated.muro` are refused because the protocol is a `seen` of a talk. A `seen` of a choreography is the projected session: `examples/two-phase-commit.muro` and `examples/release-plan.muro` emit completely, with one monitor each. `examples/release-rollout.muro` emits its monitor and the family's dispatcher. `examples/meet.muro`, `examples/indexed.muro`, and `examples/recursive.muro` emit completely, and so do the other session examples whose protocols are the forms above. `--node` with this backend is refused (`--node writes the placement calls`). `--imports` with this backend is refused.
 
 ## Manifest
 

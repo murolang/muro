@@ -750,6 +750,9 @@ defmodule Muro.Temporal do
   defp resolve_prop(_book, _g, {:earlier_resolved, _, _}),
     do: {:error, "earlier_resolved names an instance of a family"}
 
+  defp resolve_prop(_book, _g, {:did, _, _}),
+    do: {:error, "done names an interaction of a choreography family"}
+
   defp resolve_prop(_book, _g, _other), do: {:error, "nested temporal operator"}
 
   defp role_side(_book, g, name) when name == g.name_l, do: {:ok, :l}

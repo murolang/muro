@@ -1303,6 +1303,8 @@ defmodule Muro.Parser do
   #   signal held while earlier unresolved
   # `family` is a keyword only as `family name :`. A constructor
   # `family : Box` is not one, and neither is `def family`.
+  # `family rollout : plan per key` has no kind: `plan` is a
+  # choreography, and the key is nil. The checker decides which.
   defp parse_family(s) do
     loc = here(s)
 
@@ -1312,8 +1314,7 @@ defmodule Muro.Parser do
          {:ok, meeting, rest} <- ident(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "per"),
          {:ok, rest} <- kw(skip(rest), "key"),
-         {:ok, rest} <- kw(skip(rest), "of"),
-         {:ok, key, rest} <- ident(skip(rest)),
+         {:ok, key, rest} <- parse_family_kind(skip(rest)),
          {:ok, redeliver, rest} <- parse_family_redeliver(skip(rest)),
          {:ok, rules, rest} <- parse_family_rules(skip(rest)) do
       {:ok,
@@ -1327,6 +1328,17 @@ defmodule Muro.Parser do
          rules: rules,
          loc: loc
        }, rest}
+    end
+  end
+
+  defp parse_family_kind(s) do
+    if word_kw?(s, "of") do
+      with {:ok, rest} <- kw(s, "of"),
+           {:ok, key, rest} <- ident(skip(rest)) do
+        {:ok, key, rest}
+      end
+    else
+      {:ok, nil, s}
     end
   end
 
@@ -1745,6 +1757,11 @@ defmodule Muro.Parser do
           parse_family_atom(s)
         end
 
+      # `done k (a -> b : label)` is an interaction of a choreography
+      # family. `done done` stays the role atom.
+      word_kw?(s, "done") and done_interaction?(s) ->
+        parse_done_atom(s)
+
       ident_start?(s) ->
         parse_role_atom(s)
 
@@ -1781,6 +1798,42 @@ defmodule Muro.Parser do
         true ->
           {:error, err(rest, "expected is or head")}
       end
+    end
+  end
+
+  defp done_interaction?(s) do
+    case ident(skip(after_kw(s, "done"))) do
+      {:ok, _key, rest} -> has_prefix?(skip(rest), "(")
+      _ -> false
+    end
+  end
+
+  # The interaction is written as the choreography writes it, in
+  # parentheses: `(a -> b : label)`, with the payload when it is not
+  # Unit, or `(p chooses label)`.
+  defp parse_done_atom(s) do
+    with {:ok, key, rest} <- ident(skip(after_kw(s, "done"))),
+         {:ok, rest} <- tok(skip(rest), "("),
+         {:ok, move, rest} <- parse_done_move(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, {:did, key, move}, rest}
+    end
+  end
+
+  defp parse_done_move(s) do
+    if interaction_start?(s) do
+      case parse_gmove(s) do
+        {:ok, {:global, :msg, {a, b, label, ty}, _loc}, rest} ->
+          {:ok, {:msg, a, b, label, ty}, rest}
+
+        {:ok, {:global, :pick, {p, label}, _loc}, rest} ->
+          {:ok, {:pick, p, label}, rest}
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:error, err(s, "expected an interaction a -> b : label or p chooses label")}
     end
   end
 
@@ -2380,31 +2433,52 @@ defmodule Muro.Parser do
 
     with {:ok, rest} <- kw(s, "choreography"),
          {:ok, name, rest} <- ident(skip(rest)),
-         {:ok, roles, rest} <- parse_roles(skip(rest)),
+         {:ok, {roles, shared}, rest} <- parse_roles(skip(rest)),
          {:ok, body, rest} <- parse_global(skip(rest)) do
-      {:ok, %{kind: :choreography, name: name, mode: :spec, roles: roles, body: body, loc: loc},
-       rest}
+      {:ok,
+       %{
+         kind: :choreography,
+         name: name,
+         mode: :spec,
+         roles: roles,
+         shared: shared,
+         body: body,
+         loc: loc
+       }, rest}
     end
   end
 
+  # `roles release shared, front, worker`. `shared` after a role marks
+  # it as one party for every key of a family. It is a mark only there:
+  # `shared -> a : x` is a role named shared sending.
   defp parse_roles(s) do
     with {:ok, rest} <- kw(s, "roles"),
          {:ok, name, rest} <- ident(skip(rest)),
-         {:ok, names, rest} <- parse_role_tail(skip(rest), [name]) do
-      {:ok, names, rest}
+         {:ok, shared, rest} <- parse_shared_mark(skip(rest), name, []),
+         {:ok, names, shared, rest} <- parse_role_tail(skip(rest), [name], shared) do
+      {:ok, {names, shared}, rest}
     end
   end
 
-  defp parse_role_tail(s, acc) do
+  defp parse_role_tail(s, acc, shared) do
     s = skip(s)
 
     if has_prefix?(s, ",") do
       with {:ok, rest} <- tok(s, ","),
-           {:ok, name, rest} <- ident(skip(rest)) do
-        parse_role_tail(rest, acc ++ [name])
+           {:ok, name, rest} <- ident(skip(rest)),
+           {:ok, shared, rest} <- parse_shared_mark(skip(rest), name, shared) do
+        parse_role_tail(rest, acc ++ [name], shared)
       end
     else
-      {:ok, acc, s}
+      {:ok, acc, shared, s}
+    end
+  end
+
+  defp parse_shared_mark(s, name, shared) do
+    if word_kw?(s, "shared") and not interaction_start?(s) and not branch_start?(s) do
+      {:ok, shared ++ [name], after_kw(s, "shared")}
+    else
+      {:ok, shared, s}
     end
   end
 

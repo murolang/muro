@@ -100,10 +100,15 @@ defmodule Muro.Contract do
   defp entry_ok(other), do: {:error, "unknown contract entry #{spell(other)}"}
 
   defp known_family(book, family) do
-    if Enum.any?(book, &match?(%{kind: :family, name: ^family}, &1)) do
-      :ok
-    else
-      {:error, "unknown family #{family}"}
+    case Enum.find(book, &match?(%{kind: :family, name: ^family}, &1)) do
+      nil ->
+        {:error, "unknown family #{family}"}
+
+      %{key: nil} ->
+        {:error, "#{family} ranges over a choreography: a contract names a family of a meeting"}
+
+      _ ->
+        :ok
     end
   end
 

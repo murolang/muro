@@ -90,6 +90,8 @@ defmodule Muro.EmitReserveTest do
     skipped = Helpers.runs() |> Enum.reject(&muro_ident?/1) |> Enum.sort()
 
     assert skipped == [
+             "muro_fsm_cf_done?",
+             "muro_fsm_cf_pre?",
              "muro_fsm_dat?",
              "muro_fsm_done?",
              "muro_fsm_g_done?",

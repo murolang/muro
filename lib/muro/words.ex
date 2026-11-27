@@ -20,7 +20,7 @@ defmodule Muro.Words do
   # `with` is a name in `seen role with role`. It does not end a payload.
   @talk_stop ~w(over say offer)
   @talk @talk_stop ++ ~w(with)
-  @choreo ~w(roles chooses)
+  @choreo ~w(roles chooses shared)
   @place ~w(ambient node any fixed stay cross at buffer)
   # Keywords only as the two-word mark on a party of a meet, and `fail`
   # only as the arm after a receive. Classified here so the highlighter
