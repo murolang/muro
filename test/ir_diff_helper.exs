@@ -203,22 +203,47 @@ defmodule Muro.IRDiff do
   end
 
   @doc """
-  Compare `name` on every combination of the edge values of its
-  parameter types. Each parameter must have edges (`edges/2`).
+  Compare `name` on every combination of the edge values of its live
+  parameter types. Each live parameter must have edges (`edges/2`). A Π
+  the image drops (an erased quantity on the Π or its λ, or a `Type`)
+  is one filler argument `{term, :gone}`, as in `gen_args/4`.
   """
   def check_edges(ctx, name) do
     d = find_def(ctx.book, name)
-    lists = for {:pi, _q, a, _x, _b} <- pis(d.type), do: edges(ctx, a)
 
-    lists
+    ctx
+    |> edge_lists(d.type, Map.get(d, :body))
     |> product()
-    |> Enum.map(fn vals ->
-      compare(ctx, name, Enum.map(vals, &{to_term!(ctx, &1), &1}))
-    end)
+    |> Enum.map(&compare(ctx, name, &1))
   end
 
-  defp pis({:pi, q, a, x, b}), do: [{:pi, q, a, x, nil} | pis(b)]
-  defp pis(_), do: []
+  @doc "Per Π of `type`, its argument choices `[{term, value | :gone}]`."
+  def edge_lists(ctx, {:pi, q, a, _x, b}, body) do
+    {q2, body2} =
+      case body do
+        {:lam, q2, _dom, _n, inner} -> {q2, inner}
+        _ -> {nil, nil}
+      end
+
+    choices =
+      cond do
+        a == :typ ->
+          [{:nat, :gone}]
+
+        IR.erased_qty?(q) or (q2 != nil and IR.erased_qty?(q2)) ->
+          case try_gen(ctx, a, 1, seed({:edge_filler, a})) do
+            {:ok, v, _st} -> [{to_term!(ctx, v), :gone}]
+            :no -> [{:rfl, :gone}]
+          end
+
+        true ->
+          Enum.map(edges(ctx, a), &{to_term!(ctx, &1), &1})
+      end
+
+    [choices | edge_lists(ctx, b, body2)]
+  end
+
+  def edge_lists(_ctx, _type, _body), do: []
 
   defp product([]), do: [[]]
   defp product([xs | rest]), do: for(x <- xs, tail <- product(rest), do: [x | tail])
@@ -252,41 +277,54 @@ defmodule Muro.IRDiff do
         Enum.any?(funs, &(&1.name == name and arity_ok?(&1, vals)))
       end)
 
-    got =
-      Enum.reduce_while(images, [], fn {k, funs}, acc ->
-        r = observe(funs, name, vals, Map.get(ctx, :eval_fuel, @eval_fuel))
-        if r == {:error, :out_of_fuel}, do: {:halt, [{k, r}]}, else: {:cont, acc ++ [{k, r}]}
-      end)
+    fuel = Map.get(ctx, :eval_fuel, @eval_fuel)
+    got = for {k, funs} <- images, do: {k, observe(funs, name, vals, fuel)}
 
-    # Eval spends fuel on every call; the checker shares work Eval
-    # repeats. An input that exhausts Eval's budget is not compared, and
-    # the reference is not asked for it.
-    cond do
-      images == [] ->
-        {:mismatch, %{run: name, args: vals, got: :no_image}}
-
-      Enum.any?(got, fn {_k, r} -> r == {:error, :out_of_fuel} end) ->
-        {:skip, :eval_out_of_fuel}
-
-      true ->
-        against_reference(ctx, name, vals, ast, images, got)
-    end
+    verdict(name, vals, got, fn -> reference(ctx, ast) end)
   end
 
-  # Without a reference value the images are still compared with one
-  # another; only their agreement with `normalize` is skipped.
-  defp against_reference(ctx, name, vals, ast, images, got) do
-    case reference(ctx, ast) do
-      {:ok, ref} ->
-        case Enum.reject(got, fn {_k, v} -> v == {:ok, ref} end) do
-          [] -> {:agree, Keyword.keys(images)}
-          bad -> {:mismatch, %{run: name, args: vals, ref: ref, got: bad}}
-        end
+  @doc """
+  The verdict on the results `got` (`[{image, result}]`) of every image.
+  `ref` is called for the reference only when some image did not run
+  out of fuel.
 
-      {:skip, reason} ->
-        case got |> Enum.map(&elem(&1, 1)) |> Enum.uniq() do
-          [_] -> {:skip, reason}
-          _ -> {:mismatch, %{run: name, args: vals, ref: {:skip, reason}, got: got}}
+  Eval spends fuel on every call and the closure image on every
+  application, so one image may run out where another stops. Every image
+  is observed. Results that did stop must agree with one another and
+  with the reference. An input where every image ran out of fuel is not
+  compared, and the reference is not asked for it. An input where some
+  did, and the rest agree, is a skip.
+  """
+  def verdict(name, vals, got, ref) do
+    oom = {:error, :out_of_fuel}
+    done = for {k, r} <- got, r != oom, do: {k, r}
+
+    cond do
+      got == [] ->
+        {:mismatch, %{run: name, args: vals, got: :no_image}}
+
+      done == [] ->
+        {:skip, :eval_out_of_fuel}
+
+      length(Enum.uniq(Enum.map(done, &elem(&1, 1)))) > 1 ->
+        {:mismatch, %{run: name, args: vals, ref: :not_asked, got: got}}
+
+      true ->
+        case ref.() do
+          {:ok, r} ->
+            cond do
+              Enum.any?(done, fn {_k, v} -> v != {:ok, r} end) ->
+                {:mismatch, %{run: name, args: vals, ref: r, got: got}}
+
+              length(done) < length(got) ->
+                {:skip, :eval_out_of_fuel}
+
+              true ->
+                {:agree, Keyword.keys(got)}
+            end
+
+          {:skip, reason} ->
+            {:skip, reason}
         end
     end
   end
@@ -729,14 +767,15 @@ defmodule Muro.IRDiff do
       {{:bytes, Enum.at(@bytes, i - 1)}, st}
     else
       {len, st} = uniform(st, 13)
+      len = len - 1
 
       {bin, st} =
-        Enum.reduce(1..len, {<<>>, st}, fn _, {acc, st} ->
+        Enum.reduce(List.duplicate(nil, len), {<<>>, st}, fn _, {acc, st} ->
           {b, st} = pick(st, [?a, ?\s, ?:, ?\r, ?\n, ?/, ?0, 0, 255], & &1)
           {acc <> <<b>>, st}
         end)
 
-      {{:bytes, binary_part(bin, 0, len - 1)}, st}
+      {{:bytes, bin}, st}
     end
   end
 

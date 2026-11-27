@@ -242,6 +242,34 @@ defmodule Muro.IREvalTest do
     end
   end
 
+  test "an erased constructor field is dropped on every image" do
+    dir = Path.join(System.tmp_dir!(), "muro_ir_eval_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    path = Path.join(dir, "mark.muro")
+
+    File.write!(path, """
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    def boxed : run Box := mk 0 (suc (suc 0))
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk e n => n
+    """)
+
+    {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+    {:ok, plain} = Muro.IR.elaborate(book)
+    {:ok, closures} = Muro.IR.elaborate(book, closures: true)
+
+    for funs <- [plain, Muro.IR.Share.funs(plain), closures] do
+      assert Eval.call(funs, "live", []) == {:ok, {:nat, 2}}
+      assert Eval.call(funs, "boxed", []) == {:ok, {:con, "Box", "mk", [{:nat, 2}]}}
+    end
+  end
+
   describe "Ref" do
     setup do
       {:ok, book} = Muro.Load.file("examples/bytes-uncons.muro")
