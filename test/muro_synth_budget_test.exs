@@ -70,6 +70,34 @@ defmodule Muro.SynthBudgetTest do
     assert meta.sizes == []
   end
 
+  test "a positive memory budget stops when this process grows past it" do
+    # `memory_budget: -1` hits a special-case clause and never samples
+    # `walk_memory/0`. A large binary would sit off-heap; a list stays
+    # on this process and is rooted until the walk samples.
+    budget = 64 * 1024
+    hold_n = 200_000
+
+    try do
+      assert {:empty, "memory budget", meta} =
+               Muro.Synth.enumerate_sized(["p"], 2, fn _feature -> 0 end, 1, nil,
+                 memory_budget: budget,
+                 after_base: fn ->
+                   {:memory, before} = Process.info(self(), :memory)
+                   held = Enum.to_list(1..hold_n)
+                   Process.put(:muro_synth_budget_hold, held)
+                   {:memory, after_mem} = Process.info(self(), :memory)
+                   assert after_mem - before > budget
+                 end
+               )
+
+      assert meta.considered == 0
+      assert meta.size == 0
+      assert meta.sizes == []
+    after
+      Process.delete(:muro_synth_budget_hold)
+    end
+  end
+
   test "the memory budget ignores growth in other processes" do
     # The walk used to sample `:erlang.memory(:total)`. A parallel ExUnit
     # case could take the VM more than 512 MiB past the start of a walk
@@ -106,28 +134,31 @@ defmodule Muro.SynthBudgetTest do
         end
       end)
 
-    assert {:ok, _index, meta} =
-             Muro.Synth.enumerate_sized(
-               features,
-               Muro.Synth.pred_size_bound(),
-               &Muro.Synth.signature(&1, states, feat),
-               length(states),
-               nil,
-               memory_budget: budget,
-               after_base: fn ->
-                 send(holder, {:go, parent})
+    try do
+      assert {:ok, _index, meta} =
+               Muro.Synth.enumerate_sized(
+                 features,
+                 Muro.Synth.pred_size_bound(),
+                 &Muro.Synth.signature(&1, states, feat),
+                 length(states),
+                 nil,
+                 memory_budget: budget,
+                 after_base: fn ->
+                   send(holder, {:go, parent})
 
-                 receive do
-                   {:held, ^hold} -> :ok
-                 after
-                   5_000 -> flunk("holder did not allocate")
+                   receive do
+                     {:held, ^hold} -> :ok
+                   after
+                     5_000 -> flunk("holder did not allocate")
+                   end
                  end
-               end
-             )
+               )
 
-    assert meta.truncated == false
-    assert meta.considered > 0
-    send(holder, :drop)
+      assert meta.truncated == false
+      assert meta.considered > 0
+    after
+      send(holder, :drop)
+    end
   end
 
   test "a non-integer budget is a usage error" do
