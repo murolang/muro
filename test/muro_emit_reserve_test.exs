@@ -88,7 +88,14 @@ defmodule Muro.EmitReserveTest do
   test "a run named after each host helper compiles and runs" do
     helpers = Helpers.runs() |> Enum.filter(&muro_ident?/1) |> Enum.sort()
     skipped = Helpers.runs() |> Enum.reject(&muro_ident?/1) |> Enum.sort()
-    assert skipped == ["muro_fsm_dat?", "muro_fsm_done?", "muro_fsm_payload?"]
+
+    assert skipped == [
+             "muro_fsm_dat?",
+             "muro_fsm_done?",
+             "muro_fsm_g_done?",
+             "muro_fsm_g_node?",
+             "muro_fsm_payload?"
+           ]
 
     names = helpers ++ ["ctor_atoms", "step", "send", "init"]
     {:ok, parsed} = Parser.parse(run_book(names))

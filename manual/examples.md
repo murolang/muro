@@ -179,6 +179,28 @@ choreography two-phase-commit
 
 A participant whose branches differ, and who was not told the choice, is refused. That book is `test/fixtures/choreo_untold.muro`, not an example. See [Choreography](choreography.md).
 
+`mix muro.emit --backend fsm examples/two-phase-commit.muro` emits one state machine per `seen` session and one monitor for the whole choreography. C and JavaScript emit the session images of the `seen` sessions.
+
+## release-plan.muro
+
+A release that spans two services. The front is deployed before the worker, and only the choreography says so: the session `release` has with `front` and the one it has with `worker` keep no order between them.
+
+```
+choreography plan
+  roles release, front, worker
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+  worker -> release : deployed
+
+prefix front-first : plan :=
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+```
+
+`front-first` is a legal prefix in the written order. Starting with `release -> worker : deploy` is refused: `not enabled at start, expected release -> front : deploy, wrote release -> worker : deploy`. `mix muro.emit --backend fsm examples/release-plan.muro` emits `ReleasePlanFsm.Rf`, `ReleasePlanFsm.Rw`, and the monitor `ReleasePlanFsm.Plan`, which refuses the worker's deploy before the front's. See [Choreography](choreography.md#the-written-order) and [State machines](fsm.md#a-choreography).
+
 ## seated.muro
 
 A party of a description sits at a place. The seating is spec. The boundary is evidence. Elixir, Rust, Zig, and assembly omit both. C refuses the book, because `seen` is not a state machine, and the run is not written.

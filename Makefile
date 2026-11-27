@@ -3,7 +3,7 @@ AGDA  ?= agda
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
 # The Agda tree — Judgement, Wall, Consistency, Typing, Convert,
-# Reduction, Spine, Data, Frag, Tag, Session, Prefix, Rec, Dual, Meet, Talk, Choreo, Seated, Held, Arrow, Grade, Beam, Linear, Place, Family, Located, the checker Check and its
+# Reduction, Spine, Data, Frag, Tag, Session, Prefix, Rec, Dual, Meet, Talk, Choreo, ChoreoPrefix, Seated, Held, Arrow, Grade, Beam, Linear, Place, Family, Located, the checker Check and its
 # soundness proof Soundness (with Soundness.Conv, Soundness.Views),
 # what they import (Base, Syntax, Subst, SubstLemmas, Env), Async,
 # AsyncSync, AsyncRec, Temporal (Source, Bridge, Graph, Safety, Live,
@@ -61,6 +61,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Examples.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Talk.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Choreo.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/ChoreoPrefix.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Seated.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Held.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Arrow.agda

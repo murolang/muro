@@ -7,7 +7,9 @@ summary: A global type, projected to the binary session each pair of roles follo
 
 # Choreography
 
-A `choreography` declaration names a set of roles and one global type for their whole interaction. Projection gives each ordered pair of roles a binary session. The choreography is spec. It adds nothing to a term, and the emitters skip it. A local session names one of those projections, and a process conforms to that session the way it conforms to any other.
+A `choreography` declaration names a set of roles and one global type for their whole interaction. Projection gives each ordered pair of roles a binary session. The choreography is spec. It adds nothing to a term, and the term emitters skip it. A local session names one of those projections, and a process conforms to that session the way it conforms to any other.
+
+The global type also keeps the order between pairs that projection drops. A `prefix` can state that a list of interactions is a legal prefix of the choreography, and `--backend fsm` emits a monitor that checks a recorded run of the whole choreography. Both follow [the written order](#the-written-order).
 
 ```
 choreography <name>
@@ -65,6 +67,8 @@ A pair that never interacts projects to `end`.
 
 `session name := seen role with role in choreography` is that projection. The form is the one a talk already uses. The name may be written before the choreography. A name that is neither a talk nor a choreography is `unknown talk <name>`.
 
+The projection is a session in the existing vocabulary, so `--backend fsm` emits it as a session child with `init`, `send`, `recv`, `expected`, `done?`, and `check_trace`, and the C and JavaScript session images step it the same way. A `seen` of a talk is still `seen is not a state machine`. See [State machines](fsm.md#a-choreography).
+
 ## two-phase commit
 
 The coordinator asks alice and bob to prepare, collects a vote from each, and then chooses commit or abort. Both arms send one message to alice and one to bob.
@@ -98,6 +102,60 @@ Alice and bob never send to each other, so that pair is `end`. `session ca := se
 
 A label-only difference merges. `b -> c : go` and `b -> c : stop`, both carrying `Unit`, are `send Unit end` for `b` with `c`. The chooser's session with `b` is still `choose end end`.
 
+## The written order
+
+A choreography fixes one order: the order it is written in. The next legal interaction is the next one written. When the next thing written is a choice, the next legal event is that choice, one of its labels, taken by the chooser. After that label, the next legal interaction is the first one written in that branch. At `end` nothing is legal.
+
+This holds even when two interactions share no role. In
+
+```
+a -> b : x
+c -> d : y
+```
+
+`a -> b : x` comes first, and `c -> d : y` before it is refused. The written order is not the set of every interleaving of independent messages.
+
+- It is exact. `expected/1` on the monitor names one next interaction, or the labels of one choice, never a set of them, and a refusal names what was expected.
+- It keeps a rule between pairs that never meet. In the release of `examples/release-plan.muro`, `release` is in every message, so any order that respects each role would put `front` before `worker` there too. With `front` and `worker` deployed by two different roles, only the written order would.
+- A prefix and a monitor agree on one list. The judgment and the machine are the same walk (`Muro.Choreo.prefix/3`, `accept` in `agda/Muro/ChoreoPrefix.agda`).
+
+A book that wants two interactions in either order writes a choice, or two choreographies.
+
+## A legal prefix
+
+`prefix name : <choreography> :=` takes a list of interactions in the choreography's own syntax and says the list is a legal prefix of it in the written order. The declaration is evidence. The emitters omit it.
+
+```
+prefix front-first : plan :=
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+```
+
+A message is written as the choreography writes it: `a -> b : label`, then the payload type when it is not `Unit`. A message written without a payload is `Unit`, so `release -> worker : deploy` and `release -> worker : deploy Nat` are different moves. A choice is `p chooses label`. The empty list is a legal prefix. The position is the start: `at start` is accepted, and any other position is `at <pos> is not a position of <choreography>`. A name that is a session stays a session, and a choreography move against a session is `<session> is not a choreography`.
+
+The judgment is `GLeg` in `agda/Muro/ChoreoPrefix.agda`. `accept` decides it, and it is sound and complete. The Elixir checker follows that function.
+
+A refusal names the prefix and the move. The line and column are the move. From the second move on, the sentence is wrapped as on a session: `move N is not a legal continuation of <choreography> at start: …`.
+
+```
+not enabled at start, expected release -> front : deploy, wrote release -> worker : deploy
+```
+
+```
+move 2 is not a legal continuation of plan at start: not enabled at start, expected front -> release : deployed, wrote release -> worker : deploy
+```
+
+```
+move 5 is not a legal continuation of plan at start: not enabled at start, expected release chooses keep or undo, wrote release chooses maybe
+```
+
+A move after the end expects `end`. A role the choreography does not declare is `unknown role <name>`. A session move such as `send 1` is not enabled.
+
+## A monitor
+
+`--backend fsm` emits one child per choreography that checks. It is stepped with global events: `step(state, from, to, label)` for a message whose payload is `Unit`, `step(state, from, to, label, value)` for any message, and `choose(state, role, label)` for a choice. `expected/1` names the next interaction, `{:message, from, to, label, type}`, or the labels of a choice, `{:choose, role, [label, ...]}`, and it is `:done` at the end. `check_trace/1` replays a list of those events, and `check_trace(trace, complete: true)` also asks for the end. The page is [State machines](fsm.md#a-choreography).
+
 ## A refusal
 
 The position is the choreography. Several failures are joined with `; `.
@@ -126,7 +184,10 @@ The coordinator's session with alice is `choose end end`. The chooser is an end 
 - Global progress, or deadlock freedom, for more than two roles. Binary duality gives it for a tree of interactions, and that argument is not made here.
 - Full merge. Plain merge demands the same session in every branch. A participant who was told the choice and then takes a different session toward someone else is refused.
 - Recursion in a global type. A session may still be `rec` on its own. The choreography does not write one.
-- Multiparty execution. Each projection is a binary session, and a meeting is still two processes.
+- Multiparty execution. Each projection is a binary session, and a meeting is still two processes. The monitor checks a recorded run. It does not run the roles.
+- Any order of two interactions other than the written one. See [The written order](#the-written-order).
+- A role's own order across its peers as a child of its own. A host checks one role's side against the monitor's events for that role.
+- A temporal formula over a choreography. `temporal name : plan := …` names a meeting, and a choreography is not one.
 - Placing the roles of one choreography at more than one place. A seat is still a party of a talk.
 
 ## What the checker prints

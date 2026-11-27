@@ -9,6 +9,10 @@ defmodule Muro.Choreo do
   `branch` on the other side. More than two branches nest to the right.
   A pair that is neither end of the choice has a session only when every
   branch projects to the same session. That is plain merge.
+
+  `prefix/3` is the legal-prefix judgment of the global type in its
+  written order, the Elixir mirror of `accept` in
+  `agda/Muro/ChoreoPrefix.agda`.
   """
 
   @doc """
@@ -74,6 +78,85 @@ defmodule Muro.Choreo do
       end
     end
   end
+
+  @doc """
+  One message as it is written in the global type: `a -> b : label`,
+  then the payload when it is not `Unit`.
+  """
+  def show_message(a, b, label, ty), do: "#{a} -> #{b} : #{label}#{show_pay(ty)}"
+
+  @doc """
+  The labels a choice offers, in written order: `p chooses commit or abort`.
+  """
+  def show_choice(p, branches) do
+    labels = Enum.map(branches, fn {label, _} -> label end)
+    "#{p} chooses #{join_or(labels)}"
+  end
+
+  defp join_or([one]), do: one
+  defp join_or([a, b]), do: "#{a} or #{b}"
+  defp join_or(many), do: Enum.join(Enum.drop(many, -1), ", ") <> ", or " <> List.last(many)
+
+  defp show_pay(:unit), do: ""
+
+  defp show_pay(ty) do
+    " " <> String.replace_prefix(Muro.Session.step_proto({:send, ty, :end}), "send ", "")
+  end
+
+  @doc """
+  The legal-prefix judgment of a global type in its written order. A
+  move is `{:msg, a, b, label, ty}` or `{:pick, p, label}`. The first
+  move is the next interaction written, or a label of the choice
+  written next. Two interactions that share no role are still taken in
+  the order they are written. Returns `:ok`, or `{:error, n, reason}`
+  for the first move `n` (one-based) that is not enabled, with
+  `reason` `{:not_enabled, expected, wrote}` or `{:unknown_role, name}`.
+  """
+  def prefix(roles, body, moves), do: prefix_walk(roles, body, moves, 1)
+
+  defp prefix_walk(_roles, _g, [], _n), do: :ok
+
+  defp prefix_walk(roles, g, [move | rest], n) do
+    case unknown_in(roles, move) do
+      nil ->
+        case advance(g, move) do
+          {:ok, next} -> prefix_walk(roles, next, rest, n + 1)
+          :no -> {:error, n, {:not_enabled, expected_text(g), move}}
+        end
+
+      name ->
+        {:error, n, {:unknown_role, name}}
+    end
+  end
+
+  defp unknown_in(roles, {:msg, a, b, _label, _ty}) do
+    Enum.find([a, b], &(&1 not in roles))
+  end
+
+  defp unknown_in(roles, {:pick, p, _label}), do: if(p in roles, do: nil, else: p)
+  defp unknown_in(_roles, _move), do: nil
+
+  @doc """
+  The global type after one event, in the written order: `{:ok, next}`
+  or `:no`.
+  """
+  def advance({:comm, a, b, label, ty, cont}, {:msg, a, b, label, ty}), do: {:ok, cont}
+
+  def advance({:choice, p, branches}, {:pick, p, label}) do
+    case List.keyfind(branches, label, 0) do
+      {_, g} -> {:ok, g}
+      nil -> :no
+    end
+  end
+
+  def advance(_g, _move), do: :no
+
+  @doc """
+  The next interaction of a global type, as it is written.
+  """
+  def expected_text(:end), do: "end"
+  def expected_text({:comm, a, b, label, ty, _}), do: show_message(a, b, label, ty)
+  def expected_text({:choice, p, branches}), do: show_choice(p, branches)
 
   defp accepted(roles, body, book) do
     case Enum.uniq(role_errors(roles) ++ walk(roles, body, book)) do

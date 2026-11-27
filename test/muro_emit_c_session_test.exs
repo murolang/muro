@@ -41,9 +41,16 @@ defmodule Muro.EmitCSessionTest do
 
   test "a session the machine rejects is c:session, and may fail stays c:mayfail" do
     for path <-
-          ~w(examples/talk.muro examples/seated.muro examples/two-phase-commit.muro examples/bounded-split.muro examples/bounded-fields.muro) do
+          ~w(examples/talk.muro examples/seated.muro examples/bounded-split.muro examples/bounded-fields.muro) do
       assert {:error, reason} = Muro.emit_fsm(path, parent())
       assert {:error, "c:session\n" <> ^reason} = prepare(path)
+    end
+
+    # A choreography's projection is a session in the existing vocabulary.
+    # The state machine and the C stepper both take it.
+    for path <- ~w(examples/two-phase-commit.muro examples/release-plan.muro) do
+      assert {:ok, _} = Muro.emit_fsm(path, parent())
+      assert {:ok, _, _, _} = prepare(path)
     end
 
     for path <- ~w(examples/may-fail-free.muro examples/may-fail-send.muro) do

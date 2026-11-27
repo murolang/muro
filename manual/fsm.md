@@ -2,12 +2,12 @@
 title: State machines
 slug: fsm
 order: 22
-summary: Each session endpoint is a pure state machine, and a keyed family is one dispatcher. The transport stays with the host.
+summary: Each session endpoint is a pure state machine, a keyed family is one dispatcher, and a choreography is one monitor. The transport stays with the host.
 ---
 
 # State machines
 
-`--backend fsm` prints one module for the book's sessions. A host that already has a transport (an RPC, an HTTP exchange, a queue, a websocket, a call between nodes made by other means) steps that module around the messages it sends and receives. The module does not start a process, and it does not talk to a peer. A keyed family that checks is one more child of that module. The session children are unchanged. See [A keyed family](#a-keyed-family).
+`--backend fsm` prints one module for the book's sessions. A host that already has a transport (an RPC, an HTTP exchange, a queue, a websocket, a call between nodes made by other means) steps that module around the messages it sends and receives. The module does not start a process, and it does not talk to a peer. A keyed family that checks is one more child of that module. The session children are unchanged. See [A keyed family](#a-keyed-family). A choreography that checks is one more child too, the monitor of the whole global type. See [A choreography](#a-choreography).
 
 This is not a replacement for `--backend otp`. The OTP image is a GenServer that owns a mailbox and monitors a marked peer. The state machine is the check that the messages a host already exchanges follow the protocol the meeting proved. A meeting marked `may fail` is accepted. `down` takes the failure arm. A meeting that does not mark a party emits no `down`. The module still starts no process.
 
@@ -252,14 +252,65 @@ When the formula holds, the checker prints its count and then `ordered: depends 
 
 `dedupe` parses as a name of this list and is refused: it is not in this version. An unknown entry is refused. The words are keywords only in the forms on this page. `init` stays an identifier. The grammar is [Grammar](grammar.md).
 
+## A choreography
+
+A choreography that checks is one child, named for the choreography. `examples/release-plan.muro` is `ReleasePlanFsm.Plan`. The book's `seen` sessions are the children `ReleasePlanFsm.Rf` and `ReleasePlanFsm.Rw`, the projections in the session vocabulary, stepped like any other session child. A book with a choreography and no session emits the monitor alone.
+
+```elixir
+state = ReleasePlanFsm.Plan.init()
+# expected: {:message, :release, :front, :deploy, :unit}
+{:ok, state} = ReleasePlanFsm.Plan.step(state, :release, :front, :deploy)
+{:error,
+ {:unexpected,
+  "examples/release-plan.muro:6 choreography plan: second front -> release : deployed",
+  {:message, :front, :release, :deployed, :unit},
+  {:release, :worker, :deploy}}} = ReleasePlanFsm.Plan.step(state, :release, :worker, :deploy)
+```
+
+The monitor follows the written order. The next legal event is the next interaction written in the global type, or one label of the choice written next. Two interactions that share no role are still taken in the order they are written: `a -> b : x` then `c -> d : y` refuses `c -> d : y` first. That is the order [Choreography](choreography.md#the-written-order) states and `prefix` checks, and it is why `expected/1` names one next interaction.
+
+| Call | Event |
+| --- | --- |
+| `step(state, from, to, label)` | a message whose payload is `Unit`, `{from, to, label}` |
+| `step(state, from, to, label, value)` | a message carrying `value`, `{from, to, label, value}` |
+| `choose(state, role, label)` | a choice, `{role, label}` |
+
+Each returns `{:ok, state}` or `{:error, {:unexpected, step, expected, event}}`. A role and a label are atoms, spelled as a constructor atom is (`Muro.Emit.elixir_atom_name/1`): `release` is `:release`, and `go-now` is `:go_now`. `step/4` is the value `:tt`, so a message whose payload is not `Unit` takes `step/5`. The value is checked on the [wire form](#wire-form) of the payload, with a `repr` when the book has one. A wrong sender, receiver, label, or value, a choice by the wrong role or with a label the choice does not have, an event after `end`, and an event that is not one of those tuples are that error. Nothing raises.
+
+`expected/1` is plain data:
+
+| State | Term |
+| --- | --- |
+| a message | `{:message, from, to, label, type}` |
+| a choice | `{:choose, role, [label, ...]}`, in written order |
+| `end` | `:done` |
+
+`type` is the payload type as in [expected](#expected). `done?/1` is true at `end`.
+
+`step` names the book, the line of the `choreography` declaration, the choreography, and the interaction:
+
+```
+<file>:<line> choreography <name>: <ordinal> <from> -> <to> : <label>[ <payload>]
+<file>:<line> choreography <name>: <ordinal> <role> chooses
+<file>:<line> choreography <name>: end
+```
+
+Messages and choices are counted apart, in source order, both arms of a choice included.
+
+`check_trace/1` takes a list of events, `{from, to, label}`, `{from, to, label, value}`, or `{role, label}`, from `init/0`. It returns `:ok` or `{:error, {index, reason}}` for the first bad event, with `reason` the same `{:unexpected, step, expected, event}`. A prefix is a valid trace. `check_trace(trace, complete: true)` also requires `done?` and otherwise returns `{:error, {length, {:incomplete, step, expected}}}`. A trace that is not a list is `{:error, {:trace, trace}}`.
+
+The state is opaque plain data, like a session's. A value that is not a state of this choreography is `:unexpected` with the choreography's `end` step, `done?` is false, and `expected` is `:done`.
+
+The monitor checks a run a host recorded. It does not order the roles, and it does not start a process. The book judgment for a list of interactions is `prefix`: [Choreography](choreography.md#a-legal-prefix).
+
 ## What emit refuses
 
 The refusal is the whole module. A book that does not check is refused by the checker, with the checker's message. A book that checks, and that the machine cannot represent, is refused with `<file>:<line> session <name>: <reason>` (a missing session name has no line).
 
 | Reason | When |
 | --- | --- |
-| `<file> has no session to emit` | the book declares no session |
-| `seen is not a state machine` | the protocol is a talk |
+| `<file> has no session to emit` | the book declares no session and no choreography |
+| `seen is not a state machine` | the protocol is a `seen` of a talk |
 | `cannot evaluate bound <ix>` | an evidence bound is not a numeral, a name, or `suc` of one |
 | `cannot evaluate vector length <ix>` | a length is not one of those |
 | `cannot evaluate argument <ix>` | a jump argument is not one of those |
@@ -273,7 +324,7 @@ The refusal is the whole module. A book that does not check is refused by the ch
 | `wrong number of session arguments` | the call's arity is not the declaration's |
 | `dual cycle` | two sessions that are each other's dual with no body |
 
-`examples/talk.muro` and `examples/seated.muro` are refused because the protocol is `seen`. `examples/meet.muro`, `examples/indexed.muro`, and `examples/recursive.muro` emit completely, and so do the other session examples whose protocols are the forms above. `--node` with this backend is refused (`--node writes the placement calls`). `--imports` with this backend is refused.
+`examples/talk.muro` and `examples/seated.muro` are refused because the protocol is a `seen` of a talk. A `seen` of a choreography is the projected session: `examples/two-phase-commit.muro` and `examples/release-plan.muro` emit completely, with one monitor each. `examples/meet.muro`, `examples/indexed.muro`, and `examples/recursive.muro` emit completely, and so do the other session examples whose protocols are the forms above. `--node` with this backend is refused (`--node writes the placement calls`). `--imports` with this backend is refused.
 
 ## Manifest
 
@@ -283,4 +334,4 @@ The refusal is the whole module. A book that does not check is refused by the ch
 
 `impl:` and `imports:` on a `:fsm` entry are errors, and the message names the entry index. They remain valid only for `kind: :exunit` and `kind: :pytest`. The header, the hashes, `written` / `unchanged`, `--check`, a stale book, and a hand edit are the same as for the other kinds.
 
-The child of `session ping` is `Host.MeetFsm.Ping`. Each child has `init`, `send`, `recv`, and `done?`. A book that marks a party also gives each child `down/1` and `down/2`. A book that does not mark a party emits no `down`. A session name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes: `ping` is `Ping`, `foo_bar` is `FooBar`, and `grant-end` is `GrantEnd`. Any other name is `M` plus the function spelling (`and` is `Mmuro__and`). Two sessions that camelize to the same name are `Ping` and `Ping_2`.
+The child of `session ping` is `Host.MeetFsm.Ping`. Each child has `init`, `send`, `recv`, and `done?`. A book that marks a party also gives each child `down/1` and `down/2`. A book that does not mark a party emits no `down`. A session name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes: `ping` is `Ping`, `foo_bar` is `FooBar`, and `grant-end` is `GrantEnd`. Any other name is `M` plus the function spelling (`and` is `Mmuro__and`). Two sessions that camelize to the same name are `Ping` and `Ping_2`. A family child, then a choreography child, is named the same way after the sessions: a choreography `go-now` beside a session `go_now` is `GoNow_2`.
