@@ -3,7 +3,7 @@ defmodule Muro.IR.Eval.Ref do
   The bridge between `Muro.Check.normalize/3` and `Muro.IR.Eval`.
 
   `of_normal/2` reads a closed normal form as an `Muro.IR.Eval` value.
-  `to_term/2` writes a value back as a closed de Bruijn term, so the
+  `to_term/3` (`filler` defaults to `:one`) writes a value back as a closed de Bruijn term, so the
   same argument can be applied on both sides. Both take the named book
   the image was elaborated from (`Muro.Load.file/1`), which says which
   constructor fields are erased. An erased field is dropped, as
@@ -11,7 +11,8 @@ defmodule Muro.IR.Eval.Ref do
   on the value side and `{:atom, name}` on the term side.
 
   A λ, a stream, a stuck term, or anything else that is not a closed
-  first-order value is `{:error, {:not_value, term}}`.
+  first-order value is `{:error, {:not_value, term}}`. A word literal
+  is read as its residue, as `Muro.IR.Eval` reads one.
   """
 
   alias Muro.{IR, Word}
@@ -56,7 +57,10 @@ defmodule Muro.IR.Eval.Ref do
   defp value!(_tbl, {:blit, bin}) when is_binary(bin), do: {:bytes, bin}
   defp value!(_tbl, {:atom, name}) when is_binary(name), do: {:con, "Atom", name, []}
   defp value!(tbl, {:pair, a, b}), do: {:pair, value!(tbl, a), value!(tbl, b)}
-  defp value!(_tbl, {:word, {:lit, k, n}, []}) when is_integer(n), do: {:word, k, n}
+
+  defp value!(_tbl, {:word, {:lit, k, n}, []}) when is_integer(n),
+    do: {:word, k, Word.residue(k, n)}
+
   defp value!(_tbl, {:word, true, []}), do: true
   defp value!(_tbl, {:word, false, []}), do: false
   defp value!(_tbl, {:word, :none, []}), do: :none

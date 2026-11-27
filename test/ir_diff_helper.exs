@@ -261,19 +261,33 @@ defmodule Muro.IRDiff do
     # Eval spends fuel on every call; the checker shares work Eval
     # repeats. An input that exhausts Eval's budget is not compared, and
     # the reference is not asked for it.
-    if Enum.any?(got, fn {_k, r} -> r == {:error, :out_of_fuel} end) do
-      {:skip, :eval_out_of_fuel}
-    else
-      case reference(ctx, ast) do
-        {:ok, ref} ->
-          case Enum.reject(got, fn {_k, v} -> v == {:ok, ref} end) do
-            [] -> {:agree, Keyword.keys(images)}
-            bad -> {:mismatch, %{run: name, args: vals, ref: ref, got: bad}}
-          end
+    cond do
+      images == [] ->
+        {:mismatch, %{run: name, args: vals, got: :no_image}}
 
-        {:skip, reason} ->
-          {:skip, reason}
-      end
+      Enum.any?(got, fn {_k, r} -> r == {:error, :out_of_fuel} end) ->
+        {:skip, :eval_out_of_fuel}
+
+      true ->
+        against_reference(ctx, name, vals, ast, images, got)
+    end
+  end
+
+  # Without a reference value the images are still compared with one
+  # another; only their agreement with `normalize` is skipped.
+  defp against_reference(ctx, name, vals, ast, images, got) do
+    case reference(ctx, ast) do
+      {:ok, ref} ->
+        case Enum.reject(got, fn {_k, v} -> v == {:ok, ref} end) do
+          [] -> {:agree, Keyword.keys(images)}
+          bad -> {:mismatch, %{run: name, args: vals, ref: ref, got: bad}}
+        end
+
+      {:skip, reason} ->
+        case got |> Enum.map(&elem(&1, 1)) |> Enum.uniq() do
+          [_] -> {:skip, reason}
+          _ -> {:mismatch, %{run: name, args: vals, ref: {:skip, reason}, got: got}}
+        end
     end
   end
 

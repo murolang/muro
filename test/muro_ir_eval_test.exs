@@ -260,6 +260,14 @@ defmodule Muro.IREvalTest do
       assert Ref.of_normal(book, {:word, :some, [{:word, true, []}]}) == {:ok, {:some, true}}
       assert Ref.of_normal(book, {:slit, "s"}) == {:ok, {:str, "s"}}
 
+      for {k, n} <- [{:u8, 300}, {:u32, -1}, {:u64, 18_446_744_073_709_551_617}, {:i64, -5}] do
+        lit = {:word, {:lit, k, n}, []}
+        assert Ref.of_normal(book, lit) == {:ok, {:word, k, Muro.Word.residue(k, n)}}
+        assert Ref.of_normal(book, lit) == ev({:wrd, k, {:lit, k, n}, []})
+      end
+
+      assert Ref.of_normal(book, {:word, {:lit, :u8, 300}, []}) == {:ok, {:word, :u8, 44}}
+
       lam = {:lam, :affine, :nat, "x", {:var, 0}}
       assert Ref.of_normal(book, lam) == {:error, {:not_value, lam}}
       assert {:error, {:not_value, _}} = Ref.of_normal(book, {:def, "just"})
