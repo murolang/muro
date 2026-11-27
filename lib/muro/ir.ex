@@ -122,7 +122,7 @@ defmodule Muro.IR do
   end
 
   defp peel(st, ctx, acc, {:pi, q, a, _x, b}, {:lam, q2, _dom, name, body}) do
-    if q == :erased or q2 == :erased do
+    if erased_qty?(q) or erased_qty?(q2) do
       peel(st, [{:gone, name} | ctx], acc, b, body)
     else
       with {:ok, lay} <- layout_of(st, a) do
@@ -131,19 +131,19 @@ defmodule Muro.IR do
     end
   end
 
-  defp peel(%{closures: true} = st, ctx, acc, {:pi, :erased, _, name, b}, body) do
-    peel(st, [{:gone, name} | ctx], acc, b, {:app, body, {:var, name}})
-  end
-
   defp peel(%{closures: true} = st, ctx, acc, {:pi, q, a, name, b}, body) do
-    with {:ok, lay} <- layout_of(st, a) do
-      peel(
-        st,
-        [{:live, name, lay} | ctx],
-        acc ++ [{name, lay, live_grade(q)}],
-        b,
-        {:app, body, {:var, name}}
-      )
+    if erased_qty?(q) do
+      peel(st, [{:gone, name} | ctx], acc, b, {:app, body, {:var, name}})
+    else
+      with {:ok, lay} <- layout_of(st, a) do
+        peel(
+          st,
+          [{:live, name, lay} | ctx],
+          acc ++ [{name, lay, live_grade(q)}],
+          b,
+          {:app, body, {:var, name}}
+        )
+      end
     end
   end
 
@@ -168,25 +168,25 @@ defmodule Muro.IR do
   defp apply(st, {:rwt, _, _, _, t}, args, ctx, k), do: apply(st, t, args, ctx, k)
   defp apply(st, {:rwt, _, _, t}, args, ctx, k), do: apply(st, t, args, ctx, k)
 
-  defp apply(st, {:lam, :erased, _dom, name, body}, [_arg | rest], ctx, k) do
-    apply(st, body, rest, [{:gone, name} | ctx], k)
-  end
-
   defp apply(st, {:lam, q, dom, name, body}, [{arg, actx} | rest], ctx, k) do
-    with {:ok, lay} <- layout_of(st, dom),
-         {:ok, ae} <- elab(st, arg, actx, k) do
-      # A spec alias is opaque here. The argument keeps its own layout,
-      # so a zero is a Nat and not the erased-field placeholder.
-      blay = bind_layout(lay, ae.lay)
+    if erased_qty?(q) do
+      apply(st, body, rest, [{:gone, name} | ctx], k)
+    else
+      with {:ok, lay} <- layout_of(st, dom),
+           {:ok, ae} <- elab(st, arg, actx, k) do
+        # A spec alias is opaque here. The argument keeps its own layout,
+        # so a zero is a Nat and not the erased-field placeholder.
+        blay = bind_layout(lay, ae.lay)
 
-      with {:ok, be} <- apply(st, body, rest, [{:live, name, blay} | ctx], ae.k) do
-        {:ok,
-         %{
-           tm: {:let, name, blay, live_grade(q), ae.tm, be.tm},
-           lay: be.lay,
-           steps: ae.steps ++ be.steps,
-           k: be.k
-         }}
+        with {:ok, be} <- apply(st, body, rest, [{:live, name, blay} | ctx], ae.k) do
+          {:ok,
+           %{
+             tm: {:let, name, blay, live_grade(q), ae.tm, be.tm},
+             lay: be.lay,
+             steps: ae.steps ++ be.steps,
+             k: be.k
+           }}
+        end
       end
     end
   end
@@ -308,14 +308,14 @@ defmodule Muro.IR do
     end
   end
 
-  defp consume(st, {:pi, :erased, _, _, b}, [_arg | rest], k) do
-    consume(st, b, rest, k)
-  end
-
-  defp consume(st, {:pi, _q, _, _, b}, [{arg, actx} | rest], k) do
-    with {:ok, e} <- elab(st, arg, actx, k),
-         {:ok, consumed} <- consume(st, b, rest, e.k) do
-      {:ok, push_arg(consumed, e.tm, e.steps)}
+  defp consume(st, {:pi, q, _, _, b}, [{arg, actx} | rest], k) do
+    if erased_qty?(q) do
+      consume(st, b, rest, k)
+    else
+      with {:ok, e} <- elab(st, arg, actx, k),
+           {:ok, consumed} <- consume(st, b, rest, e.k) do
+        {:ok, push_arg(consumed, e.tm, e.steps)}
+      end
     end
   end
 
@@ -342,16 +342,16 @@ defmodule Muro.IR do
   defp push_arg({:over, ts, steps, k, lay, extra}, tm, more),
     do: {:over, [tm | ts], more ++ steps, k, lay, extra}
 
-  defp wrap_inner(st, ts, {:pi, :erased, _, _, b}, pack) do
-    wrap_inner(st, ts, b, pack)
-  end
-
   defp wrap_inner(st, ts, {:pi, q, a, name, b}, pack) do
-    with {:ok, lay} <- layout_of(st, a) do
-      fresh = freshen(name, ts)
+    if erased_qty?(q) do
+      wrap_inner(st, ts, b, pack)
+    else
+      with {:ok, lay} <- layout_of(st, a) do
+        fresh = freshen(name, ts)
 
-      with {:ok, {body, ret}} <- wrap_inner(st, ts ++ [{:var, fresh}], b, pack) do
-        {:ok, {{:lam, fresh, lay, live_grade(q), body}, {:fn, lay, ret}}}
+        with {:ok, {body, ret}} <- wrap_inner(st, ts ++ [{:var, fresh}], b, pack) do
+          {:ok, {{:lam, fresh, lay, live_grade(q), body}, {:fn, lay, ret}}}
+        end
       end
     end
   end
@@ -400,14 +400,14 @@ defmodule Muro.IR do
     end
   end
 
-  defp zip_live(st, {:pi, :erased, _, _, b}, [_arg | rest], k) do
-    zip_live(st, b, rest, k)
-  end
-
-  defp zip_live(st, {:pi, _q, _, _, b}, [{arg, actx} | rest], k) do
-    with {:ok, e} <- elab(st, arg, actx, k),
-         {:ok, {ts, steps, k1, lay}} <- zip_live(st, b, rest, e.k) do
-      {:ok, {[e.tm | ts], e.steps ++ steps, k1, lay}}
+  defp zip_live(st, {:pi, q, _, _, b}, [{arg, actx} | rest], k) do
+    if erased_qty?(q) do
+      zip_live(st, b, rest, k)
+    else
+      with {:ok, e} <- elab(st, arg, actx, k),
+           {:ok, {ts, steps, k1, lay}} <- zip_live(st, b, rest, e.k) do
+        {:ok, {[e.tm | ts], e.steps ++ steps, k1, lay}}
+      end
     end
   end
 
@@ -563,14 +563,14 @@ defmodule Muro.IR do
 
   defp elab_form(_st, {:unf, _, _}, _ctx, _k), do: {:error, "c:lambda"}
 
-  defp elab_form(%{closures: true} = st, {:lam, :erased, _dom, name, body}, ctx, k) do
-    elab(st, body, [{:gone, name} | ctx], k)
-  end
-
   defp elab_form(%{closures: true} = st, {:lam, q, dom, name, body}, ctx, k) do
-    with {:ok, lay} <- layout_of(st, dom),
-         {:ok, be} <- elab(st, body, [{:live, name, lay} | ctx], k) do
-      ok({:lam, name, lay, live_grade(q), be.tm}, {:fn, lay, be.lay}, be.steps, be.k)
+    if erased_qty?(q) do
+      elab(st, body, [{:gone, name} | ctx], k)
+    else
+      with {:ok, lay} <- layout_of(st, dom),
+           {:ok, be} <- elab(st, body, [{:live, name, lay} | ctx], k) do
+        ok({:lam, name, lay, live_grade(q), be.tm}, {:fn, lay, be.lay}, be.steps, be.k)
+      end
     end
   end
 
@@ -699,7 +699,7 @@ defmodule Muro.IR do
 
   defp elab_form(st, {tag, _ty, z, f, s}, ctx, k) when tag in [:bfold, :afold] do
     case peel_fold(f) do
-      {:ok, bname, rname, aname, body} ->
+      {:ok, bname, bq, rname, rq, aname, aq, body} ->
         with {:ok, ez} <- elab(st, z, ctx, k),
              {:ok, es} <- elab(st, s, ctx, ez.k) do
           caps = fold_captures(body, [bname, rname, aname], ctx)
@@ -719,7 +719,11 @@ defmodule Muro.IR do
               fold: true,
               params:
                 cap_params(caps) ++
-                  [{bname, :u8, :reuse}, {rname, :slice, :reuse}, {aname, ez.lay, :reuse}],
+                  [
+                    {bname, :u8, live_grade(bq)},
+                    {rname, :slice, live_grade(rq)},
+                    {aname, ez.lay, live_grade(aq)}
+                  ],
               ret: ez.lay,
               body: be.tm
             }
@@ -794,13 +798,19 @@ defmodule Muro.IR do
 
   defp open_fields(_st, [], ctx, wraps, _subst), do: {:ok, {ctx, wraps}}
 
-  defp open_fields(st, [{{:erased, _, _}, bname} | rest], ctx, wraps, subst) do
-    open_fields(st, rest, [{:live, bname, :opaque} | ctx], wraps ++ [{:gone, bname}], subst)
-  end
-
-  defp open_fields(st, [{{_q, a, _}, bname} | rest], ctx, wraps, subst) do
-    with {:ok, lay} <- layout_of(Map.put(st, :subst, subst), a) do
-      open_fields(st, rest, [{:live, bname, lay} | ctx], wraps ++ [{:live, bname}], subst)
+  defp open_fields(st, [{{q, a, _}, bname} | rest], ctx, wraps, subst) do
+    if erased_qty?(q) do
+      open_fields(st, rest, [{:live, bname, :opaque} | ctx], wraps ++ [{:gone, bname}], subst)
+    else
+      with {:ok, lay} <- layout_of(Map.put(st, :subst, subst), a) do
+        open_fields(
+          st,
+          rest,
+          [{:live, bname, lay} | ctx],
+          wraps ++ [{:live, bname, live_grade(q)}],
+          subst
+        )
+      end
     end
   end
 
@@ -822,6 +832,11 @@ defmodule Muro.IR do
   defp wrap([], tm), do: {[], tm}
 
   defp wrap([{:live, x} | ws], tm) do
+    {names, inner} = wrap(ws, tm)
+    {[x | names], inner}
+  end
+
+  defp wrap([{:live, x, _g} | ws], tm) do
     {names, inner} = wrap(ws, tm)
     {[x | names], inner}
   end
@@ -864,12 +879,14 @@ defmodule Muro.IR do
   defp layout_of(_st, :unit), do: {:ok, :unit}
   defp layout_of(_st, :typ), do: {:ok, :opaque}
 
-  defp layout_of(%{closures: true} = st, {:pi, :erased, _, _, b}), do: layout_of(st, b)
-
-  defp layout_of(%{closures: true} = st, {:pi, _q, a, _, b}) do
-    with {:ok, la} <- layout_of(st, a),
-         {:ok, lb} <- layout_of(st, b) do
-      {:ok, {:fn, la, lb}}
+  defp layout_of(%{closures: true} = st, {:pi, q, a, _, b}) do
+    if erased_qty?(q) do
+      layout_of(st, b)
+    else
+      with {:ok, la} <- layout_of(st, a),
+           {:ok, lb} <- layout_of(st, b) do
+        {:ok, {:fn, la, lb}}
+      end
     end
   end
 
@@ -1157,18 +1174,24 @@ defmodule Muro.IR do
     end)
   end
 
-  defp seed_ctx(:erased, name, _lay, ctx), do: [{:gone, name} | ctx]
-  defp seed_ctx(_q, name, lay, ctx), do: [{:live, name, lay} | ctx]
+  defp seed_ctx(q, name, lay, ctx) do
+    if erased_qty?(q), do: [{:gone, name} | ctx], else: [{:live, name, lay} | ctx]
+  end
 
-  defp seed_param(:erased, _name, _lay), do: []
-  defp seed_param(q, name, lay), do: [{name, lay, live_grade(q)}]
+  defp seed_param(q, name, lay) do
+    if erased_qty?(q), do: [], else: [{name, lay, live_grade(q)}]
+  end
 
   defp cap_params(caps), do: Enum.map(caps, fn {name, lay, _} -> {name, lay, :reuse} end)
   defp cap_terms(caps), do: Enum.map(caps, fn {name, _, tm} -> {name, tm} end)
 
-  defp peel_fold({:lam, q, _, b, {:lam, q2, _, r, {:lam, q3, _, a, body}}})
-       when q != :erased and q2 != :erased and q3 != :erased,
-       do: {:ok, b, r, a, body}
+  defp peel_fold({:lam, q, _, b, {:lam, q2, _, r, {:lam, q3, _, a, body}}}) do
+    if erased_qty?(q) or erased_qty?(q2) or erased_qty?(q3) do
+      :error
+    else
+      {:ok, b, q, r, q2, a, q3, body}
+    end
+  end
 
   defp peel_fold(_), do: :error
 
@@ -1348,6 +1371,9 @@ defmodule Muro.IR do
       :erased -> :affine
     end
   end
+
+  @doc "True when `q` is erased, including `{:grade, 0, t}`."
+  def erased_qty?(q), do: Grade.kernel_qty(q) == :erased
 
   @doc "True when `g` is a live IR grade."
   def grade?(g), do: g in @live_grades

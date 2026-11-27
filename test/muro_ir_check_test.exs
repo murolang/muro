@@ -221,6 +221,181 @@ defmodule Muro.IRCheckTest do
     assert Enum.any?(errors, &(&1 =~ "let x has layout :string, expected :nat"))
   end
 
+  test "Share pruning a dead arm does not require linear use on the abort path" do
+    both =
+      fun(
+        "go",
+        [{"n", :nat, :linear}],
+        :nat,
+        {:match, {:con, "Pick", "yes", []},
+         [{:arm, "yes", [], {:var, "n"}}, {:arm, "no", [], {:var, "n"}}]}
+      )
+
+    # Share may collapse the match to the live arm. The image `kill_dead`
+    # actually produces still has the unreachable arm as `:abort`; Check
+    # must treat that path as bottom.
+    pruned =
+      fun(
+        "go",
+        [{"n", :nat, :linear}],
+        :nat,
+        {:match, {:con, "Pick", "yes", []},
+         [{:arm, "yes", [], {:var, "n"}}, {:arm, "no", [], :abort}]}
+      )
+
+    assert :ok = Check.check([pruned])
+    assert :ok = Check.check(Share.funs([both]))
+
+    twice_pruned =
+      fun(
+        "go",
+        [{"n", :nat, :linear}],
+        :nat,
+        {:match, {:con, "Pick", "yes", []},
+         [
+           {:arm, "yes", [], {:pair, {:var, "n"}, {:var, "n"}}},
+           {:arm, "no", [], :abort}
+         ]}
+      )
+
+    assert {:error, errors} = Check.check([twice_pruned])
+    assert Enum.any?(errors, &(&1 =~ "linear binder n used 2"))
+
+    twice =
+      fun(
+        "go",
+        [{"n", :nat, :linear}],
+        :nat,
+        {:match, {:con, "Pick", "yes", []},
+         [
+           {:arm, "yes", [], {:pair, {:var, "n"}, {:var, "n"}}},
+           {:arm, "no", [], {:var, "n"}}
+         ]}
+      )
+
+    assert {:error, errors} = Check.check(Share.funs([twice]))
+    assert Enum.any?(errors, &(&1 =~ "linear binder n used 2"))
+  end
+
+  test "linear arm fields are accounted from the book" do
+    book = lin_box_book()
+
+    once =
+      fun(
+        "go",
+        [{"b", {:data, "LinBox"}, :affine}],
+        :nat,
+        {:match, {:var, "b"}, [{:arm, "mk", ["n"], {:var, "n"}}]}
+      )
+
+    assert :ok = Check.check([once], book: book)
+
+    unused =
+      fun(
+        "go",
+        [{"b", {:data, "LinBox"}, :affine}],
+        :nat,
+        {:match, {:var, "b"}, [{:arm, "mk", ["n"], :ze}]}
+      )
+
+    assert {:error, errors} = Check.check([unused], book: book)
+    assert Enum.any?(errors, &(&1 =~ "linear binder n used 0"))
+
+    twice =
+      fun(
+        "go",
+        [{"b", {:data, "LinBox"}, :affine}],
+        :nat,
+        {:match, {:var, "b"}, [{:arm, "mk", ["n"], {:pair, {:var, "n"}, {:var, "n"}}}]}
+      )
+
+    assert {:error, errors} = Check.check([twice], book: book)
+    assert Enum.any?(errors, &(&1 =~ "linear binder n used 2"))
+  end
+
+  test "linear fold-step parameters are accounted" do
+    ok = fun("step0", [{"b", :nat, :linear}, {"acc", :nat, :reuse}], :nat, {:var, "b"})
+    assert :ok = Check.check([ok])
+
+    unused = fun("step0", [{"b", :nat, :linear}, {"acc", :nat, :reuse}], :nat, {:var, "acc"})
+    assert {:error, errors} = Check.check([unused])
+    assert Enum.any?(errors, &(&1 =~ "linear binder b used 0"))
+
+    twice =
+      fun(
+        "step0",
+        [{"b", :nat, :linear}, {"acc", :nat, :reuse}],
+        :nat,
+        {:pair, {:var, "b"}, {:var, "b"}}
+      )
+
+    assert {:error, errors} = Check.check([twice])
+    assert Enum.any?(errors, &(&1 =~ "linear binder b used 2"))
+  end
+
+  test "a linear capture is charged at lambda formation" do
+    returned =
+      fun(
+        "go",
+        [{"x", :nat, :linear}],
+        {:fn, :nat, :nat},
+        {:lam, "n", :nat, :affine, {:var, "x"}}
+      )
+
+    assert :ok = Check.check([returned], closures: true)
+
+    unused =
+      fun(
+        "go",
+        [{"x", :nat, :linear}],
+        {:fn, :nat, :nat},
+        {:lam, "n", :nat, :affine, {:var, "n"}}
+      )
+
+    assert {:error, errors} = Check.check([unused], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "linear binder x used 0"))
+
+    twice =
+      fun(
+        "go",
+        [{"x", :nat, :linear}],
+        {:fn, :nat, :nat},
+        {:lam, "n", :nat, :affine, {:pair, {:var, "x"}, {:var, "x"}}}
+      )
+
+    assert {:error, errors} = Check.check([twice], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "linear binder x used 2"))
+
+    reuse =
+      fun(
+        "go",
+        [{"x", :nat, :linear}],
+        {:fn, :nat, :nat},
+        {:let, "f", {:fn, :nat, :nat}, :reuse, {:lam, "n", :nat, :affine, {:var, "x"}},
+         {:var, "f"}}
+      )
+
+    assert {:error, errors} = Check.check([reuse], closures: true)
+    assert Enum.any?(errors, &(&1 =~ "uses x as reusable"))
+  end
+
+  test "a missing grade is refused" do
+    param = %{name: "go", export: true, params: [{"n", :nat}], ret: :nat, body: {:var, "n"}}
+    assert {:error, errors} = Check.check([param])
+    assert Enum.any?(errors, &(&1 =~ "parameter n is missing a grade"))
+
+    let = %{
+      name: "go",
+      export: true,
+      params: [],
+      ret: :nat,
+      body: {:let, "x", :nat, :ze, {:var, "x"}}
+    }
+
+    assert {:error, errors} = Check.check([let])
+    assert Enum.any?(errors, &(&1 =~ "let x is missing a grade"))
+  end
+
   test "corpus elaborations and Share images check" do
     {ok, skipped, failures} =
       Enum.reduce(corpus_paths(), {0, 0, []}, fn path, {ok, skipped, failures} ->
@@ -268,6 +443,23 @@ defmodule Muro.IRCheckTest do
   defp reuse_let?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&reuse_let?/1)
   defp reuse_let?(t) when is_list(t), do: Enum.any?(t, &reuse_let?/1)
   defp reuse_let?(_), do: false
+
+  defp lin_box_book do
+    [
+      %{
+        kind: :data,
+        name: "LinBox",
+        params: [],
+        indices: [],
+        ctors: [
+          %{
+            name: "mk",
+            type: {:pi, :linear, :nat, "n", {:const, "LinBox"}}
+          }
+        ]
+      }
+    ]
+  end
 
   defp box_book do
     [

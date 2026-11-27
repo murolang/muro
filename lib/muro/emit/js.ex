@@ -332,10 +332,6 @@ defmodule Muro.Emit.JS do
       session_use(body, index, bind(bind(bound, a), b))
   end
 
-  defp session_use({:let, name, _, val, body}, index, bound) do
-    session_use(val, index, bound) || session_use(body, index, bind(bound, name))
-  end
-
   defp session_use({:let, name, _, _, val, body}, index, bound) do
     session_use(val, index, bound) || session_use(body, index, bind(bound, name))
   end

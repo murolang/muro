@@ -8,10 +8,18 @@ defmodule Muro.IR.Check do
   accounting along paths, arm exhaustiveness when a book is given, and
   that closure forms appear only in the closures image.
 
-  Grades are `:linear` (used once on every path), `:affine` (used at
-  most once on any path), and `:reuse` (unrestricted). Compiler-introduced
-  CSE lets are `:reuse`. After Share prunes a path, an unused `:linear`
-  binder is `:affine`, so a valid rewrite still checks.
+  Grades are `:linear` (used once on every live path), `:affine` (used at
+  most once on any path), and `:reuse` (unrestricted). An `:abort` path
+  is bottom: it does not require leftover linear binders, but uses that
+  already happened still count. If every arm is `:abort`, the match is
+  unreachable. Compiler-introduced CSE lets are `:reuse`. After Share
+  prunes a path, an unused `:linear` *let* in the body is downgraded to
+  `:affine` (`relax_fun/1`); parameters are unchanged.
+
+  Captures under `{:lam, ...}` are charged at formation, as in
+  `Muro.Grade` and `agda/Muro/Grade.agda` (`rest` after `pop`). A
+  `:reuse` binding or argument that mentions a `:linear` or `:affine`
+  variable is refused, because copying that value would copy the capture.
   """
 
   alias Muro.IR
@@ -29,6 +37,7 @@ defmodule Muro.IR.Check do
       `closures: true`. When omitted, it is inferred from the image.
   """
   def check(funs, opts \\ []) when is_list(funs) do
+    missing = Enum.flat_map(funs, &ungraded_errors/1)
     funs = Enum.map(funs, &IR.normalize_fun/1)
     closures? = Keyword.get(opts, :closures, closures_image?(funs))
 
@@ -39,8 +48,7 @@ defmodule Muro.IR.Check do
     }
 
     errors =
-      funs
-      |> Enum.flat_map(&check_fun(&1, ctx))
+      (missing ++ Enum.flat_map(funs, &check_fun(&1, ctx)))
       |> Enum.uniq()
 
     case errors do
@@ -120,14 +128,26 @@ defmodule Muro.IR.Check do
     {paths, body_errors} = check_tm(fun.body, env, fun, ctx)
 
     grade_errors =
-      Enum.flat_map(paths, fn path ->
-        Enum.flat_map(fun.params, fn p ->
-          n = IR.param_name(p)
-          grade_error(fun.name, n, IR.param_grade(p), Map.get(path, n, 0))
-        end)
+      Enum.flat_map(fun.params, fn p ->
+        n = IR.param_name(p)
+        path_grade_errors(fun.name, n, IR.param_grade(p), paths)
       end)
 
     param_errors ++ ret_errors ++ body_errors ++ grade_errors
+  end
+
+  defp path_grade_errors(fun, name, grade, paths) do
+    Enum.flat_map(paths, fn path ->
+      n = Map.get(uses_of(path), name, 0)
+
+      cond do
+        dead?(path) and n <= 1 ->
+          []
+
+        true ->
+          grade_error(fun, name, grade, n)
+      end
+    end)
   end
 
   defp grade_error(_fun, _name, :linear, 1), do: []
@@ -145,13 +165,13 @@ defmodule Muro.IR.Check do
   defp check_tm({:var, x}, env, fun, _ctx) do
     case env do
       %{^x => %{lay: :erased}} ->
-        {[%{}], ["#{fun.name}: erased variable #{x} used in a live position"]}
+        {[{:live, %{}}], ["#{fun.name}: erased variable #{x} used in a live position"]}
 
       %{^x => _} ->
-        {[%{x => 1}], []}
+        {[{:live, %{x => 1}}], []}
 
       _ ->
-        {[%{}], ["#{fun.name}: free variable #{x}"]}
+        {[{:live, %{}}], ["#{fun.name}: free variable #{x}"]}
     end
   end
 
@@ -173,12 +193,12 @@ defmodule Muro.IR.Check do
 
     used =
       Enum.flat_map(bpaths, fn p ->
-        if Map.get(p, x, 0) > 0,
+        if Map.get(uses_of(p), x, 0) > 0,
           do: ["#{fun.name}: erased variable #{x} used in a live position"],
           else: []
       end)
 
-    {Enum.map(bpaths, &Map.delete(&1, x)), errors ++ berr ++ used}
+    {Enum.map(bpaths, &drop_binder(&1, x)), errors ++ berr ++ used}
   end
 
   defp check_tm({:let, x, lay, g, val, body}, env, fun, ctx) do
@@ -189,16 +209,13 @@ defmodule Muro.IR.Check do
 
     {vpaths, verr} = check_tm(val, env, fun, ctx)
     errors = errors ++ verr ++ layout_agree(fun, "let #{x}", infer(val, env, ctx), lay)
+    errors = errors ++ reuse_capture_errors(fun, "let #{x}", g, val, env)
 
     env1 = Map.put(env, x, %{grade: g, lay: lay})
     {bpaths, berr} = check_tm(body, env1, fun, ctx)
+    gerr = path_grade_errors(fun.name, x, g, bpaths)
 
-    gerr =
-      Enum.flat_map(bpaths, fn p ->
-        grade_error(fun.name, x, g, Map.get(p, x, 0))
-      end)
-
-    {seq(vpaths, Enum.map(bpaths, &Map.delete(&1, x))), errors ++ berr ++ gerr}
+    {seq(vpaths, Enum.map(bpaths, &drop_binder(&1, x))), errors ++ berr ++ gerr}
   end
 
   defp check_tm({:letp, a, b, e, body}, env, fun, ctx) do
@@ -217,7 +234,7 @@ defmodule Muro.IR.Check do
       |> Map.put(b, %{grade: :reuse, lay: blay})
 
     {bpaths, berr} = check_tm(body, env1, fun, ctx)
-    {seq(epaths, Enum.map(bpaths, &Map.drop(&1, [a, b]))), eerr ++ berr}
+    {seq(epaths, Enum.map(bpaths, &drop_binders(&1, [a, b]))), eerr ++ berr}
   end
 
   defp check_tm({:lam, name, lay, g, body}, env, fun, ctx) when is_binary(name) do
@@ -236,12 +253,9 @@ defmodule Muro.IR.Check do
     env1 = Map.put(env, name, %{grade: g, lay: lay})
     {bpaths, berr} = check_tm(body, env1, fun, ctx)
 
-    gerr =
-      Enum.flat_map(bpaths, fn p ->
-        grade_error(fun.name, name, g, Map.get(p, name, 0))
-      end)
+    gerr = path_grade_errors(fun.name, name, g, bpaths)
 
-    {Enum.map(bpaths, &Map.delete(&1, name)), errors ++ berr ++ gerr}
+    {Enum.map(bpaths, &drop_binder(&1, name)), errors ++ berr ++ gerr}
   end
 
   defp check_tm({:appv, f, a}, env, fun, ctx) do
@@ -314,12 +328,14 @@ defmodule Muro.IR.Check do
     {ps, es ++ step_err}
   end
 
+  defp check_tm(:abort, _env, _fun, _ctx), do: {[{:dead, %{}}], []}
+
   defp check_tm(t, env, fun, ctx) when is_tuple(t) do
     check_seq(tuple_children(t), env, fun, ctx)
   end
 
   defp check_tm(t, env, fun, ctx) when is_list(t), do: check_seq(t, env, fun, ctx)
-  defp check_tm(_t, _env, _fun, _ctx), do: {[%{}], []}
+  defp check_tm(_t, _env, _fun, _ctx), do: {[{:live, %{}}], []}
 
   defp check_match(s, arms, env, fun, ctx, scrut_lay) do
     {spaths, serr} = check_tm(s, env, fun, ctx)
@@ -332,20 +348,29 @@ defmodule Muro.IR.Check do
     walked =
       Enum.map(arms, fn {:arm, tag, names, tm} ->
         lays = arm_field_lays(scrut_lay, tag, names, ctx)
+        grades = arm_field_grades(scrut_lay, tag, names, ctx)
 
         env1 =
-          Enum.zip(names, lays)
-          |> Enum.reduce(env, fn {n, lay}, env ->
-            Map.put(env, n, %{grade: :reuse, lay: lay})
+          names
+          |> Enum.zip(lays)
+          |> Enum.zip(grades)
+          |> Enum.reduce(env, fn {{n, lay}, g}, env ->
+            Map.put(env, n, %{grade: g, lay: lay})
           end)
 
         {paths, errors} = check_tm(tm, env1, fun, ctx)
-        {Enum.map(paths, &Map.drop(&1, names)), errors}
+
+        gerr =
+          names
+          |> Enum.zip(grades)
+          |> Enum.flat_map(fn {n, g} -> path_grade_errors(fun.name, n, g, paths) end)
+
+        {Enum.map(paths, &drop_binders(&1, names)), errors ++ gerr}
       end)
 
     case walked do
       [] ->
-        {[%{}], []}
+        {[{:dead, %{}}], []}
 
       list ->
         paths = Enum.flat_map(list, &elem(&1, 0))
@@ -376,6 +401,32 @@ defmodule Muro.IR.Check do
   defp pad_lays(lays, names) do
     n = length(names)
     lays ++ List.duplicate(:unknown, max(n - length(lays), 0))
+  end
+
+  defp arm_field_grades(scrut_lay, tag, names, ctx) do
+    grades =
+      case {scrut_lay, tag} do
+        {:nat, "suc"} ->
+          [:affine]
+
+        {{:opt, _}, "wsome"} ->
+          [:affine]
+
+        {{:data, d}, _} ->
+          case ctor_field_grades(ctx.book, d, tag) do
+            :unknown -> Enum.map(names, fn _ -> :reuse end)
+            gs -> gs
+          end
+
+        _ ->
+          Enum.map(names, fn _ -> :reuse end)
+      end
+
+    pad_grades(grades, names)
+  end
+
+  defp pad_grades(grades, names) do
+    grades ++ List.duplicate(:reuse, max(length(names) - length(grades), 0))
   end
 
   defp exhaust_errors(_fun, _lay, _arms, %{book: nil}), do: []
@@ -448,7 +499,14 @@ defmodule Muro.IR.Check do
         )
       end)
 
-    arity ++ lays
+    caps =
+      args
+      |> Enum.zip(callee.params)
+      |> Enum.flat_map(fn {arg, p} ->
+        reuse_capture_errors(fun, "argument of #{name}", IR.param_grade(p), arg, env)
+      end)
+
+    arity ++ lays ++ caps
   end
 
   defp ctor_errors(fun, d, c, args, env, ctx) do
@@ -490,6 +548,29 @@ defmodule Muro.IR.Check do
       _ -> :unknown
     end
   end
+
+  defp ctor_field_grades(nil, _d, _c), do: :unknown
+
+  defp ctor_field_grades(book, dname, cname) do
+    with d when d != nil <- find_data(book, dname),
+         ctor when ctor != nil <- Enum.find(d.ctors, &(&1.name == cname)) do
+      live_field_grades(ctor.type)
+    else
+      _ -> :unknown
+    end
+  end
+
+  defp live_field_grades(ty), do: live_field_grades(ty, [])
+
+  defp live_field_grades({:pi, q, _a, _n, b}, acc) do
+    if Muro.Grade.kernel_qty(q) == :erased do
+      live_field_grades(b, acc)
+    else
+      live_field_grades(b, acc ++ [IR.live_grade(q)])
+    end
+  end
+
+  defp live_field_grades(_ty, acc), do: acc
 
   defp live_field_lays(book, ty), do: live_field_lays(book, ty, [])
 
@@ -615,19 +696,124 @@ defmodule Muro.IR.Check do
   # -- paths ------------------------------------------------------------
 
   defp check_seq(tms, env, fun, ctx) do
-    Enum.reduce(tms, {[%{}], []}, fn tm, {paths, errors} ->
+    Enum.reduce(tms, {[{:live, %{}}], []}, fn tm, {paths, errors} ->
       {ps, es} = check_tm(tm, env, fun, ctx)
       {seq(paths, ps), errors ++ es}
     end)
   end
 
   defp seq(ps, qs) do
-    for p <- ps, q <- qs, do: add_uses(p, q)
+    Enum.flat_map(ps, fn p -> Enum.flat_map(qs, &seq_one(p, &1)) end)
   end
+
+  defp seq_one({:dead, u}, _q), do: [{:dead, u}]
+  defp seq_one({:live, u}, {:dead, v}), do: [{:dead, add_uses(u, v)}]
+  defp seq_one({:live, u}, {:live, v}), do: [{:live, add_uses(u, v)}]
 
   defp add_uses(a, b) do
     Map.merge(a, b, fn _k, x, y -> x + y end)
   end
+
+  defp uses_of({:live, u}), do: u
+  defp uses_of({:dead, u}), do: u
+  defp dead?({:dead, _}), do: true
+  defp dead?({:live, _}), do: false
+
+  defp drop_binder({:live, u}, x), do: {:live, Map.delete(u, x)}
+  defp drop_binder({:dead, u}, x), do: {:dead, Map.delete(u, x)}
+  defp drop_binders(path, names), do: Enum.reduce(names, path, &drop_binder(&2, &1))
+
+  # A `:reuse` binding or argument may not mention a linear or affine
+  # variable. `Muro.Grade` charges λ-captures at formation; copying the
+  # value would copy those captures (`affine variable used as reusable`).
+  defp reuse_capture_errors(_fun, _where, g, _tm, _env) when g != :reuse, do: []
+
+  defp reuse_capture_errors(fun, where, :reuse, tm, env) do
+    names = tm |> restricted_free(env, MapSet.new()) |> Enum.uniq()
+
+    case names do
+      [] ->
+        []
+
+      ns ->
+        ["#{fun.name}: #{where} uses #{Enum.join(ns, ", ")} as reusable"]
+    end
+  end
+
+  defp restricted_free({:var, x}, env, bound) do
+    if MapSet.member?(bound, x) do
+      []
+    else
+      case env do
+        %{^x => %{grade: g}} when g in [:linear, :affine] -> [x]
+        _ -> []
+      end
+    end
+  end
+
+  defp restricted_free({:let, x, _, _, v, b}, env, bound) do
+    restricted_free(v, env, bound) ++ restricted_free(b, env, MapSet.put(bound, x))
+  end
+
+  defp restricted_free({:lam, name, _, _, body}, env, bound) when is_binary(name),
+    do: restricted_free(body, env, MapSet.put(bound, name))
+
+  defp restricted_free({:letp, a, b, e, body}, env, bound) do
+    restricted_free(e, env, bound) ++
+      restricted_free(body, env, bound |> MapSet.put(a) |> MapSet.put(b))
+  end
+
+  defp restricted_free({:match, s, arms}, env, bound) when is_list(arms) do
+    restricted_free(s, env, bound) ++ restricted_free_arms(arms, env, bound)
+  end
+
+  defp restricted_free({:match, s, _lay, arms}, env, bound) when is_list(arms) do
+    restricted_free(s, env, bound) ++ restricted_free_arms(arms, env, bound)
+  end
+
+  defp restricted_free(t, env, bound) when is_tuple(t) do
+    Enum.flat_map(tuple_children(t), &restricted_free(&1, env, bound))
+  end
+
+  defp restricted_free(t, env, bound) when is_list(t),
+    do: Enum.flat_map(t, &restricted_free(&1, env, bound))
+
+  defp restricted_free(_t, _env, _bound), do: []
+
+  defp restricted_free_arms(arms, env, bound) do
+    Enum.flat_map(arms, fn {:arm, _, names, tm} ->
+      restricted_free(tm, env, MapSet.union(bound, MapSet.new(names)))
+    end)
+  end
+
+  defp ungraded_errors(fun) do
+    params =
+      Enum.flat_map(fun.params, fn
+        {n, _lay} when is_binary(n) ->
+          ["#{fun.name}: parameter #{n} is missing a grade"]
+
+        _ ->
+          []
+      end)
+
+    params ++ ungraded_tm(fun.name, fun.body)
+  end
+
+  defp ungraded_tm(fun, {:let, x, _lay, _v, b} = t) when tuple_size(t) == 5 do
+    ["#{fun}: let #{x} is missing a grade"] ++ ungraded_tm(fun, b)
+  end
+
+  defp ungraded_tm(fun, {:lam, name, _lay, body} = t)
+       when is_binary(name) and tuple_size(t) == 4 do
+    ["#{fun}: λ #{name} is missing a grade"] ++ ungraded_tm(fun, body)
+  end
+
+  defp ungraded_tm(fun, t) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.flat_map(&ungraded_tm(fun, &1))
+  end
+
+  defp ungraded_tm(fun, t) when is_list(t), do: Enum.flat_map(t, &ungraded_tm(fun, &1))
+  defp ungraded_tm(_fun, _t), do: []
 
   defp tuple_children(t) do
     case t do

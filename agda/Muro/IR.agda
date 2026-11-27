@@ -43,9 +43,19 @@ _<>_ = Data.String.Base._++_
 -- Image.
 ------------------------------------------------------------------------
 
--- Live binder grades on the closed-run image. Source `Qty` has no
--- linear constructor; `qtyGrade` sends `reuse` to `reuseG` and every
--- other quantity (affine, and a leftover erased) to `affineG`.
+-- Live binder grades on the closed-run image.
+--
+-- Elixir `Muro.Grade.kernel_qty` has four kernel quantities: erased,
+-- linear (`%1`, or a grade pair whose compute grade is 1), affine, and
+-- reuse. Agda `Qty` in `Muro.Base` has only `erased`, `affine`, and
+-- `reuse`. This module does not extend `Qty`, so there is no linear
+-- constructor to map.
+--
+-- `qtyGrade` therefore cannot produce `linearG` from a `Qty`. It
+-- sends `reuse` to `reuseG` and every other quantity (affine, and a
+-- leftover erased) to `affineG`. `linearG` is still a constructor of
+-- `IRGrade` so a hand-written Agda image can represent a linear binder
+-- the same way the Elixir image does.
 data IRGrade : Set where
   linearG affineG reuseG : IRGrade
 

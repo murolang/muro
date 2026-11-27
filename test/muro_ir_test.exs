@@ -139,6 +139,32 @@ defmodule Muro.IRTest do
     assert {:error, "c:erased"} = Muro.IR.elaborate(used)
   end
 
+  test "a zero-graded pair binder is dropped and is not a live parameter" do
+    book = [
+      %{
+        name: "drop",
+        mode: :run,
+        type: {:pi, {:grade, 0, :w}, :nat, "n", :nat},
+        body: {:lam, {:grade, 0, :w}, :nat, "n", :ze}
+      }
+    ]
+
+    assert {:ok, [fun]} = Muro.IR.elaborate(book)
+    assert fun.params == []
+    assert fun.body == :ze
+
+    used = [
+      %{
+        name: "use",
+        mode: :run,
+        type: {:pi, {:grade, 0, :w}, :nat, "n", :nat},
+        body: {:lam, {:grade, 0, :w}, :nat, "n", {:var, "n"}}
+      }
+    ]
+
+    assert {:error, "c:erased"} = Muro.IR.elaborate(used)
+  end
+
   test "a raw nu is c:stream and a name outside the book is c:unsupported" do
     nu = [
       %{
