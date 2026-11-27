@@ -59,10 +59,6 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-static uint64_t muro__step_0(uint8_t b, muro__slice rest, uint64_t n) {
-  (void)rest;
-  return (uint64_t)((uint64_t)(n) + (uint64_t)((uint64_t)(b)));
-}
 muro__slice hello(void) {
   static const uint8_t muro__s_0[] = {104, 101, 108, 108, 111};
   return (muro__slice){muro__s_0, sizeof muro__s_0};
@@ -230,7 +226,8 @@ uint64_t sum2(void) {
   while (muro__s_2.n > 0) {
     uint8_t muro__s_3 = muro__s_2.p[0];
     muro__slice muro__s_4 = (muro__slice){muro__s_2.p + 1, muro__s_2.n - 1};
-    muro__s_1 = muro__step_0(muro__s_3, muro__s_4, muro__s_1);
+    (void)muro__s_4;
+    muro__s_1 = (uint64_t)((uint64_t)(muro__s_1) + (uint64_t)((uint64_t)(muro__s_3)));
     muro__s_2 = muro__s_4;
   }
   return muro__s_1;

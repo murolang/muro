@@ -65,16 +65,17 @@ defmodule Muro.UnboxedTest do
     refute header =~ "Acc *scan"
 
     acc = body(source, "static Acc acc(", "static Cell *cell(")
-    step = body(source, "static Acc muro__step_0(", "Acc scan(")
     scan = body(source, "Acc scan(", "uint64_t nOf(")
-    cell = body(source, "static Cell *cell(", "static Acc muro__step_0(")
+    cell = body(source, "static Cell *cell(", "Acc scan(")
 
+    # The fold is a loop with its step inline (`Muro.IR.Loop`): no step
+    # function, and the accumulator is a local struct.
+    refute source =~ "muro__step_"
     refute acc =~ "muro__ALLOC"
-    refute step =~ "muro__ALLOC"
     refute scan =~ "muro__ALLOC"
     assert acc =~ "return (Acc){"
     assert cell =~ "muro__ALLOC"
-    assert scan =~ "muro__s_2 = muro__step_0"
+    assert scan =~ ~r/Acc (muro__s_\d+) = acc\(.*while \(muro__s_\d+\.n > 0\).*\1 = muro__t_\d+;/s
 
     File.write!(Path.join(dir, "main.c"), c_main())
     assert gcc!(dir, "main.c", "main") == :ok
