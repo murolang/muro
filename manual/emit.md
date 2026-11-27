@@ -268,8 +268,12 @@ The BEAM runs this call. The proof stops at the move.
 | `let (a, b) = e in t`, `fst`, `snd` | `({a, b} = e; t)` |
 | `run` Stream | `Stream.unfold/2` |
 | `addi` / `addt` / `packI` | `Nx.add` / `Nx.stack` / `Nx.tensor` |
+| `String` literal (`"hello"`) | `"hello"` |
+| `Bytes` or `Slice` literal (`b"hello"`, `b"\xff"`) | `"hello"` or `<<255>>` |
 
 `rewrite` emits as its body. `refl` would be `:refl` if it ever appeared in run; it should not.
+
+A `Bytes`, `Slice`, or `String` literal of any length is written in full.
 
 A `Nat` is a non-negative integer of any size, the same integer on the wire, in a `repr`, and in an ExUnit suite. A closed numeral is that integer literal. A `match` on `0` and `suc` is a `case` on `0`, and the `suc` arm rebinds the predecessor as the integer minus one.
 
