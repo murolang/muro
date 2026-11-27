@@ -75,7 +75,7 @@ defmodule Muro.OutlineTest do
       fun = Enum.find(groups, fn {fun, _} -> fun.name == sig.source end)
       assert {got, _} = fun
       assert sig.layout == got.ret, label
-      assert sig.param_layouts == Enum.map(got.params, fn {_n, lay} -> lay end), label
+      assert sig.param_layouts == Enum.map(got.params, &Muro.IR.param_lay/1), label
     end
   end
 end

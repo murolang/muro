@@ -262,7 +262,7 @@ defmodule Muro.Emit.C do
           source: fun.name,
           name: sig.name,
           layout: fun.ret,
-          param_layouts: Enum.map(fun.params, fn {_n, lay} -> lay end),
+          param_layouts: Enum.map(fun.params, &Muro.IR.param_lay/1),
           params: Enum.map(sig.params, fn {_ty, cname} -> cname end),
           ret: sig.ret,
           export: sig.export
@@ -399,7 +399,7 @@ defmodule Muro.Emit.C do
     file_scope = file_scope(nm, MapSet.new(Map.values(names)))
 
     {bound, scope} =
-      Enum.map_reduce(fun.params, file_scope, fn {pname, lay}, scope ->
+      Enum.map_reduce(fun.params, file_scope, fn {pname, lay, _g}, scope ->
         {c, scope} = Name.bind(spell(pname), scope)
         {{pname, c, lay}, scope}
       end)
@@ -518,7 +518,7 @@ defmodule Muro.Emit.C do
   # An erased constructor field, marked `:erased`. `0`, and the payload
   # is ignored. A zero passed under a spec alias is bound at the
   # argument's layout, so this clause does not see it.
-  defp emit_ir({:let, name, :erased, _val, body}, env, st, expect) do
+  defp emit_ir({:let, name, :erased, _g, _val, body}, env, st, expect) do
     {c, scope} = Name.bind(spell(name), st.scope)
     st = %{st | scope: scope}
 
@@ -529,14 +529,14 @@ defmodule Muro.Emit.C do
   end
 
   # `matchEmpty`. The scrutinee is bound only so the expression is evaluated.
-  defp emit_ir({:let, _name, _lay, val, :abort}, env, st, _expect) do
+  defp emit_ir({:let, _name, _lay, _g, val, :abort}, env, st, _expect) do
     with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, "void *") do
       stmt = squash([pre, "(void)(#{ex});", "/* unreachable */", "abort();"])
       {:ok, {stmt, "0", :opaque, st}}
     end
   end
 
-  defp emit_ir({:let, name, lay, val, body}, env, st, expect) do
+  defp emit_ir({:let, name, lay, _g, val, body}, env, st, expect) do
     ty = ctype(lay, st.book, st.prefix)
 
     with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, ty) do
@@ -1333,12 +1333,12 @@ defmodule Muro.Emit.C do
   defp step_id("step" <> n), do: String.to_integer(n)
 
   defp seed_domain(nil, lay), do: lay
-  defp seed_domain({_name, lay}, _lay), do: lay
+  defp seed_domain(p, _lay), do: Muro.IR.param_lay(p)
 
   # A capture field shares the struct, not the parameter namespace. Claim
   # it against the file, so a field stays `n` when the arm parameter is `n`.
   defp capture_slots(caps, cap_ps, file_scope) do
-    lays = Enum.map(cap_ps, fn {_n, lay} -> lay end)
+    lays = Enum.map(cap_ps, &Muro.IR.param_lay/1)
 
     {slots, _} =
       caps
@@ -1406,7 +1406,9 @@ defmodule Muro.Emit.C do
         nil ->
           {"  (void)#{seedp};", cap_env, visible}
 
-        {sname, slay} ->
+        seed ->
+          sname = Muro.IR.param_name(seed)
+          slay = Muro.IR.param_lay(seed)
           # An unfold binder the body never reads stays out of the step.
           # The parameter is still named; a dead local is -Wunused-variable.
           if uses?(step.body, sname) do
@@ -1453,11 +1455,11 @@ defmodule Muro.Emit.C do
   end
 
   # The mark is `:erased`. A use keeps the opaque layout.
-  defp lay_of({:let, name, :erased, _val, body}, env, st) do
+  defp lay_of({:let, name, :erased, _g, _val, body}, env, st) do
     lay_of(body, [{name, "", :opaque} | env], st)
   end
 
-  defp lay_of({:let, name, lay, _val, body}, env, st) do
+  defp lay_of({:let, name, lay, _g, _val, body}, env, st) do
     lay_of(body, [{name, "", lay} | env], st)
   end
 
@@ -1483,7 +1485,7 @@ defmodule Muro.Emit.C do
       %{params: params} ->
         case ok_split(params, caps) do
           {:ok, {nil, _}} -> {:stream, lay_of(seed, env, st)}
-          {:ok, {{_n, lay}, _}} -> {:stream, lay}
+          {:ok, {{_n, lay, _g}, _}} -> {:stream, lay}
           _ -> {:stream, lay_of(seed, env, st)}
         end
 
@@ -2004,7 +2006,7 @@ defmodule Muro.Emit.C do
       (funs ++ extra ++ data_field_opts(book))
       |> Enum.flat_map(fn
         fun when is_map(fun) ->
-          [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
+          [fun.ret | Enum.map(fun.params, &Muro.IR.param_lay/1)] ++ collect_opts(fun.body, [])
 
         lay ->
           [lay]
@@ -2396,7 +2398,7 @@ defmodule Muro.Emit.C do
 
   defp strings_image?(funs) do
     Enum.any?(funs, fn fun ->
-      string_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> string_lay?(lay) end) or
+      string_lay?(fun.ret) or Enum.any?(fun.params, fn p -> string_lay?(Muro.IR.param_lay(p)) end) or
         ir_has_string?(fun.body)
     end)
   end
@@ -2535,7 +2537,7 @@ defmodule Muro.Emit.C do
 
   defp bytes_image?(funs) do
     Enum.any?(funs, fn fun ->
-      bytes_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> bytes_lay?(lay) end) or
+      bytes_lay?(fun.ret) or Enum.any?(fun.params, fn p -> bytes_lay?(Muro.IR.param_lay(p)) end) or
         ir_has_bytes?(fun.body)
     end)
   end
@@ -2715,7 +2717,7 @@ defmodule Muro.Emit.C do
     visible = Name.see(st.file_scope, cname)
 
     {bound, scope} =
-      Enum.map_reduce(fun.params, visible, fn {pname, lay}, scope ->
+      Enum.map_reduce(fun.params, visible, fn {pname, lay, _g}, scope ->
         {c, scope} = Name.bind(spell(pname), scope)
         {{pname, c, lay}, scope}
       end)

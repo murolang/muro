@@ -43,6 +43,16 @@ _<>_ = Data.String.Base._++_
 -- Image.
 ------------------------------------------------------------------------
 
+-- Live binder grades on the closed-run image. Source `Qty` has no
+-- linear constructor; `qtyGrade` sends `reuse` to `reuseG` and every
+-- other quantity (affine, and a leftover erased) to `affineG`.
+data IRGrade : Set where
+  linearG affineG reuseG : IRGrade
+
+qtyGrade : Qty → IRGrade
+qtyGrade reuse = reuseG
+qtyGrade _     = affineG
+
 data Layout : Set where
   natL unitL opaqueL : Layout
   -- The let of an erased constructor field. A use stays `opaqueL`.
@@ -63,7 +73,7 @@ data Layout : Set where
 mutual
   data Term : Set where
     Var : String → Term
-    Let : String → Layout → Term → Term → Term
+    Let : String → Layout → IRGrade → Term → Term → Term
     Call : String → List Term → Term
     Con : String → String → List Term → Term
     Match : Term → List Arm → Term
@@ -89,7 +99,7 @@ record Fun : Set where
   field
     fname : String
     fexport : Bool
-    params : List (String × Layout)
+    params : List (String × Layout × IRGrade)
     ret : Layout
     body : Term
 
@@ -509,7 +519,7 @@ uniq = go []
 
 ------------------------------------------------------------------------
 -- Match arms. Skip the data parameters, then one λ per field. An erased
--- field is omitted from the binder list and wrapped as `Let x erasedL Ze`
+-- field is omitted from the binder list and wrapped as `Let x erasedL affineG Ze`
 -- after the body is elaborated, so a use is `Var`. The layout is the
 -- mark. Emitters ignore the `Ze`. The field stays live at `opaqueL`.
 ------------------------------------------------------------------------
@@ -563,7 +573,7 @@ wrapTerm (wLive x ∷ ws) tm =
   in x ∷ ns , tm'
 wrapTerm (wGone x ∷ ws) tm =
   let (ns , tm') = wrapTerm ws tm
-  in ns , Let x erasedL Ze tm'
+  in ns , Let x erasedL affineG Ze tm'
 
 ------------------------------------------------------------------------
 -- Stream captures. Index 0 of the step body is the seed.
@@ -578,9 +588,9 @@ capγ (i ∷ is) ctx with lookupIx ctx i
 ... | ok (live name lay) = (name , lay , Var name) ∷ capγ is ctx
 ... | _ = capγ is ctx
 
-capParams : List Cap → List (String × Layout)
+capParams : List Cap → List (String × Layout × IRGrade)
 capParams [] = []
-capParams ((name , lay , _) ∷ xs) = (name , lay) ∷ capParams xs
+capParams ((name , lay , _) ∷ xs) = (name , lay , reuseG) ∷ capParams xs
 
 capTerms : List Cap → List (String × Term)
 capTerms [] = []
@@ -589,8 +599,8 @@ capTerms ((name , _ , tm) ∷ xs) = (name , tm) ∷ capTerms xs
 seedCtx : Qty → String → Layout → ICtx → ICtx
 seedCtx q x lay ctx = if eqQty q erased then gone ∷ ctx else live x lay ∷ ctx
 
-seedParam : Qty → String → Layout → List (String × Layout)
-seedParam q x lay = if eqQty q erased then [] else (x , lay) ∷ []
+seedParam : Qty → String → Layout → List (String × Layout × IRGrade)
+seedParam q x lay = if eqQty q erased then [] else (x , lay , qtyGrade q) ∷ []
 
 -- A head that is already a refusal, applied or not.
 badHead : ∀ {n} → Tm n → Maybe String
@@ -676,7 +686,7 @@ applyTo ih σ (lam q A body) sp (sarg t pt ctxa ∷ rest) ctx k with eqQty q era
     applyTo ih σ body (under (size A) (size body) sp) rest (live (fresh ctx) lay ∷ ctx) k1
 ... | fail e = fail e
 ... | ok (mkE btm blay ss2 , k2) =
-  ok (mkE (Let (fresh ctx) lay atm btm) blay (ss ++ ss2) , k2)
+  ok (mkE (Let (fresh ctx) lay (qtyGrade q) atm btm) blay (ss ++ ss2) , k2)
 applyTo ih σ (def i) _ (s ∷ rest) _ k = finishDef ih σ i (s ∷ rest) k
 applyTo ih σ (ctor di ci) _ (s ∷ rest) _ k = finishCtor ih σ di ci (s ∷ rest) k
 applyTo _ _ t _ (_ ∷ _) _ _ with badHead t
@@ -751,13 +761,13 @@ step n ih t eq σ k ctx = go t eq
   ... | fail e' = fail e'
   ... | ok (mkE etm elay ess , k1) with motiveLay σ mot elay
   ... | fail e' = fail e'
-  ... | ok rlay = ok (mkE (Let (fresh ctx) elay etm Abort) rlay ess , k1)
+  ... | ok rlay = ok (mkE (Let (fresh ctx) elay affineG etm Abort) rlay ess , k1)
   go (mUnit e mot u) refl with call ih σ e (abc-a (size e) (size mot) (size u)) ctx k
   ... | fail e' = fail e'
   ... | ok (mkE etm _ ess , k1) with call ih σ u (abc-c (size e) (size mot) (size u)) ctx k1
   ... | fail e' = fail e'
   ... | ok (mkE utm ulay uss , k2) =
-    ok (mkE (Let (fresh ctx) unitL etm utm) ulay (ess ++ uss) , k2)
+    ok (mkE (Let (fresh ctx) unitL affineG etm utm) ulay (ess ++ uss) , k2)
   go (idt _ _ _) refl = fail "c:unsupported"
   go rfl refl = fail "c:unsupported"
   go (rwt eq mot body) refl = call ih σ body (abc-c (size eq) (size mot) (size body)) ctx k
@@ -846,15 +856,15 @@ takeName : List String → ICtx → String × List String
 takeName [] ctx = fresh ctx , []
 takeName (s ∷ ss) _ = s , ss
 
-peel : Sig → ICtx → List String → List (String × Layout) → ∀ {ℓ} → Tm ℓ → Tm ℓ
-     → Result (List (String × Layout) × ICtx × Σ ℕ (λ ℓ' → Tm ℓ') × Layout)
+peel : Sig → ICtx → List String → List (String × Layout × IRGrade) → ∀ {ℓ} → Tm ℓ → Tm ℓ
+     → Result (List (String × Layout × IRGrade) × ICtx × Σ ℕ (λ ℓ' → Tm ℓ') × Layout)
 peel σ ctx names acc (pi q A B) (lam q' _ body) with eqQty q erased ∨ eqQty q' erased
 ... | true = peel σ (gone ∷ ctx) names acc B body
 ... | false with layoutOf σ A
 ... | fail e = fail e
 ... | ok lay =
   let (x , names') = takeName names ctx
-  in peel σ (live x lay ∷ ctx) names' (acc ++ ((x , lay) ∷ [])) B body
+  in peel σ (live x lay ∷ ctx) names' (acc ++ ((x , lay , qtyGrade q) ∷ [])) B body
 peel _ _ _ _ (pi _ _ _) _ = fail "c:unsupported"
 peel σ ctx _ acc {ℓ} ty body with layoutOf σ ty
 ... | fail e = fail e
@@ -939,7 +949,7 @@ plusSig : Sig
 plusSig = fromDefs (mkDef "plus" run plusTy plusBody ∷ [])
 
 plus-elab : elabFun plusSig 0 true "plus" ("n" ∷ "m" ∷ []) plusTy plusBody
-          ≡ ok ( fn "plus" true (("n" , natL) ∷ ("m" , natL) ∷ []) natL plusIR
+          ≡ ok ( fn "plus" true (("n" , natL , affineG) ∷ ("m" , natL , affineG) ∷ []) natL plusIR
                , []
                , 0)
 plus-elab = refl
@@ -948,7 +958,7 @@ plus-value : elaborate plusSig 0 [] {0} (def {0} 0) ≡ fail "c:lambda"
 plus-value = refl
 
 let-elab : termOf (elaborate (fromDefs []) 0 [] {0} (app (lam affine nat (su (var (F.zero {0})))) ze))
-         ≡ ok (Let "b0" natL Ze (Su (Var "b0")))
+         ≡ ok (Let "b0" natL affineG Ze (Su (Var "b0")))
 let-elab = refl
 
 erased-drop : termOf (elaborate (fromDefs []) 0 [] {0} (app (lam erased nat ze) (su ze))) ≡ ok Ze
@@ -974,7 +984,7 @@ zerosTm = unf ze (lam affine nat (pair ze ze))
 
 zeros-elab : elaborate (fromDefs []) 0 [] zerosTm
            ≡ ok ( mkE (Stream Ze [] "step0") (streamL natL)
-                    (fn "step0" false (("b0" , natL) ∷ []) (pairL natL natL) (Pair Ze Ze) ∷ [])
+                    (fn "step0" false (("b0" , natL , affineG) ∷ []) (pairL natL natL) (Pair Ze Ze) ∷ [])
                 , 1)
 zeros-elab = refl
 
@@ -984,7 +994,7 @@ stream-layout = refl
 spec-skip : elabRuns (fromDefs (mkDef "ghost" spec ze ze ∷ [])) ≡ ok []
 spec-skip = refl
 
--- An erased constructor field is `Let x erasedL Ze`. The live field
+-- An erased constructor field is `Let x erasedL affineG Ze`. The live field
 -- stays in the binder list. Emitters ignore the `Ze`.
 boxDecl : DataDecl
 boxDecl = mkData "Box" [] [] (mkCtor "mk" (pi erased nat (pi affine nat (dty 0))) ∷ [])
@@ -1000,7 +1010,7 @@ boxMatch = mData (app (app (ctor 0 0) ze) (su ze)) nat (suc (suc zero) ∷ []) (
 
 box-erased : termOf (elaborate boxSig 0 [] boxMatch)
            ≡ ok (Match (Con "Box" "mk" (Su Ze ∷ []))
-                   (arm "mk" ("b1" ∷ []) (Let "b0" erasedL Ze (Var "b1")) ∷ []))
+                   (arm "mk" ("b1" ∷ []) (Let "b0" erasedL affineG Ze (Var "b1")) ∷ []))
 box-erased = refl
 
 -- `wsome` of a word keeps the word layout. `wsome` of data stores

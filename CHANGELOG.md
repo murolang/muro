@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.38
+
+`Muro.IR` now carries a live grade (`:linear`, `:affine`, or `:reuse`) on every parameter and `let`, taken from `Muro.Grade.kernel_qty/1`. Erased binders are still dropped and do not appear as live parameters. `Muro.IR.Share` preserves those grades through CSE, inlining, and known-scrutinee pruning: a hoisted let is `:reuse`, and a `:linear` binder that a prune leaves unused becomes `:affine`. The C, Rust, Zig, JavaScript, and assembly emitters ignore the grade, so emitted bytes are unchanged.
+
+`Muro.IR.Check.check/2` validates a closed-run image after elaboration or Share: well-scopedness, layout and call/constructor arity, no erased survivors in live positions, grade accounting along paths, arm exhaustiveness when a book is given, and that closure forms appear only in the closures image. The Agda mirror in `agda/Muro/IR.agda` adds `IRGrade` on `Let` and `Fun.params` and keeps the `refl` agreement examples under `--safe`.
+
+### Manual
+
+- Extending: a live parameter is `{name, layout, grade}` and a let is `{:let, name, layout, grade, val, body}`. `Muro.IR.Check` is the checker for that image.
+
+### Package
+
+- Version 0.22.38.
+
 ## 0.22.37
 
 The Elixir backend truncates a `Bytes`, `Slice`, or `String` literal once it is longer than 4,096 printable bytes (`inspect/2`'s default `printable_limit`), and a non-printable one after 50 bytes (`limit`). The emitted module then contains `...` and either fails to compile or holds the wrong value. The emitter now passes `limit: :infinity` and `printable_limit: :infinity`. A test emits, compiles, and evaluates 5,000-byte printable and non-printable literals for both `Bytes` and `Slice`.

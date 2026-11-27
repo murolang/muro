@@ -116,6 +116,8 @@ defmodule Muro.IR.Share do
   at a match scrutinee).
   """
   def funs(funs, opts \\ []) when is_list(funs) do
+    funs = Enum.map(funs, &Muro.IR.normalize_fun/1)
+
     if Keyword.get(opts, :share, true) do
       inline? = Keyword.get(opts, :inline, true)
       # A generated fold or stream step is never called by name, and its
@@ -166,7 +168,10 @@ defmodule Muro.IR.Share do
 
       try do
         out = optimize_all(funs, ctx, inline?)
-        Enum.map(Enum.with_index(funs), fn {fun, i} -> Map.get(out, i, fun) end)
+
+        Enum.map(Enum.with_index(funs), fn {fun, i} ->
+          relax_fun(Map.get(out, i, fun))
+        end)
       after
         :ets.delete(ctx.memo)
         :ets.delete(ctx.fresh)
@@ -177,7 +182,7 @@ defmodule Muro.IR.Share do
         :ets.delete(ctx.did_save)
       end
     else
-      funs
+      Enum.map(funs, &relax_fun/1)
     end
   end
 
@@ -193,6 +198,8 @@ defmodule Muro.IR.Share do
   adds nothing, and a mutual component is charged once.
   """
   def path_work(funs, t) when is_list(funs) do
+    funs = Enum.map(funs, &Muro.IR.normalize_fun/1)
+    t = Muro.IR.normalize_term(t)
     by_name = for f <- funs, not Map.get(f, :generated, false), into: %{}, do: {f.name, f}
     tab = :ets.new(:share_work, [:set, :private])
 
@@ -215,7 +222,7 @@ defmodule Muro.IR.Share do
   `1` (a `:u64`) exactly when that arm is taken.
   """
   def stop(%{params: params, body: body}, by_name) when params != [] do
-    {acc, _lay} = List.last(params)
+    {acc, _lay, _} = List.last(params)
 
     with {:ok, v, t} <- stop_target(body, acc, by_name),
          {:ok, test} <- stop_test(t, v, MapSet.new()) do
@@ -231,7 +238,7 @@ defmodule Muro.IR.Share do
     with %{params: ps, body: body} <- Map.get(by_name, f),
          i when is_integer(i) <- Enum.find_index(args, &(&1 == {:var, acc})),
          true <- length(ps) == length(args) do
-      {p, _} = Enum.at(ps, i)
+      {p, _, _} = Enum.at(ps, i)
       {:ok, p, body}
     else
       _ -> :none
@@ -269,7 +276,7 @@ defmodule Muro.IR.Share do
 
   # A let the test does not read is skipped: its value is pure, and the
   # test cannot name it.
-  defp stop_test({:let, x, _lay, _val, body}, v, ok) do
+  defp stop_test({:let, x, _lay, _g, _val, body}, v, ok) do
     if x == v or MapSet.member?(ok, x), do: :none, else: stop_test(body, v, ok)
   end
 
@@ -612,7 +619,7 @@ defmodule Muro.IR.Share do
 
   defp inline_run1(fun, ctx) do
     scope = stable_names(fun)
-    lays = Map.new(fun.params)
+    lays = Muro.IR.param_lays(fun.params)
     full = propagate(inlined_body(fun, ctx, MapSet.new()), lays, ctx)
     wanted = repeated_keys(full, scope, ctx)
     want = %{scope: scope, wanted: wanted, sites: site_counts(fun.body)}
@@ -751,7 +758,7 @@ defmodule Muro.IR.Share do
   end
 
   defp spec_only(fun, ctx) do
-    spec_only_tm(fun.body, Map.new(fun.params), ctx)
+    spec_only_tm(fun.body, Muro.IR.param_lays(fun.params), ctx)
   end
 
   defp spec_only_tm(body, lays, ctx) do
@@ -775,7 +782,7 @@ defmodule Muro.IR.Share do
   defp binder_counts(t, acc) do
     own =
       case t do
-        {:let, x, _, _, _} -> [x]
+        {:let, x, _, _, _, _} -> [x]
         {:letp, a, b, _, _} -> [a, b]
         {:match, _, arms} -> Enum.flat_map(arms, fn {:arm, _, ns, _} -> ns end)
         _ -> []
@@ -827,9 +834,9 @@ defmodule Muro.IR.Share do
     end
   end
 
-  defp selective({:let, x, lay, v, b}, lays, want, ctx, seen),
+  defp selective({:let, x, lay, g, v, b}, lays, want, ctx, seen),
     do:
-      {:let, x, lay, selective(v, lays, want, ctx, seen),
+      {:let, x, lay, g, selective(v, lays, want, ctx, seen),
        selective(b, Map.put(lays, x, lay), want, ctx, seen)}
 
   defp selective({:letp, a, b, e, body}, lays, want, ctx, seen),
@@ -934,8 +941,8 @@ defmodule Muro.IR.Share do
 
     Enum.zip(callee.params, args)
     |> Enum.reverse()
-    |> Enum.reduce(renamed, fn {{p, lay}, arg}, acc ->
-      {:let, Map.fetch!(map, {:param, p}), lay, arg, acc}
+    |> Enum.reduce(renamed, fn {{p, lay, g}, arg}, acc ->
+      {:let, Map.fetch!(map, {:param, p}), lay, g, arg, acc}
     end)
   end
 
@@ -1088,7 +1095,7 @@ defmodule Muro.IR.Share do
       {:bfold, _, _, _, _} -> true
       {:stream, _, _, _} -> true
       {:uncons, _} -> true
-      {:let, _, :erased, _, _} -> true
+      {:let, _, :erased, _, _, _} -> true
       _ -> false
     end)
   end
@@ -1096,7 +1103,7 @@ defmodule Muro.IR.Share do
   # Fresh names for every binder of a callee body, parameters included.
   defp rename(body, params, ctx) do
     {map, env} =
-      Enum.reduce(params, {%{}, %{}}, fn {p, _lay}, {map, env} ->
+      Enum.reduce(params, {%{}, %{}}, fn {p, _lay, _g}, {map, env} ->
         f = fresh(p, ctx)
         {Map.put(map, {:param, p}, f), Map.put(env, p, f)}
       end)
@@ -1106,9 +1113,9 @@ defmodule Muro.IR.Share do
 
   defp rename_tm({:var, x}, env, _ctx), do: {:var, Map.get(env, x, x)}
 
-  defp rename_tm({:let, x, lay, v, b}, env, ctx) do
+  defp rename_tm({:let, x, lay, g, v, b}, env, ctx) do
     f = fresh(x, ctx)
-    {:let, f, lay, rename_tm(v, env, ctx), rename_tm(b, Map.put(env, x, f), ctx)}
+    {:let, f, lay, g, rename_tm(v, env, ctx), rename_tm(b, Map.put(env, x, f), ctx)}
   end
 
   defp rename_tm({:letp, a, b, e, body}, env, ctx) do
@@ -1149,17 +1156,17 @@ defmodule Muro.IR.Share do
   # `let x = y`, x a parameter an inlined body was given and y of the
   # same layout: use y. x is fresh, so nothing captures y. A let the
   # source wrote stays.
-  defp propagate({:let, x, lay, {:var, y}, b}, lays, ctx) do
+  defp propagate({:let, x, lay, g, {:var, y}, b}, lays, ctx) do
     if :ets.member(ctx.fresh, x) and lay != :erased and Map.get(lays, y) == lay and
          not rebinds?(b, y) do
       propagate(subst_var(b, x, y), lays, ctx)
     else
-      {:let, x, lay, {:var, y}, propagate(b, Map.put(lays, x, lay), ctx)}
+      {:let, x, lay, g, {:var, y}, propagate(b, Map.put(lays, x, lay), ctx)}
     end
   end
 
-  defp propagate({:let, x, lay, v, b}, lays, ctx),
-    do: {:let, x, lay, propagate(v, lays, ctx), propagate(b, Map.put(lays, x, lay), ctx)}
+  defp propagate({:let, x, lay, g, v, b}, lays, ctx),
+    do: {:let, x, lay, g, propagate(v, lays, ctx), propagate(b, Map.put(lays, x, lay), ctx)}
 
   defp propagate({:letp, a, b, e, body}, lays, ctx),
     do:
@@ -1179,9 +1186,9 @@ defmodule Muro.IR.Share do
 
   defp subst_var({:var, x}, x, y), do: {:var, y}
 
-  defp subst_var({:let, z, lay, v, b}, x, y) do
+  defp subst_var({:let, z, lay, g, v, b}, x, y) do
     v = subst_var(v, x, y)
-    if z == x, do: {:let, z, lay, v, b}, else: {:let, z, lay, v, subst_var(b, x, y)}
+    if z == x, do: {:let, z, lay, g, v, b}, else: {:let, z, lay, g, v, subst_var(b, x, y)}
   end
 
   defp subst_var({:letp, a, b, e, body}, x, y) do
@@ -1208,8 +1215,8 @@ defmodule Muro.IR.Share do
       {:call, name, args} ->
         pass_call(name, args, lays, facts, want, ctx, seen, inl)
 
-      {:let, x, lay, v, b} ->
-        pass_let(x, lay, v, b, lays, facts, want, ctx, seen, inl)
+      {:let, x, lay, g, v, b} ->
+        pass_let(x, lay, g, v, b, lays, facts, want, ctx, seen, inl)
 
       {:letp, a, b, e, body} ->
         pass_letp(a, b, e, body, lays, facts, want, ctx, seen, inl)
@@ -1366,7 +1373,7 @@ defmodule Muro.IR.Share do
     end
   end
 
-  defp pass_let(x, lay, v, b, lays, facts, want, ctx, seen, inl) do
+  defp pass_let(x, lay, g, v, b, lays, facts, want, ctx, seen, inl) do
     v = pass(v, lays, facts, want, ctx, seen, inl)
     # The value was checked in the outer scope. `lays` stays that scope.
     facts1 = scrub(facts, [x])
@@ -1386,7 +1393,7 @@ defmodule Muro.IR.Share do
         v
 
       true ->
-        {:let, x, lay, v, b}
+        {:let, x, lay, relax_grade(g, x, b), v, b}
     end
   end
 
@@ -1756,22 +1763,22 @@ defmodule Muro.IR.Share do
       end)
   end
 
-  defp peel_safe({:let, x, lay, v, b}, outers) do
+  defp peel_safe({:let, x, lay, g, v, b}, outers) do
     if Enum.any?(outers, fn {:arm, _, _, body} -> MapSet.member?(free_vars(body), x) end) do
-      {[], {:let, x, lay, v, b}}
+      {[], {:let, x, lay, g, v, b}}
     else
       {lets, inner} = peel_safe(b, outers)
-      {[{x, lay, v} | lets], inner}
+      {[{x, lay, g, v} | lets], inner}
     end
   end
 
   defp peel_safe(t, _outers), do: {[], t}
 
-  defp peel_lets({:let, _, _, _, b}), do: peel_lets(b)
+  defp peel_lets({:let, _, _, _, _, b}), do: peel_lets(b)
   defp peel_lets(t), do: t
 
   defp rewrap([], inner), do: inner
-  defp rewrap([{x, lay, v} | lets], inner), do: {:let, x, lay, v, rewrap(lets, inner)}
+  defp rewrap([{x, lay, g, v} | lets], inner), do: {:let, x, lay, g, v, rewrap(lets, inner)}
 
   defp ctor_tag({:con, _, tag, []}), do: {:ok, tag}
   defp ctor_tag({:wrd, _, true, []}), do: {:ok, "wtrue"}
@@ -1913,11 +1920,11 @@ defmodule Muro.IR.Share do
     end
   end
 
-  defp subst_sim({:let, x, lay, v, b}, map, ctx) do
+  defp subst_sim({:let, x, lay, g, v, b}, map, ctx) do
     v = subst_sim(v, map, ctx)
     map = Map.delete(map, x)
     {x, b, map} = avoid_capture(x, b, map, ctx)
-    {:let, x, lay, v, subst_sim(b, map, ctx)}
+    {:let, x, lay, g, v, subst_sim(b, map, ctx)}
   end
 
   defp subst_sim({:letp, a, b, e, body}, map, ctx) do
@@ -2148,8 +2155,8 @@ defmodule Muro.IR.Share do
   # `share/2` on the value finds the rest: calls it repeats under its own
   # binders and arms. That includes the value a hoist bound, so a call
   # repeated inside it is hoisted in turn.
-  defp share_inside({:let, x, lay, v, b}, ctx),
-    do: {:let, x, lay, share(v, ctx), share(b, ctx)}
+  defp share_inside({:let, x, lay, g, v, b}, ctx),
+    do: {:let, x, lay, g, share(v, ctx), share(b, ctx)}
 
   # A pair's value is evaluated exactly when the letp is, as a let's
   # value is, so it takes the same `share/2`.
@@ -2183,7 +2190,7 @@ defmodule Muro.IR.Share do
         lay = ret_lay(key, ctx)
         :counters.add(ctx.hoists, 1, 1)
         body = replace(t, key, v, free_vars(key))
-        hoist({:let, v, lay, key, body}, ctx)
+        hoist({:let, v, lay, :reuse, key, body}, ctx)
     end
   end
 
@@ -2219,7 +2226,7 @@ defmodule Muro.IR.Share do
     Enum.reduce(args, own, &MapSet.union(&2, strict(&1, bound)))
   end
 
-  defp strict({:let, x, _lay, v, b}, bound),
+  defp strict({:let, x, _lay, _g, v, b}, bound),
     do: MapSet.union(strict(v, bound), strict(b, MapSet.put(bound, x)))
 
   defp strict({:letp, a, b, e, body}, bound),
@@ -2254,12 +2261,12 @@ defmodule Muro.IR.Share do
   # what they mean at the top of `t`.
   defp replace(key, key, v, _fv), do: {:var, v}
 
-  defp replace({:let, x, lay, val, b}, key, v, fv) do
+  defp replace({:let, x, lay, g, val, b}, key, v, fv) do
     val = replace(val, key, v, fv)
 
     if MapSet.member?(fv, x),
-      do: {:let, x, lay, val, b},
-      else: {:let, x, lay, val, replace(b, key, v, fv)}
+      do: {:let, x, lay, g, val, b},
+      else: {:let, x, lay, g, val, replace(b, key, v, fv)}
   end
 
   defp replace({:letp, a, b, e, body}, key, v, fv) do
@@ -2281,6 +2288,39 @@ defmodule Muro.IR.Share do
 
   defp replace(t, key, v, fv), do: map_children(t, &replace(&1, key, v, fv))
 
+  # A `:linear` binder unused after pruning is `:affine`. Check then
+  # agrees with a valid Share rewrite.
+  defp relax_fun(fun), do: %{fun | body: relax_tm(fun.body)}
+
+  defp relax_tm({:let, x, lay, g, v, b}) do
+    v = relax_tm(v)
+    b = relax_tm(b)
+    {:let, x, lay, relax_grade(g, x, b), v, b}
+  end
+
+  defp relax_tm({:letp, a, b, e, body}), do: {:letp, a, b, relax_tm(e), relax_tm(body)}
+
+  defp relax_tm({:match, s, arms}) when is_list(arms) do
+    {:match, relax_tm(s), Enum.map(arms, fn {:arm, c, ns, tm} -> {:arm, c, ns, relax_tm(tm)} end)}
+  end
+
+  defp relax_tm({:match, s, lay, arms}) when is_list(arms) do
+    {:match, relax_tm(s), lay,
+     Enum.map(arms, fn {:arm, c, ns, tm} -> {:arm, c, ns, relax_tm(tm)} end)}
+  end
+
+  defp relax_tm({:lam, name, lay, g, body})
+       when is_binary(name) and g in [:linear, :affine, :reuse],
+       do: {:lam, name, lay, g, relax_tm(body)}
+
+  defp relax_tm(t), do: map_children(t, &relax_tm/1)
+
+  defp relax_grade(:linear, x, b) do
+    if MapSet.member?(free_vars(b), x), do: :linear, else: :affine
+  end
+
+  defp relax_grade(g, _x, _b), do: g
+
   # --------------------------------------------------------------- generic
 
   # Every node this pass understands. Anything else keeps the run as
@@ -2296,7 +2336,7 @@ defmodule Muro.IR.Share do
 
   defp walk(t) do
     case t do
-      {:let, _, _, v, b} ->
+      {:let, _, _, _, v, b} ->
         walk(v) && walk(b)
 
       {:letp, _, _, e, b} ->
@@ -2340,7 +2380,7 @@ defmodule Muro.IR.Share do
       {:scat, a, b} -> [a, b]
       {:slen, a} -> [a]
       {:seq, a, b} -> [a, b]
-      {:let, _, _, v, b} -> [v, b]
+      {:let, _, _, _, v, b} -> [v, b]
       {:letp, _, _, e, b} -> [e, b]
       {:match, s, arms} -> [s | Enum.map(arms, fn {:arm, _, _, tm} -> tm end)]
       _ -> throw(:unknown)
@@ -2409,8 +2449,8 @@ defmodule Muro.IR.Share do
       {:seq, a, b} ->
         {:seq, f.(a), f.(b)}
 
-      {:let, x, lay, v, b} ->
-        {:let, x, lay, f.(v), f.(b)}
+      {:let, x, lay, g, v, b} ->
+        {:let, x, lay, g, f.(v), f.(b)}
 
       {:letp, a, b, e, body} ->
         {:letp, a, b, f.(e), f.(body)}
@@ -2427,7 +2467,7 @@ defmodule Muro.IR.Share do
 
   defp fold_scoped(t, bound, acc, f) do
     case t do
-      {:let, x, _, v, b} ->
+      {:let, x, _, _, v, b} ->
         acc = f.(v, bound, acc)
         f.(b, MapSet.put(bound, x), acc)
 
@@ -2452,7 +2492,8 @@ defmodule Muro.IR.Share do
   defp fv({:var, x}, bound),
     do: if(MapSet.member?(bound, x), do: MapSet.new(), else: MapSet.new([x]))
 
-  defp fv({:let, x, _, v, b}, bound), do: MapSet.union(fv(v, bound), fv(b, MapSet.put(bound, x)))
+  defp fv({:let, x, _, _, v, b}, bound),
+    do: MapSet.union(fv(v, bound), fv(b, MapSet.put(bound, x)))
 
   defp fv({:letp, a, b, e, body}, bound),
     do: MapSet.union(fv(e, bound), fv(body, bound |> MapSet.put(a) |> MapSet.put(b)))
@@ -2468,7 +2509,7 @@ defmodule Muro.IR.Share do
   defp binders(t) do
     own =
       case t do
-        {:let, x, _, _, _} -> [x]
+        {:let, x, _, _, _, _} -> [x]
         {:letp, a, b, _, _} -> [a, b]
         {:match, _, arms} -> Enum.flat_map(arms, fn {:arm, _, ns, _} -> ns end)
         _ -> []
@@ -2488,7 +2529,7 @@ defmodule Muro.IR.Share do
 
   defp taken_names(funs) do
     Enum.reduce(funs, MapSet.new(), fn fun, acc ->
-      acc = Enum.reduce(fun.params, acc, fn {p, _}, a -> MapSet.put(a, p) end)
+      acc = Enum.reduce(fun.params, acc, fn {p, _, _}, a -> MapSet.put(a, p) end)
 
       if known?(fun.body),
         do: MapSet.union(acc, binders(fun.body)) |> MapSet.union(free_vars(fun.body)),

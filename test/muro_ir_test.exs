@@ -10,7 +10,7 @@ defmodule Muro.IRTest do
     assert plus == %{
              name: "plus",
              export: true,
-             params: [{"n", :nat}, {"m", :nat}],
+             params: [{"n", :nat, :affine}, {"m", :nat, :affine}],
              ret: :nat,
              body:
                {:match, {:var, "n"},
@@ -42,7 +42,7 @@ defmodule Muro.IRTest do
              %{
                name: "natsFrom",
                export: true,
-               params: [{"n", :nat}],
+               params: [{"n", :nat, :affine}],
                ret: {:stream, :nat},
                body: {:stream, {:var, "n"}, [], "step0"}
              },
@@ -50,7 +50,7 @@ defmodule Muro.IRTest do
                name: "step0",
                export: false,
                generated: true,
-               params: [{"k", :nat}],
+               params: [{"k", :nat, :reuse}],
                ret: {:pair, :nat, :nat},
                body: {:pair, {:var, "k"}, {:su, {:var, "k"}}}
              }
@@ -64,7 +64,7 @@ defmodule Muro.IRTest do
     assert "ones2" in names
 
     length = Enum.find(funs, &(&1.name == "length"))
-    assert length.params == [{"xs", {:data, "List"}}]
+    assert length.params == [{"xs", {:data, "List"}, :affine}]
     assert length.ret == :nat
 
     assert length.body ==
@@ -89,7 +89,7 @@ defmodule Muro.IRTest do
   test "sort lowers atom literals to the closed enumeration" do
     assert {:ok, funs} = Muro.IR.elaborate_file("examples/sort.muro")
     insert = Enum.find(funs, &(&1.name == "insert"))
-    assert insert.params |> Enum.at(0) == {"d", {:data, "Atom"}}
+    assert insert.params |> Enum.at(0) == {"d", {:data, "Atom"}, :affine}
     assert Enum.any?(funs, &(&1.name == "sort"))
     assert atom?(insert.body, "asc")
     assert atom?(insert.body, "desc")
@@ -205,16 +205,16 @@ defmodule Muro.IRTest do
     assert {:ok, plain} = Muro.IR.elaborate(book)
     assert {:ok, closed} = Muro.IR.elaborate(book, closures: true)
 
-    assert fun_body(plain, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
-    assert fun_body(closed, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
+    assert fun_body(plain, "one") == {:let, "r", :nat, :affine, :ze, {:su, {:var, "r"}}}
+    assert fun_body(closed, "one") == {:let, "r", :nat, :affine, :ze, {:su, {:var, "r"}}}
 
     assert fun_body(plain, "live") ==
              {:match, {:call, "boxed", []},
-              [{:arm, "mk", ["n"], {:let, "e", :erased, :ze, {:var, "n"}}}]}
+              [{:arm, "mk", ["n"], {:let, "e", :erased, :affine, :ze, {:var, "n"}}}]}
 
     assert fun_body(closed, "live") ==
              {:match, {:call, "boxed", []}, {:data, "Box"},
-              [{:arm, "mk", ["n"], {:let, "e", :erased, :ze, {:var, "n"}}}]}
+              [{:arm, "mk", ["n"], {:let, "e", :erased, :affine, :ze, {:var, "n"}}}]}
 
     assert fun_body(plain, "boxed") == {:con, "Box", "mk", [{:su, {:su, :ze}}]}
 
@@ -230,6 +230,7 @@ defmodule Muro.IRTest do
   end
 
   defp opaque_zero?({:let, _, :opaque, :ze, _}), do: true
+  defp opaque_zero?({:let, _, :opaque, _, :ze, _}), do: true
   defp opaque_zero?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&opaque_zero?/1)
   defp opaque_zero?(t) when is_list(t), do: Enum.any?(t, &opaque_zero?/1)
   defp opaque_zero?(_), do: false

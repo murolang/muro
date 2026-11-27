@@ -147,7 +147,7 @@ defmodule Muro.Emit.Rust do
                 source: fun.name,
                 name: emitted_name(fun, st),
                 layout: fun.ret,
-                param_layouts: Enum.map(fun.params, fn {_n, lay} -> lay end),
+                param_layouts: Enum.map(fun.params, &Muro.IR.param_lay/1),
                 params: Enum.map(params, fn {_src, rn, _lay} -> rn end),
                 ret: rty(fun.ret, st),
                 export: fun.export,
@@ -250,7 +250,7 @@ defmodule Muro.Emit.Rust do
 
   defp fun_open(fun, st0) do
     {params, scope} =
-      Enum.reduce(fun.params, {[], st0.file_scope}, fn {pname, lay}, {acc, scope} ->
+      Enum.reduce(fun.params, {[], st0.file_scope}, fn {pname, lay, _g}, {acc, scope} ->
         {rn, scope} = Name.bind(spell(pname), scope)
         {acc ++ [{pname, rn, lay}], scope}
       end)
@@ -297,7 +297,7 @@ defmodule Muro.Emit.Rust do
 
       {:ok, fun} ->
         with {:ok, {lines, exprs, lays, st}} <- emit_list(args, env, st) do
-          params = Enum.map(fun.params, fn {_n, lay} -> lay end)
+          params = Enum.map(fun.params, &Muro.IR.param_lay/1)
 
           if length(params) != length(exprs) do
             {:error, "c:unsupported"}
@@ -347,7 +347,7 @@ defmodule Muro.Emit.Rust do
   # An erased constructor field, marked `:erased`. The placeholder is
   # unit, and the payload is ignored. A zero passed under a spec alias
   # is bound at the argument's layout, so this clause does not see it.
-  defp emit_tm({:let, name, :erased, _val, body}, env, st) do
+  defp emit_tm({:let, name, :erased, _g, _val, body}, env, st) do
     {rn, st} = local(st, spell(name))
 
     with {:ok, {lines, ex, lay, st}} <- emit_tm(body, [{name, rn, :opaque} | env], st) do
@@ -355,13 +355,13 @@ defmodule Muro.Emit.Rust do
     end
   end
 
-  defp emit_tm({:let, _name, _lay, val, :abort}, env, st) do
+  defp emit_tm({:let, _name, _lay, _g, val, :abort}, env, st) do
     with {:ok, {lines, ex, _lay, st}} <- emit_tm(val, env, st) do
       {:ok, {lines ++ ["let _ = #{ex};"], "::std::process::abort()", :never, st}}
     end
   end
 
-  defp emit_tm({:let, name, lay, val, body}, env, st) do
+  defp emit_tm({:let, name, lay, _g, val, body}, env, st) do
     with {:ok, {vlines, vex, vlay, st}} <- emit_tm(val, env, st) do
       {rn, st} = local(st, spell(name))
       bound = coerce(vex, vlay, lay, st)
@@ -779,7 +779,7 @@ defmodule Muro.Emit.Rust do
   defp rust_used?(tm, name), do: rust_used?(tm, name, MapSet.new())
   defp rust_used?({:var, n}, name, bound), do: n == name and not MapSet.member?(bound, name)
 
-  defp rust_used?({:let, n, _, v, b}, name, bound) do
+  defp rust_used?({:let, n, _, _, v, b}, name, bound) do
     rust_used?(v, name, bound) or rust_used?(b, name, MapSet.put(bound, n))
   end
 
@@ -2743,7 +2743,7 @@ defmodule Muro.Emit.Rust do
 
   defp bytes_image?(book, funs) do
     Enum.any?(funs, fn fun ->
-      fun.ret == :slice or Enum.any?(fun.params, fn {_n, lay} -> lay == :slice end) or
+      fun.ret == :slice or Enum.any?(fun.params, fn p -> Muro.IR.param_lay(p) == :slice end) or
         ir_bytes?(fun.body)
     end) or
       Enum.any?(data_decls(book), fn d ->
@@ -2863,7 +2863,7 @@ defmodule Muro.Emit.Rust do
 
   defp string_image?(book, funs) do
     Enum.any?(funs, fn fun ->
-      string_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> string_lay?(lay) end) or
+      string_lay?(fun.ret) or Enum.any?(fun.params, fn p -> string_lay?(Muro.IR.param_lay(p)) end) or
         ir_string?(fun.body)
     end) or
       Enum.any?(data_decls(book), fn d ->

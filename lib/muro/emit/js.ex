@@ -145,7 +145,7 @@ defmodule Muro.Emit.JS do
                %{
                  name: rec.fun.name,
                  layout: rec.fun.ret,
-                 params: Enum.map(rec.fun.params, fn {_n, lay} -> lay end)
+                 params: Enum.map(rec.fun.params, &Muro.IR.param_lay/1)
                }
              end),
            clauses: Enum.map(compiled, & &1.head) ++ extra_clauses ++ codec_clauses
@@ -336,6 +336,10 @@ defmodule Muro.Emit.JS do
     session_use(val, index, bound) || session_use(body, index, bind(bound, name))
   end
 
+  defp session_use({:let, name, _, _, val, body}, index, bound) do
+    session_use(val, index, bound) || session_use(body, index, bind(bound, name))
+  end
+
   defp session_use({:mnat, scrut, x, motive, zero, y, suc}, index, bound) do
     session_use(scrut, index, bound) ||
       session_use(motive, index, bind(bound, x)) ||
@@ -507,12 +511,12 @@ defmodule Muro.Emit.JS do
   defp calls_of(tm), do: tm |> calls_acc([]) |> Enum.uniq()
 
   defp calls_acc({:call, name, args}, acc), do: Enum.reduce(args, [name | acc], &calls_acc/2)
-  defp calls_acc({:lam, _, _, body}, acc), do: calls_acc(body, acc)
+  defp calls_acc({:lam, name, _, _, body}, acc) when is_binary(name), do: calls_acc(body, acc)
   defp calls_acc({:su, t}, acc), do: calls_acc(t, acc)
   defp calls_acc({:pair, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
   defp calls_acc({:con, _, _, args}, acc), do: Enum.reduce(args, acc, &calls_acc/2)
   defp calls_acc({:appv, f, a}, acc), do: calls_acc(a, calls_acc(f, acc))
-  defp calls_acc({:let, _, _, val, body}, acc), do: calls_acc(body, calls_acc(val, acc))
+  defp calls_acc({:let, _, _, _, val, body}, acc), do: calls_acc(body, calls_acc(val, acc))
   defp calls_acc({:letp, _, _, e, body}, acc), do: calls_acc(body, calls_acc(e, acc))
   defp calls_acc({:uncons, e}, acc), do: calls_acc(e, acc)
 
@@ -575,7 +579,7 @@ defmodule Muro.Emit.JS do
   end
 
   defp boundary?(fun) do
-    converts?(fun.ret) or Enum.any?(fun.params, fn {_name, lay} -> converts?(lay) end)
+    converts?(fun.ret) or Enum.any?(fun.params, fn p -> converts?(Muro.IR.param_lay(p)) end)
   end
 
   defp converts?(:i64), do: true
@@ -706,9 +710,9 @@ defmodule Muro.Emit.JS do
     end
   end
 
-  defp cps_rec({:let, name, lay, val, body}, st, tail?) do
+  defp cps_rec({:let, name, lay, g, val, body}, st, tail?) do
     if contains_rec?(val, st.rec) do
-      cps_suspend(val, fn hole -> {:let, name, lay, hole, body} end, st)
+      cps_suspend(val, fn hole -> {:let, name, lay, g, hole, body} end, st)
     else
       cps_let_pure(name, lay, val, body, st, tail?)
     end
@@ -995,14 +999,14 @@ defmodule Muro.Emit.JS do
     MapSet.member?(rec, name) or Enum.any?(args, &contains_rec?(&1, rec))
   end
 
-  defp contains_rec?({:lam, _, _, _}, _rec), do: false
+  defp contains_rec?({:lam, name, _, _, _}, _rec) when is_binary(name), do: false
   defp contains_rec?({:js, _}, _rec), do: false
   defp contains_rec?({:su, t}, rec), do: contains_rec?(t, rec)
   defp contains_rec?({:pair, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
   defp contains_rec?({:con, _, _, args}, rec), do: Enum.any?(args, &contains_rec?(&1, rec))
   defp contains_rec?({:appv, f, a}, rec), do: contains_rec?(f, rec) or contains_rec?(a, rec)
 
-  defp contains_rec?({:let, _, _, val, body}, rec),
+  defp contains_rec?({:let, _, _, _, val, body}, rec),
     do: contains_rec?(val, rec) or contains_rec?(body, rec)
 
   defp contains_rec?({:letp, _, _, e, body}, rec),
@@ -1055,7 +1059,7 @@ defmodule Muro.Emit.JS do
     end
   end
 
-  defp lift({:lam, _, _, _}, _rec), do: :none
+  defp lift({:lam, name, _, _, _}, _rec) when is_binary(name), do: :none
   defp lift({:js, _}, _rec), do: :none
   defp lift({:su, t}, rec), do: lift_one(t, rec, fn hole -> {:su, hole} end)
 
@@ -1077,13 +1081,13 @@ defmodule Muro.Emit.JS do
     end
   end
 
-  defp lift({:let, name, lay, val, body}, rec) do
+  defp lift({:let, name, lay, g, val, body}, rec) do
     case lift(val, rec) do
       {:ok, call, rebuild} ->
-        {:ok, call, fn hole -> {:let, name, lay, rebuild.(hole), body} end}
+        {:ok, call, fn hole -> {:let, name, lay, g, rebuild.(hole), body} end}
 
       :none ->
-        lift_one(body, rec, fn hole -> {:let, name, lay, val, hole} end)
+        lift_one(body, rec, fn hole -> {:let, name, lay, g, val, hole} end)
     end
   end
 
@@ -1317,7 +1321,7 @@ defmodule Muro.Emit.JS do
 
   defp open_fun(fun, st) do
     {params, scope} =
-      Enum.map_reduce(fun.params, st.scope, fn {src, lay}, scope ->
+      Enum.map_reduce(fun.params, st.scope, fn {src, lay, _g}, scope ->
         {rn, scope} = bind_source(spell(src), scope)
         {{src, rn, lay}, scope}
       end)
@@ -1406,7 +1410,7 @@ defmodule Muro.Emit.JS do
   # stays an arrow. It closes over `n`, and `plus` takes both arguments
   # at once. `(n) => (m) => f(n)(m)` stays too: applying it once must not
   # run `f`.
-  defp emit_tm({:lam, name, _lay, body}, st) do
+  defp emit_tm({:lam, name, _lay, _g, body}, st) do
     case contract_lam(name, body) do
       {:funref, fname} ->
         with {:ok, info} <- target(st, fname, 1), do: {:ok, info.call}
@@ -1414,7 +1418,7 @@ defmodule Muro.Emit.JS do
       {:var, _} = var ->
         emit_tm(var, st)
 
-      {:lam, ename, _, ebody} ->
+      {:lam, ename, _, _, ebody} ->
         emit_arrow(ename, ebody, st)
 
       :keep ->
@@ -1431,7 +1435,7 @@ defmodule Muro.Emit.JS do
 
   # An erased constructor field, marked `:erased`. The payload is ignored.
   # A Nat zero under a spec alias keeps that argument's layout.
-  defp emit_tm({:let, name, :erased, _val, body}, st) do
+  defp emit_tm({:let, name, :erased, _g, _val, body}, st) do
     {rn, scope} = bind_source(spell(name), st.scope)
     st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
 
@@ -1440,7 +1444,7 @@ defmodule Muro.Emit.JS do
     end
   end
 
-  defp emit_tm({:let, name, _lay, val, body}, st) do
+  defp emit_tm({:let, name, _lay, _g, val, body}, st) do
     with {:ok, ve} <- emit_tm(val, st) do
       {rn, scope} = bind_source(spell(name), st.scope)
       st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
@@ -1722,7 +1726,7 @@ defmodule Muro.Emit.JS do
       {:ok, {:funref, _} = ref} ->
         ref
 
-      {:ok, {:lam, ename, _, ebody} = lam} ->
+      {:ok, {:lam, ename, _, _, ebody} = lam} ->
         case contract_lam(ename, ebody) do
           :keep -> lam
           other -> other
@@ -1741,19 +1745,19 @@ defmodule Muro.Emit.JS do
   defp eta_callee(_name, _body), do: :no
 
   defp eta_value?({:var, _}), do: true
-  defp eta_value?({:lam, _, _, _}), do: true
+  defp eta_value?({:lam, name, _, _, _}) when is_binary(name), do: true
   defp eta_value?(_other), do: false
 
   defp occurs_bind?(name, {:var, name}), do: true
   defp occurs_bind?(_name, {:var, _}), do: false
-  defp occurs_bind?(name, {:lam, _, _, body}), do: occurs_bind?(name, body)
+  defp occurs_bind?(name, {:lam, n, _, _, body}) when is_binary(n), do: occurs_bind?(name, body)
   defp occurs_bind?(name, {:call, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
   defp occurs_bind?(name, {:appv, f, a}), do: occurs_bind?(name, f) or occurs_bind?(name, a)
   defp occurs_bind?(name, {:su, t}), do: occurs_bind?(name, t)
   defp occurs_bind?(name, {:pair, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
   defp occurs_bind?(name, {:con, _, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
 
-  defp occurs_bind?(name, {:let, _, _, val, body}),
+  defp occurs_bind?(name, {:let, _, _, _, val, body}),
     do: occurs_bind?(name, val) or occurs_bind?(name, body)
 
   defp occurs_bind?(name, {:letp, _, _, e, body}),
@@ -2074,7 +2078,7 @@ defmodule Muro.Emit.JS do
       source: rec.fun.name,
       name: rec.name,
       layout: rec.fun.ret,
-      param_layouts: Enum.map(rec.fun.params, fn {_n, lay} -> lay end),
+      param_layouts: Enum.map(rec.fun.params, &Muro.IR.param_lay/1),
       params: param_names(rec),
       export: rec.fun.export,
       head: rec.head

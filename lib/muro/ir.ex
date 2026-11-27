@@ -13,16 +13,22 @@ defmodule Muro.IR do
   Layouts: `:nat`, `:unit`, `:opaque`, `:erased`, `{:pair, a, b}`,
   `{:stream, a}`, `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`,
   `{:opt, payload}`, `:string`, `:slice`. `{:data, name}` is `dataL`. `:erased` marks the let of
-  an erased constructor field (`{:let, x, :erased, :ze, body}`). Emitters
-  match that layout and ignore the payload. The field stays live at
-  `:opaque`, so a use is `Var`. A word term is `{:wrd, layout, op, args}`.
+  an erased constructor field (`{:let, x, :erased, :affine, :ze, body}`).
+  Emitters match that layout and ignore the payload and the grade. The
+  field stays live at `:opaque`, so a use is `Var`. A live parameter is
+  `{name, layout, grade}` and a let is `{:let, name, layout, grade, val, body}`.
+  `grade` is `:linear`, `:affine`, or `:reuse`, from `Muro.Grade.kernel_qty/1`.
+  Erased binders are still dropped and do not appear as live params or lets.
+  A word term is `{:wrd, layout, op, args}`.
   A word operation stores its kind there. `wsome` of ordinary data stores
   `{:data, name}`. A pair does not: that image is `c:unsupported`.
-  `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
+  `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, grade, body}`,
   `{:appv, fun, arg}`, and `{:data, name, args}`. The default image does not.
   """
 
-  alias Muro.{Ast, Load, Prelude}
+  alias Muro.{Ast, Grade, Load, Prelude}
+
+  @live_grades [:linear, :affine, :reuse]
 
   @doc """
   Elaborate every `run` definition in `book`, which is a checked named book
@@ -120,7 +126,7 @@ defmodule Muro.IR do
       peel(st, [{:gone, name} | ctx], acc, b, body)
     else
       with {:ok, lay} <- layout_of(st, a) do
-        peel(st, [{:live, name, lay} | ctx], acc ++ [{name, lay}], b, body)
+        peel(st, [{:live, name, lay} | ctx], acc ++ [{name, lay, live_grade(q)}], b, body)
       end
     end
   end
@@ -129,9 +135,15 @@ defmodule Muro.IR do
     peel(st, [{:gone, name} | ctx], acc, b, {:app, body, {:var, name}})
   end
 
-  defp peel(%{closures: true} = st, ctx, acc, {:pi, _q, a, name, b}, body) do
+  defp peel(%{closures: true} = st, ctx, acc, {:pi, q, a, name, b}, body) do
     with {:ok, lay} <- layout_of(st, a) do
-      peel(st, [{:live, name, lay} | ctx], acc ++ [{name, lay}], b, {:app, body, {:var, name}})
+      peel(
+        st,
+        [{:live, name, lay} | ctx],
+        acc ++ [{name, lay, live_grade(q)}],
+        b,
+        {:app, body, {:var, name}}
+      )
     end
   end
 
@@ -160,7 +172,7 @@ defmodule Muro.IR do
     apply(st, body, rest, [{:gone, name} | ctx], k)
   end
 
-  defp apply(st, {:lam, _q, dom, name, body}, [{arg, actx} | rest], ctx, k) do
+  defp apply(st, {:lam, q, dom, name, body}, [{arg, actx} | rest], ctx, k) do
     with {:ok, lay} <- layout_of(st, dom),
          {:ok, ae} <- elab(st, arg, actx, k) do
       # A spec alias is opaque here. The argument keeps its own layout,
@@ -170,7 +182,7 @@ defmodule Muro.IR do
       with {:ok, be} <- apply(st, body, rest, [{:live, name, blay} | ctx], ae.k) do
         {:ok,
          %{
-           tm: {:let, name, blay, ae.tm, be.tm},
+           tm: {:let, name, blay, live_grade(q), ae.tm, be.tm},
            lay: be.lay,
            steps: ae.steps ++ be.steps,
            k: be.k
@@ -334,12 +346,12 @@ defmodule Muro.IR do
     wrap_inner(st, ts, b, pack)
   end
 
-  defp wrap_inner(st, ts, {:pi, _q, a, name, b}, pack) do
+  defp wrap_inner(st, ts, {:pi, q, a, name, b}, pack) do
     with {:ok, lay} <- layout_of(st, a) do
       fresh = freshen(name, ts)
 
       with {:ok, {body, ret}} <- wrap_inner(st, ts ++ [{:var, fresh}], b, pack) do
-        {:ok, {{:lam, fresh, lay, body}, {:fn, lay, ret}}}
+        {:ok, {{:lam, fresh, lay, live_grade(q), body}, {:fn, lay, ret}}}
       end
     end
   end
@@ -489,14 +501,14 @@ defmodule Muro.IR do
   defp elab_form(st, {:memp, e, mx, mot}, ctx, k) do
     with {:ok, ee} <- elab(st, e, ctx, k),
          {:ok, rlay} <- motive_lay(st, mot, ee.lay, mx) do
-      ok({:let, fresh(ctx), ee.lay, ee.tm, :abort}, rlay, ee.steps, ee.k)
+      ok({:let, fresh(ctx), ee.lay, :affine, ee.tm, :abort}, rlay, ee.steps, ee.k)
     end
   end
 
   defp elab_form(st, {:munit, e, _mx, _mot, u}, ctx, k) do
     with {:ok, ee} <- elab(st, e, ctx, k),
          {:ok, ue} <- elab(st, u, ctx, ee.k) do
-      ok({:let, fresh(ctx), :unit, ee.tm, ue.tm}, ue.lay, ee.steps ++ ue.steps, ue.k)
+      ok({:let, fresh(ctx), :unit, :affine, ee.tm, ue.tm}, ue.lay, ee.steps ++ ue.steps, ue.k)
     end
   end
 
@@ -555,10 +567,10 @@ defmodule Muro.IR do
     elab(st, body, [{:gone, name} | ctx], k)
   end
 
-  defp elab_form(%{closures: true} = st, {:lam, _q, dom, name, body}, ctx, k) do
+  defp elab_form(%{closures: true} = st, {:lam, q, dom, name, body}, ctx, k) do
     with {:ok, lay} <- layout_of(st, dom),
          {:ok, be} <- elab(st, body, [{:live, name, lay} | ctx], k) do
-      ok({:lam, name, lay, be.tm}, {:fn, lay, be.lay}, be.steps, be.k)
+      ok({:lam, name, lay, live_grade(q), be.tm}, {:fn, lay, be.lay}, be.steps, be.k)
     end
   end
 
@@ -705,7 +717,9 @@ defmodule Muro.IR do
               export: false,
               generated: true,
               fold: true,
-              params: cap_params(caps) ++ [{bname, :u8}, {rname, :slice}, {aname, ez.lay}],
+              params:
+                cap_params(caps) ++
+                  [{bname, :u8, :reuse}, {rname, :slice, :reuse}, {aname, ez.lay, :reuse}],
               ret: ez.lay,
               body: be.tm
             }
@@ -814,7 +828,7 @@ defmodule Muro.IR do
 
   defp wrap([{:gone, x} | ws], tm) do
     {names, inner} = wrap(ws, tm)
-    {names, {:let, x, :erased, :ze, inner}}
+    {names, {:let, x, :erased, :affine, :ze, inner}}
   end
 
   defp telescope(t), do: telescope(t, [])
@@ -1147,9 +1161,9 @@ defmodule Muro.IR do
   defp seed_ctx(_q, name, lay, ctx), do: [{:live, name, lay} | ctx]
 
   defp seed_param(:erased, _name, _lay), do: []
-  defp seed_param(_q, name, lay), do: [{name, lay}]
+  defp seed_param(q, name, lay), do: [{name, lay, live_grade(q)}]
 
-  defp cap_params(caps), do: Enum.map(caps, fn {name, lay, _} -> {name, lay} end)
+  defp cap_params(caps), do: Enum.map(caps, fn {name, lay, _} -> {name, lay, :reuse} end)
   defp cap_terms(caps), do: Enum.map(caps, fn {name, _, tm} -> {name, tm} end)
 
   defp peel_fold({:lam, q, _, b, {:lam, q2, _, r, {:lam, q3, _, a, body}}})
@@ -1321,4 +1335,91 @@ defmodule Muro.IR do
   end
 
   defp ok(tm, lay, steps, k), do: {:ok, %{tm: tm, lay: lay, steps: steps, k: k}}
+
+  # -- grades ----------------------------------------------------------------
+
+  @doc """
+  The live IR grade of a binder quantity. Erased binders are dropped
+  before this is consulted; a leftover `:erased` is read as `:affine`.
+  """
+  def live_grade(q) do
+    case Grade.kernel_qty(q) do
+      g when g in @live_grades -> g
+      :erased -> :affine
+    end
+  end
+
+  @doc "True when `g` is a live IR grade."
+  def grade?(g), do: g in @live_grades
+
+  @doc "The binder name of a parameter."
+  def param_name({n, _lay}), do: n
+  def param_name({n, _lay, _g}), do: n
+
+  @doc "The layout of a parameter."
+  def param_lay({_n, lay}), do: lay
+  def param_lay({_n, lay, _g}), do: lay
+
+  @doc "The grade of a parameter. A two-field parameter is `:reuse`."
+  def param_grade({_n, _lay}), do: :reuse
+  def param_grade({_n, _lay, g}), do: g
+
+  @doc "A name-to-layout map of `params`."
+  def param_lays(params) when is_list(params) do
+    Map.new(params, fn p -> {param_name(p), param_lay(p)} end)
+  end
+
+  @doc """
+  Rewrite a function image so every parameter is `{name, layout, grade}`
+  and every let is `{:let, name, layout, grade, val, body}`. A missing
+  grade is `:reuse`. Used by `Muro.IR.Share` so a hand-built image is
+  accepted.
+  """
+  def normalize_fun(fun) when is_map(fun) do
+    %{fun | params: Enum.map(fun.params, &normalize_param/1), body: normalize_tm(fun.body)}
+  end
+
+  @doc "Rewrite a term the same way `normalize_fun/1` rewrites a body."
+  def normalize_term(t), do: normalize_tm(t)
+
+  defp normalize_param({n, _lay, _g} = p) when is_binary(n), do: p
+  defp normalize_param({n, lay}) when is_binary(n), do: {n, lay, :reuse}
+
+  defp normalize_tm({:let, x, lay, g, v, b}) when is_atom(g),
+    do: {:let, x, lay, g, normalize_tm(v), normalize_tm(b)}
+
+  defp normalize_tm({:let, x, lay, v, b}),
+    do: {:let, x, lay, :reuse, normalize_tm(v), normalize_tm(b)}
+
+  defp normalize_tm({:lam, name, lay, g, body}) when is_binary(name) and g in @live_grades,
+    do: {:lam, name, lay, g, normalize_tm(body)}
+
+  defp normalize_tm({:lam, name, lay, body}) when is_binary(name),
+    do: {:lam, name, lay, :reuse, normalize_tm(body)}
+
+  defp normalize_tm({:letp, a, b, e, body}),
+    do: {:letp, a, b, normalize_tm(e), normalize_tm(body)}
+
+  defp normalize_tm({:match, s, arms}) when is_list(arms) do
+    {:match, normalize_tm(s), Enum.map(arms, &normalize_arm/1)}
+  end
+
+  defp normalize_tm({:match, s, lay, arms}) when is_list(arms) do
+    {:match, normalize_tm(s), lay, Enum.map(arms, &normalize_arm/1)}
+  end
+
+  defp normalize_tm(t) when is_tuple(t) do
+    t
+    |> Tuple.to_list()
+    |> Enum.map(&normalize_child/1)
+    |> List.to_tuple()
+  end
+
+  defp normalize_tm(t) when is_list(t), do: Enum.map(t, &normalize_tm/1)
+  defp normalize_tm(t), do: t
+
+  defp normalize_arm({:arm, c, ns, tm}), do: {:arm, c, ns, normalize_tm(tm)}
+
+  defp normalize_child(t) when is_tuple(t) or is_list(t), do: normalize_tm(t)
+  defp normalize_child(t), do: t
 end
