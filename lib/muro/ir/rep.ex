@@ -24,14 +24,19 @@ defmodule Muro.IR.Rep do
   struct is printed before the struct is complete. The rules are here:
 
     * `value_lay?/2` — a pair half, a stream seed, or a stream capture
-      of this layout is `c:unboxed` (C, Rust, and Zig check it where they
-      emit the pair or the stream).
+      of this layout is `c:unboxed`. The C emitter checks it where it
+      emits the pair or the stream. Rust and Zig still make their own
+      pair and stream checks.
     * `refuse_unboxed_opt/2` — any `Opt` of declared `unboxed data`,
       enum or not, in a run's layouts, body, or a data field, is
-      `c:unboxed` (C, Rust, and Zig; `Muro.Emit.refuse_unboxed_opt/2`
-      is this function).
-    * `value_opt_payload?/2` — the C option typedef of a by-value struct.
-    * `check/2` — all three over a whole image, without emitting.
+      `c:unboxed`. C, Rust, and Zig all refuse through it
+      (`Muro.Emit.refuse_unboxed_opt/2` is this function).
+    * `value_opt_payload?/2` — whether the C option typedef of a payload
+      is a by-value struct. C reads it when it prints option typedefs;
+      it refuses nothing.
+    * `check/2` — `refuse_unboxed_opt/2`, then `value_lay?/2` on every
+      pair half, stream seed, and stream capture of an image, without
+      emitting.
 
   A field is erased when its quantity is exactly `:erased`, the
   quantity `Muro.Grade.erase_book/1` leaves on a book every emitter

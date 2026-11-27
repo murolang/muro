@@ -101,9 +101,12 @@ defmodule Muro.IR.Check do
   @doc false
   # `env` with the binders of `arm` added, as the arm body is checked.
   def arm_env(scrut, scrut_lay, {:arm, tag, names, _tm}, env, ctx) do
-    lays = arm_field_lays(scrut_lay, tag, names, ctx)
+    grades = arm_field_grades(scrut, scrut_lay, tag, names, env, ctx)
+    bind_arm(names, arm_field_lays(scrut_lay, tag, names, ctx), grades, env)
+  end
 
-    case arm_field_grades(scrut, scrut_lay, tag, names, env, ctx) do
+  defp bind_arm(names, lays, grades, env) do
+    case grades do
       {:ok, gs} ->
         names
         |> Enum.zip(lays)
@@ -416,10 +419,10 @@ defmodule Muro.IR.Check do
 
   defp arm_paths(scrut, arms, scrut_lay, env, fun, ctx) do
     walked =
-      Enum.map(arms, fn {:arm, tag, names, tm} = arm ->
+      Enum.map(arms, fn {:arm, tag, names, tm} ->
         arity = arm_arity_errors(fun, scrut_lay, tag, names, ctx)
         grades = arm_field_grades(scrut, scrut_lay, tag, names, env, ctx)
-        env1 = arm_env(scrut, scrut_lay, arm, env, ctx)
+        env1 = bind_arm(names, arm_field_lays(scrut_lay, tag, names, ctx), grades, env)
         {paths, errors} = check_tm(tm, env1, fun, ctx)
 
         gerr =

@@ -66,7 +66,9 @@ defmodule Muro.IRRepTest do
     for path <- corpus(), {:ok, book} <- [load(path)], d <- datas(book) do
       rep = Rep.of_data(book, d)
       assert C.enum_type?(book, d.name) == (Rep.kind(rep) == :enum), "#{path} #{d.name}"
-      assert Rep.kind(rep) == :value or not Rep.value?(book, d.name)
+      value? = Rep.unboxed_data?(d) and not C.enum_type?(book, d.name)
+      assert Rep.kind(rep) == :value == value?, "#{path} #{d.name}"
+      assert Rep.value?(book, d.name) == value?, "#{path} #{d.name}"
 
       {_, ctors} = rep
 
