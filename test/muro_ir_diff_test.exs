@@ -106,6 +106,11 @@ defmodule Muro.IRDiffTest do
     plain = Enum.count(cases, &agreed_on?(&1, :shared))
     assert clos > 1000
     assert plain > 1000
+
+    # Every image in A-normal form agrees wherever its source image does.
+    for {anf, src} <- [anf: :plain, anf_shared: :shared, anf_closures: :closures] do
+      assert Enum.count(cases, &agreed_on?(&1, anf)) == Enum.count(cases, &agreed_on?(&1, src))
+    end
   end
 
   test "every word, string, and bytes operation agrees on its edge values" do
@@ -128,7 +133,7 @@ defmodule Muro.IRDiffTest do
 
     assert for({n, {:mismatch, d}} <- cases, do: {n, d}) == []
     assert for({n, {:skip, r}} <- cases, do: {n, r}) == []
-    assert Enum.all?(cases, fn {_, {:agree, ks}} -> ks == [:plain, :shared, :closures] end)
+    assert Enum.all?(cases, fn {_, {:agree, ks}} -> ks == IRDiff.image_keys() end)
     assert length(cases) > 8000
   end
 

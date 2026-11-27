@@ -7,7 +7,9 @@ defmodule Muro.Emit.C do
   live fields is an enum of those tags, passed by value, and `match` is
   a `switch` on the tag. User data with a fieldful constructor is a tag
   plus fields, and `match` is a `switch` on the tag. Erased arguments
-  are dropped. `run internal` is `static`.
+  are dropped. `run internal` is `static`. Which of the three a data
+  type is, enum, by-value struct, or boxed, is `Muro.IR.Rep`, and so
+  are the `c:unboxed` rules.
 
   A `run` stream is a struct: the seed, an environment for values the
   step closes over, and a function pointer for the step. `uncons` calls
@@ -46,6 +48,7 @@ defmodule Muro.Emit.C do
   """
 
   alias Muro.{Ast, Emit, IR}
+  alias Muro.IR.Rep
   alias Muro.Emit.Name
 
   # Keywords through C23, including the underscore spellings. `bool`,
@@ -123,7 +126,7 @@ defmodule Muro.Emit.C do
   # type is the tag enum passed by value.
   @doc false
   def enum_type?(book, name) when is_list(book) and is_binary(name) do
-    enum_scalar_name?(book, name)
+    Rep.enum?(book, name)
   end
 
   # One number space for every data declaration in the book, in book
@@ -554,7 +557,7 @@ defmodule Muro.Emit.C do
   defp emit_ir({:pair, a, b}, env, st, _expect) do
     with {:ok, {pre, ea, la, st}} <- emit_ir(a, env, st, "void *"),
          {:ok, {pre2, eb, lb, st}} <- emit_ir(b, env, st, "void *") do
-      if unboxed_lay?(st.book, la) or unboxed_lay?(st.book, lb) do
+      if Rep.value_lay?(st.book, la) or Rep.value_lay?(st.book, lb) do
         {:error, "c:unboxed"}
       else
         {:ok,
@@ -625,7 +628,7 @@ defmodule Muro.Emit.C do
       slots = capture_slots(caps, cap_ps, st.file_scope)
       pointer_lays = [seed_lay | Enum.map(slots, fn {_n, _f, _tm, lay} -> lay end)]
 
-      if Enum.any?(pointer_lays, &unboxed_lay?(st.book, &1)) do
+      if Enum.any?(pointer_lays, &Rep.value_lay?(st.book, &1)) do
         {:error, "c:unboxed"}
       else
         with {:ok, {cpre, outers, st}} <- emit_outers(slots, env, st) do
@@ -847,7 +850,7 @@ defmodule Muro.Emit.C do
   # A nullary constructor of an enum-scalar type is the enumerator.
   # The function is still emitted for a host that calls it.
   defp enum_ctor_expr(dname, cname, fun, [], st) do
-    if enum_scalar_name?(st.book, dname) do
+    if Rep.enum?(st.book, dname) do
       ctor_tag(dname, cname, st.prefix)
     else
       "#{fun}()"
@@ -864,7 +867,7 @@ defmodule Muro.Emit.C do
   defp slot_store(ex, :string, _st), do: "#{g("box_str")}(#{ex})"
 
   defp slot_store(ex, lay, st) do
-    if enum_scalar_lay?(st.book, lay) do
+    if Rep.enum_lay?(st.book, lay) do
       "(void *)(uintptr_t)(#{ex})"
     else
       ex
@@ -895,7 +898,7 @@ defmodule Muro.Emit.C do
 
       # A polymorphic field is `void *`. An all-nullary value packed in
       # that word is restored when the expected type is the enum.
-      enum_scalar_ctype?(want, st) and not enum_scalar_lay?(st.book, lay) ->
+      enum_scalar_ctype?(want, st) and not Rep.enum_lay?(st.book, lay) ->
         "(#{want})(uintptr_t)(#{ex})"
 
       true ->
@@ -910,7 +913,7 @@ defmodule Muro.Emit.C do
       want == g("str") and lay != :string ->
         :string
 
-      enum_scalar_ctype?(want, st) and not enum_scalar_lay?(st.book, lay) ->
+      enum_scalar_ctype?(want, st) and not Rep.enum_lay?(st.book, lay) ->
         enum_lay_of_ctype(want, st) || lay
 
       true ->
@@ -920,7 +923,7 @@ defmodule Muro.Emit.C do
 
   defp enum_lay_of_ctype(ty, st) do
     Enum.find_value(data_defs(st.book), fn d ->
-      if enum_scalar?(d, st.book) and struct_name(d.name, st.prefix) == ty do
+      if Rep.enum_data?(d) and struct_name(d.name, st.prefix) == ty do
         {:data, d.name}
       end
     end)
@@ -931,7 +934,7 @@ defmodule Muro.Emit.C do
   end
 
   defp bind_half_c(name, sname, field, lay, st) do
-    if enum_scalar_lay?(st.book, lay) do
+    if Rep.enum_lay?(st.book, lay) do
       ty = String.trim(ctype(lay, st.book, st.prefix))
       "#{ty} #{name} = (#{ty})(uintptr_t)#{sname}->#{field};"
     else
@@ -944,7 +947,7 @@ defmodule Muro.Emit.C do
   defp cap_ref(ep, field, :string, _st), do: "(*((#{g("str")} *)#{ep}->#{field}))"
 
   defp cap_ref(ep, field, lay, st) do
-    if enum_scalar_lay?(st.book, lay) do
+    if Rep.enum_lay?(st.book, lay) do
       ty = String.trim(ctype(lay, st.book, st.prefix))
       "((#{ty})(uintptr_t)#{ep}->#{field})"
     else
@@ -955,7 +958,7 @@ defmodule Muro.Emit.C do
   defp seed_load(seedp, :string, _st), do: "*(#{g("str")} *)#{seedp}"
 
   defp seed_load(seedp, lay, st) do
-    if enum_scalar_lay?(st.book, lay) do
+    if Rep.enum_lay?(st.book, lay) do
       ty = String.trim(ctype(lay, st.book, st.prefix))
       "(#{ty})(uintptr_t)#{seedp}"
     else
@@ -1214,15 +1217,10 @@ defmodule Muro.Emit.C do
   defp data_scrut(data, dname, sname, st) do
     tagf = g("field_tag")
 
-    cond do
-      enum_scalar?(data, st.book) ->
-        {struct_name(dname, st.prefix) <> " ", sname, "->"}
-
-      unboxed?(data) ->
-        {struct_name(dname, st.prefix) <> " ", "#{sname}.#{tagf}", "."}
-
-      true ->
-        {struct_ptr(dname, st.prefix), "#{sname}->#{tagf}", "->"}
+    case Rep.kind(Rep.of_data(st.book, data)) do
+      :enum -> {struct_name(dname, st.prefix) <> " ", sname, "->"}
+      :value -> {struct_name(dname, st.prefix) <> " ", "#{sname}.#{tagf}", "."}
+      :boxed -> {struct_ptr(dname, st.prefix), "#{sname}->#{tagf}", "->"}
     end
   end
 
@@ -1304,13 +1302,13 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp live_fields(ctor, book, prefix \\ "") do
+  defp live_fields(ctor, book, prefix) do
     {pis, _} = telescope(ctor.type)
 
     pis
     |> Enum.reject(fn {q, _, _} -> q == :erased end)
     |> Enum.with_index()
-    |> Enum.map(fn {{_, a, _}, k} -> {ctype(a, book, prefix), type_layout(book, a), k} end)
+    |> Enum.map(fn {{_, a, _}, k} -> {ctype(a, book, prefix), Rep.type_layout(book, a), k} end)
   end
 
   defp fetch_step(st, name) do
@@ -1567,7 +1565,7 @@ defmodule Muro.Emit.C do
 
       Enum.flat_map(pis, fn
         {:erased, _, _} -> []
-        {_, a, _} -> [type_layout(book, a)]
+        {_, a, _} -> [Rep.type_layout(book, a)]
       end)
     end
   end
@@ -1609,38 +1607,6 @@ defmodule Muro.Emit.C do
   end
 
   defp ctor_data(_, _), do: nil
-
-  defp type_layout(_book, :bytes), do: :slice
-  defp type_layout(_book, :slice), do: :slice
-  defp type_layout(_book, :string), do: :string
-  defp type_layout(_book, :nat), do: :nat
-  defp type_layout(_book, :unit), do: :unit
-  defp type_layout(_book, :atom), do: {:data, "Atom"}
-  defp type_layout(book, {:stream, a}), do: {:stream, type_layout(book, a)}
-
-  defp type_layout(book, {:var, name}) do
-    if data?(book, name), do: {:data, name}, else: :opaque
-  end
-
-  defp type_layout(book, {:def, name}), do: type_layout(book, {:var, name})
-  defp type_layout(book, {:app, f, _}), do: type_layout(book, f)
-
-  defp type_layout(book, {:prod, a, b}) do
-    {:pair, type_layout(book, a), type_layout(book, b)}
-  end
-
-  defp type_layout(book, {:ann, e, _}), do: type_layout(book, e)
-  defp type_layout(_book, :i64), do: :i64
-  defp type_layout(_book, {:word, {:ty, :u8}, []}), do: :u8
-  defp type_layout(_book, {:word, {:ty, :u32}, []}), do: :u32
-  defp type_layout(_book, {:word, {:ty, :u64}, []}), do: :u64
-  defp type_layout(_book, {:word, :bool, []}), do: :wbool
-  defp type_layout(_book, {:word, {:optk, :u8}, []}), do: {:opt, :u8}
-  defp type_layout(_book, {:word, {:optk, :u32}, []}), do: {:opt, :u32}
-  defp type_layout(_book, {:word, {:optk, :u64}, []}), do: {:opt, :u64}
-  defp type_layout(_book, {:word, {:optk, :i64}, []}), do: {:opt, :i64}
-  defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
-  defp type_layout(_book, _), do: :opaque
 
   defp pair_halves({:pair, a, b}), do: {a, b}
   defp pair_halves(_), do: {:opaque, :opaque}
@@ -2014,7 +1980,7 @@ defmodule Muro.Emit.C do
       |> Enum.flat_map(&opt_payloads/1)
       |> Enum.uniq()
 
-    if Enum.any?(payloads, &unboxed_opt_pay?(book, &1)) do
+    if Enum.any?(payloads, &Rep.value_opt_payload?(book, &1)) do
       {:error, "c:unboxed"}
     else
       {:ok, Enum.map_join(payloads, "\n", &opt_typedef(&1, book, prefix))}
@@ -2051,7 +2017,7 @@ defmodule Muro.Emit.C do
 
         Enum.flat_map(pis, fn
           {:erased, _, _} -> []
-          {_, a, _} -> [type_layout(book, a)]
+          {_, a, _} -> [Rep.type_layout(book, a)]
         end)
       end)
     end)
@@ -2063,15 +2029,9 @@ defmodule Muro.Emit.C do
   defp opt_payloads(_), do: []
 
   # The option struct is printed before the data structs. A boxed
-  # payload is a pointer, so the later struct completes it. An unboxed
-  # payload would be that struct by value while it is still incomplete.
-  defp unboxed_opt_pay?(book, {:opt, {:data, name}}) when is_binary(name) do
-    unboxed_name?(book, name) and not enum_scalar_name?(book, name)
-  end
-
-  defp unboxed_opt_pay?(book, {:opt, {:opt, _} = inner}), do: unboxed_opt_pay?(book, inner)
-  defp unboxed_opt_pay?(_book, _lay), do: false
-
+  # payload is a pointer, so the later struct completes it. A by-value
+  # payload would be that struct while it is still incomplete
+  # (`Muro.IR.Rep.value_opt_payload?/2`).
   # A word, a nat, unit, a string, or a slice is the same struct in every
   # book, so the guard lets two headers share it. An option of data names
   # that book's struct, and a prefix changes the spelling, so it stays
@@ -2141,8 +2101,8 @@ defmodule Muro.Emit.C do
 
   defp ctype({:var, name}, book, prefix) when is_binary(name) do
     cond do
-      enum_scalar_name?(book, name) -> struct_val(name, prefix)
-      unboxed_name?(book, name) -> struct_val(name, prefix)
+      Rep.enum?(book, name) -> struct_val(name, prefix)
+      Rep.unboxed?(book, name) -> struct_val(name, prefix)
       data?(book, name) -> struct_ptr(name, prefix)
       true -> "void *"
     end
@@ -2150,8 +2110,8 @@ defmodule Muro.Emit.C do
 
   defp ctype({:def, name}, book, prefix) do
     cond do
-      enum_scalar_name?(book, name) -> struct_val(name, prefix)
-      unboxed_name?(book, name) -> struct_val(name, prefix)
+      Rep.enum?(book, name) -> struct_val(name, prefix)
+      Rep.unboxed?(book, name) -> struct_val(name, prefix)
       true -> "void *"
     end
   end
@@ -2161,8 +2121,8 @@ defmodule Muro.Emit.C do
 
   defp ctype({:data, name}, book, prefix) do
     cond do
-      enum_scalar_name?(book, name) -> struct_val(name, prefix)
-      unboxed_name?(book, name) -> struct_val(name, prefix)
+      Rep.enum?(book, name) -> struct_val(name, prefix)
+      Rep.unboxed?(book, name) -> struct_val(name, prefix)
       true -> struct_ptr(name, prefix)
     end
   end
@@ -2183,7 +2143,7 @@ defmodule Muro.Emit.C do
   defp ctype({:word, {:optk, k}, []}, book, prefix), do: ctype({:opt, k}, book, prefix)
 
   defp ctype({:word, :opt, [a]}, book, prefix),
-    do: ctype({:opt, type_layout(book, a)}, book, prefix)
+    do: ctype({:opt, Rep.type_layout(book, a)}, book, prefix)
 
   defp ctype(_, _book, _prefix), do: "void *"
 
@@ -2901,7 +2861,7 @@ defmodule Muro.Emit.C do
     datas =
       book
       |> data_defs()
-      |> Enum.reject(&enum_scalar?(&1, book))
+      |> Enum.reject(&Rep.enum_data?/1)
 
     if datas == [],
       do: "",
@@ -2911,11 +2871,11 @@ defmodule Muro.Emit.C do
   # All-nullary types are a complete enum here, before Opt structs, so
   # an `Opt` of that type can store the tag in `val`. Other types stay
   # an incomplete struct typedef; their bodies come later.
-  defp typedefs(datas, book, prefix) do
+  defp typedefs(datas, _book, prefix) do
     Enum.map_join(datas, "\n", fn d ->
       n = struct_name(d.name, prefix)
 
-      if enum_scalar?(d, book) do
+      if Rep.enum_data?(d) do
         tag_enum_as(d, prefix, n)
       else
         "typedef struct #{n} #{n};"
@@ -3041,15 +3001,10 @@ defmodule Muro.Emit.C do
   # A constructor with no runtime fields has one value. Share it, as `tt` does.
   # The object name is generated, so a source spelling cannot be it.
   defp ctor_fun(d, ctor, tag, book, nm, file_scope, prefix) do
-    cond do
-      enum_scalar?(d, book) ->
-        enum_ctor(d, ctor, nm, prefix)
-
-      unboxed?(d) ->
-        unboxed_ctor(d, ctor, tag, book, nm, file_scope, prefix)
-
-      true ->
-        boxed_ctor(d, ctor, tag, book, nm, file_scope, prefix)
+    case Rep.kind(Rep.of_data(book, d)) do
+      :enum -> enum_ctor(d, ctor, nm, prefix)
+      :value -> unboxed_ctor(d, ctor, tag, book, nm, file_scope, prefix)
+      :boxed -> boxed_ctor(d, ctor, tag, book, nm, file_scope, prefix)
     end
   end
 
@@ -3152,57 +3107,11 @@ defmodule Muro.Emit.C do
     {params, spell(ctor.name), Map.fetch!(nm.ctors, {d.name, ctor.name})}
   end
 
-  defp unboxed?(%{unboxed: true}), do: true
-  defp unboxed?(_), do: false
-
-  defp unboxed_name?(book, name) when is_binary(name) do
-    case find_data(book, name) do
-      %{unboxed: true} -> true
-      _ -> false
-    end
-  end
-
-  defp unboxed_name?(_book, _name), do: false
-
-  # A by-value unboxed *struct* cannot live in a pair or Opt. An
-  # all-nullary type is a scalar enum, even when declared `unboxed data`.
-  defp unboxed_lay?(book, {:data, name}),
-    do: unboxed_name?(book, name) and not enum_scalar_name?(book, name)
-
-  defp unboxed_lay?(_book, _lay), do: false
-
-  # Every live constructor is fieldless. The C type is the tag enum.
-  # A type with a fieldful constructor stays a struct, including when
-  # some of its constructors are fieldless. The test looks only at the
-  # constructor telescope, so it does not call `ctype` and cannot loop
-  # through a field of another data type.
-  defp enum_scalar?(d, _book) when is_map(d) do
-    ctors = Map.get(d, :ctors, [])
-    is_list(ctors) and ctors != [] and Enum.all?(ctors, &nullary_ctor?/1)
-  end
-
-  defp nullary_ctor?(ctor) do
-    {pis, _} = telescope(ctor.type)
-    Enum.all?(pis, fn {q, _, _} -> q == :erased end)
-  end
-
-  defp enum_scalar_name?(book, name) when is_list(book) and is_binary(name) do
-    case find_data(book, name) do
-      nil -> false
-      d -> enum_scalar?(d, book)
-    end
-  end
-
-  defp enum_scalar_name?(_book, _name), do: false
-
-  defp enum_scalar_lay?(book, {:data, name}), do: enum_scalar_name?(book, name)
-  defp enum_scalar_lay?(_book, _lay), do: false
-
   defp enum_scalar_ctype?(ty, st) do
     st.book
     |> data_defs()
     |> Enum.any?(fn d ->
-      enum_scalar?(d, st.book) and struct_name(d.name, st.prefix) == ty
+      Rep.enum_data?(d) and struct_name(d.name, st.prefix) == ty
     end)
   end
 
@@ -3218,7 +3127,7 @@ defmodule Muro.Emit.C do
 
     {ready, rest} =
       Enum.split_with(pending, fn d ->
-        d |> value_deps(book) |> Enum.all?(&MapSet.member?(done, &1))
+        book |> Rep.value_deps(d) |> Enum.all?(&MapSet.member?(done, &1))
       end)
 
     if ready == [] do
@@ -3226,31 +3135,6 @@ defmodule Muro.Emit.C do
     else
       order_value_deps(rest, book, acc ++ ready)
     end
-  end
-
-  defp value_deps(d, book) do
-    d.ctors
-    |> Enum.flat_map(fn ctor ->
-      {pis, _} = telescope(ctor.type)
-
-      Enum.flat_map(pis, fn
-        {q, _, _} when q == :erased ->
-          []
-
-        {_, a, _} ->
-          case type_layout(book, a) do
-            {:data, name} ->
-              if name != d.name and unboxed_name?(book, name) and
-                   not enum_scalar_name?(book, name),
-                 do: [name],
-                 else: []
-
-            _ ->
-              []
-          end
-      end)
-    end)
-    |> Enum.uniq()
   end
 
   defp data_defs(book) do
@@ -3263,7 +3147,7 @@ defmodule Muro.Emit.C do
         d.ctors
         |> Enum.with_index()
         |> Enum.map(fn {ctor, tag} ->
-          fields = Enum.map(live_fields(ctor, book), fn {_ctype, lay, _k} -> lay end)
+          fields = Rep.live_layouts(book, ctor)
           %{name: ctor.name, tag: tag, fields: fields}
         end)
 

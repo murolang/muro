@@ -9,6 +9,9 @@ defmodule Muro.IRDiff do
   #     normalize(run args) == Eval(elaborate) == Eval(Share(elaborate))
   #                         == Eval(elaborate(closures: true))
   #
+  # and each of those images in A-normal form (`Muro.IR.Anf`) beside it:
+  # `anf`, `anf_shared`, and `anf_closures`.
+  #
   # `Muro.Check.normalize/3` is the reference. A reference that does not
   # reach a closed first-order value (a λ, a stuck term, an `abort`, out
   # of fuel) is not compared; every such case is counted by reason.
@@ -20,7 +23,7 @@ defmodule Muro.IRDiff do
   # so every run of the suite sees the same inputs.
 
   alias Muro.{Ast, Check, IR, Load, Prelude}
-  alias Muro.IR.{Eval, Share}
+  alias Muro.IR.{Anf, Eval, Share}
   alias Muro.IR.Eval.Ref
 
   @heads 3
@@ -74,7 +77,7 @@ defmodule Muro.IRDiff do
           {:skip, {:no_image, plain_out |> Map.values() |> Enum.uniq()}}
         else
           {:ok,
-           %{
+           with_anf(%{
              path: path,
              book: emit,
              db: db,
@@ -83,7 +86,7 @@ defmodule Muro.IRDiff do
              shared: plain && Share.funs(plain),
              closures: closures,
              refused: %{plain: plain_out, closures: clos_out}
-           }}
+           })}
         end
 
       {:error, _} ->
@@ -98,7 +101,7 @@ defmodule Muro.IRDiff do
     {:ok, plain} = IR.elaborate(emit)
     {:ok, closures} = IR.elaborate(emit, closures: true)
 
-    %{
+    with_anf(%{
       path: path,
       book: emit,
       db: db,
@@ -107,7 +110,21 @@ defmodule Muro.IRDiff do
       shared: Share.funs(plain),
       closures: closures,
       refused: %{plain: %{}, closures: %{}}
-    }
+    })
+  end
+
+  # The A-normal form of each image, `nil` where the image is.
+  @anf_of [anf: :plain, anf_shared: :shared, anf_closures: :closures]
+
+  @doc "The images `compare/3` runs, in order."
+  def image_keys, do: [:plain, :shared, :closures | Keyword.keys(@anf_of)]
+
+  defp with_anf(ctx) do
+    Enum.reduce(@anf_of, ctx, fn {k, src}, ctx ->
+      funs = Map.fetch!(ctx, src)
+      opts = [book: ctx.book, closures: src == :closures]
+      Map.put(ctx, k, funs && Anf.funs(funs, opts))
+    end)
   end
 
   def reach_map(emit) do
@@ -246,7 +263,8 @@ defmodule Muro.IRDiff do
     ast = Enum.reduce(terms, {:def, name}, &{:app, &2, &1})
 
     images =
-      [plain: ctx.plain, shared: ctx.shared, closures: ctx.closures]
+      image_keys()
+      |> Enum.map(&{&1, Map.get(ctx, &1)})
       |> Enum.reject(fn {_k, funs} -> funs == nil end)
       |> Enum.filter(fn {_k, funs} ->
         Enum.any?(funs, &(&1.name == name and arity_ok?(&1, vals)))
@@ -284,12 +302,34 @@ defmodule Muro.IRDiff do
         end
 
       {:skip, reason} ->
-        case got |> Enum.map(&elem(&1, 1)) |> Enum.uniq() do
-          [_] -> {:skip, reason}
-          _ -> {:mismatch, %{run: name, args: vals, ref: {:skip, reason}, got: got}}
-        end
+        if agree_without_reference?(got),
+          do: {:skip, reason},
+          else: {:mismatch, %{run: name, args: vals, ref: {:skip, reason}, got: got}}
     end
   end
+
+  # The elaborated images agree with one another. An A-normal image
+  # agrees with the image it was made from; a closure it returns holds
+  # the same code under other binder names, so closures compare by shape.
+  defp agree_without_reference?(got) do
+    base = for {k, v} <- got, k in [:plain, :shared, :closures], do: v
+
+    length(Enum.uniq(base)) <= 1 and
+      Enum.all?(@anf_of, fn {k, src} ->
+        case {Keyword.fetch(got, k), Keyword.fetch(got, src)} do
+          {{:ok, a}, {:ok, b}} -> erase_closures(a) == erase_closures(b)
+          _ -> true
+        end
+      end)
+  end
+
+  defp erase_closures({:clo, _env, _x, _body}), do: :closure
+
+  defp erase_closures(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.map(&erase_closures/1) |> List.to_tuple()
+
+  defp erase_closures(t) when is_list(t), do: Enum.map(t, &erase_closures/1)
+  defp erase_closures(t), do: t
 
   defp arity_ok?(fun, vals), do: length(fun.params) == length(vals)
 

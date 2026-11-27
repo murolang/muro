@@ -8,6 +8,8 @@ defmodule Muro.IRHttpDiffTest do
   #     normalize == Eval(elaborate) == Eval(Share(elaborate))
   #                == Eval(elaborate(closures: true))
   #
+  # and each image in A-normal form (`Muro.IR.Anf`).
+  #
   # Share takes most of this module's time on a book this size, so the
   # module runs async beside the rest of the suite.
   use ExUnit.Case, async: true
@@ -57,6 +59,7 @@ defmodule Muro.IRHttpDiffTest do
     assert bad == []
     skipped = for {:skip, r} <- cases, do: r
     assert skipped == []
+    assert Enum.all?(cases, fn {:agree, ks} -> ks == IRDiff.image_keys() end)
     length(cases)
   end
 
@@ -110,13 +113,12 @@ defmodule Muro.IRHttpDiffTest do
     assert agree!(run_all(ctx, Enum.map(small, &{&1, []}))) == length(small)
 
     for name <- @big do
-      [p, s, c] =
-        for funs <- [ctx.plain, ctx.shared, ctx.closures],
-            do: IRDiff.observe(funs, name, [], ctx.eval_fuel)
+      [p | rest] =
+        for k <- IRDiff.image_keys(),
+            do: IRDiff.observe(Map.fetch!(ctx, k), name, [], ctx.eval_fuel)
 
       assert {:ok, {:con, "Out", "out", _}} = p
-      assert p == s
-      assert p == c
+      assert Enum.all?(rest, &(&1 == p))
     end
   end
 end

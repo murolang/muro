@@ -41,10 +41,10 @@ defmodule Muro.Emit do
   `{:error, "c:unboxed"}` when a run or a data field carries `Opt` of
   unboxed data. The option struct is emitted before the data structs,
   so C, Rust, and Zig refuse it. Elixir and JavaScript do not call this.
+  The rule is `Muro.IR.Rep.refuse_unboxed_opt/2`.
   """
-  def refuse_unboxed_opt(book, funs) when is_list(book) and is_list(funs) do
-    if unboxed_opt_image?(book, funs), do: {:error, "c:unboxed"}, else: :ok
-  end
+  def refuse_unboxed_opt(book, funs) when is_list(book) and is_list(funs),
+    do: Muro.IR.Rep.refuse_unboxed_opt(book, funs)
 
   @doc """
   `{:error, "c:mayfail\\n..."}` when a meeting marks a party that may fail.
@@ -55,65 +55,6 @@ defmodule Muro.Emit do
   machine emit the mark. The declaration is not erased.
   """
   def refuse_may_fail(book) when is_list(book), do: Muro.Fail.refuse_emit(book)
-
-  defp unboxed_opt_image?(book, funs) do
-    Enum.any?(funs, fn fun ->
-      contains_unboxed_opt?(book, fun.ret) or contains_unboxed_opt?(book, fun.params) or
-        contains_unboxed_opt?(book, fun.body)
-    end) or Enum.any?(book, &unboxed_opt_fields?(book, &1))
-  end
-
-  defp unboxed_opt_fields?(book, %{kind: :data, ctors: ctors}) do
-    Enum.any?(ctors, fn ctor -> unboxed_opt_type?(book, ctor.type) end)
-  end
-
-  defp unboxed_opt_fields?(_book, _decl), do: false
-
-  defp unboxed_opt_type?(book, {:pi, :erased, _, _, b}), do: unboxed_opt_type?(book, b)
-
-  defp unboxed_opt_type?(book, {:pi, _, a, _, b}) do
-    type_is_unboxed_opt?(book, a) or unboxed_opt_type?(book, b)
-  end
-
-  defp unboxed_opt_type?(_book, _ty), do: false
-
-  defp type_is_unboxed_opt?(book, {:word, :opt, [a]}) do
-    unboxed_type_name?(book, a) or type_is_unboxed_opt?(book, a)
-  end
-
-  defp type_is_unboxed_opt?(book, {:ann, e, _}), do: type_is_unboxed_opt?(book, e)
-  defp type_is_unboxed_opt?(_book, _ty), do: false
-
-  defp unboxed_type_name?(book, {:def, name}), do: unboxed_decl?(book, name)
-  defp unboxed_type_name?(book, {:var, name}) when is_binary(name), do: unboxed_decl?(book, name)
-  defp unboxed_type_name?(book, {:app, f, _}), do: unboxed_type_name?(book, f)
-  defp unboxed_type_name?(book, {:ann, e, _}), do: unboxed_type_name?(book, e)
-  defp unboxed_type_name?(_book, _ty), do: false
-
-  defp unboxed_decl?(book, name) do
-    Enum.any?(book, fn
-      %{kind: :data, name: ^name, unboxed: true} -> true
-      _ -> false
-    end)
-  end
-
-  defp contains_unboxed_opt?(book, {:opt, pay}) do
-    unboxed_payload?(book, pay) or contains_unboxed_opt?(book, pay)
-  end
-
-  defp contains_unboxed_opt?(book, t) when is_tuple(t) do
-    Enum.any?(Tuple.to_list(t), &contains_unboxed_opt?(book, &1))
-  end
-
-  defp contains_unboxed_opt?(book, t) when is_list(t) do
-    Enum.any?(t, &contains_unboxed_opt?(book, &1))
-  end
-
-  defp contains_unboxed_opt?(_book, _t), do: false
-
-  defp unboxed_payload?(book, {:data, name}) when is_binary(name), do: unboxed_decl?(book, name)
-  defp unboxed_payload?(book, {:opt, pay}), do: unboxed_payload?(book, pay)
-  defp unboxed_payload?(_book, _pay), do: false
 
   @doc """
   Group each elaborated run with the unfold steps it closed.
