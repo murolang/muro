@@ -2,7 +2,7 @@ defmodule Muro.Emit.Equations do
   @moduledoc """
   Closed equations collected for a host test suite.
 
-  ExUnit, pytest, and the Rust test file share this collector.
+  ExUnit, pytest, the Rust test file, and the C# test file share this collector.
 
   A candidate is an `evidence` definition whose type is an equation
   `{f a₁ … aₙ ≡ b : T}`, and `f` is a name. Quantified evidence and an

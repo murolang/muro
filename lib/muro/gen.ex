@@ -39,6 +39,7 @@ defmodule Muro.Gen do
   An `:exunit` entry emits with `Muro.Emit.ExUnitSuite.render/4`.
   A `:pytest` entry emits with `Muro.Emit.Pytest.render/3`.
   A `:rust_test` entry emits with `Muro.Emit.RustTest.render/3`.
+  A `:csharp_test` entry emits with `Muro.Emit.CSharpTest.render/3`.
   A `:fsm` entry emits with `Muro.Emit.Fsm.render/4`. A `:c` entry calls
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
@@ -57,18 +58,19 @@ defmodule Muro.Gen do
   and plugins from `_build/<env>/lib/*/ebin`, the files Mix reads.
   `.ex` and `.exs` are formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi` are not formatted.
+  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi` are not formatted.
   The body hash is the emitter's text. There is no timestamp and no
   absolute path.
 
   The header comment is `#` for Elixir and pytest, `//` for C, Rust, Zig, JavaScript,
-  a Rust test file,
+  a Rust test file, a C# test file,
   the C header, and the declaration file, and `@` for Cortex-M assembly. The words of the two
   lines are the same.
 
   An ExUnit entry's body lists skipped equations in a comment. A
   pytest entry lists each skip as a `pytest.mark.skip` test. A Rust
-  test entry lists each skip as a `#[ignore]` test. That
+  test entry lists each skip as a `#[ignore]` test. A C# test entry
+  lists each skip as a `[Fact]` with `Skip` set. That
   text is part of the body hash. `generate/3` prints one `skipped`
   line per skip after the target's `written` or `unchanged` line.
   `check/3` does not print skips; a change to the skipped set
@@ -285,7 +287,7 @@ defmodule Muro.Gen do
   end
 
   # One load per book. A book with a target other than exunit, pytest,
-  # or rust-test is loaded closed. That copy is reused for a suite target
+  # rust-test, or csharp-test is loaded closed. That copy is reused for a suite target
   # of the same book when the closed load succeeds. A suite-only book is
   # loaded with `params: :open`, which is the check those backends already
   # used. A
@@ -388,17 +390,28 @@ defmodule Muro.Gen do
       :rust_test ->
         render_rust_test(root, entry, version, fuel, loaded, lines)
 
+      :csharp_test ->
+        render_csharp_test(root, entry, version, fuel, loaded, lines)
+
       _kind ->
         render_elixir(root, entry, version, fuel, loaded, lines)
     end
   end
 
   defp render_rust_test(root, entry, version, fuel, loaded, lines) do
+    render_text(root, entry, version, fuel, loaded, lines, "// ")
+  end
+
+  defp render_csharp_test(root, entry, version, fuel, loaded, lines) do
+    render_text(root, entry, version, fuel, loaded, lines, "// ")
+  end
+
+  defp render_text(root, entry, version, fuel, loaded, lines, prefix) do
     with {:ok, source, skips} <- emit_loaded(root, entry, fuel, loaded) do
       body = ensure_newline(source)
 
       file =
-        header(version, entry.book, book_hash(root, entry.book), body_hash(body), lines, "// ") <>
+        header(version, entry.book, book_hash(root, entry.book), body_hash(body), lines, prefix) <>
           body
 
       if coherent?(file, root, entry, version, lines) do
@@ -595,6 +608,25 @@ defmodule Muro.Gen do
           end
 
         case Muro.Emit.RustTest.render(path, Muro.Grade.erase_book(loaded), opts) do
+          {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
+          {:error, message} -> {:error, message}
+        end
+
+      :csharp_test ->
+        opts = [
+          fuel: fuel,
+          root: root,
+          book: entry.book,
+          imports: Map.get(entry, :imports, false)
+        ]
+
+        opts =
+          case Map.get(entry, :impl) do
+            nil -> opts
+            impl -> Keyword.put(opts, :impl, impl)
+          end
+
+        case Muro.Emit.CSharpTest.render(path, Muro.Grade.erase_book(loaded), opts) do
           {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
           {:error, message} -> {:error, message}
         end
@@ -867,7 +899,7 @@ defmodule Muro.Gen do
   end
 
   defp suite_kind?(entry) do
-    Map.get(entry, :kind) in [:exunit, :pytest, :rust_test]
+    Map.get(entry, :kind) in [:exunit, :pytest, :rust_test, :csharp_test]
   end
 
   defp hash_problems(content, header, current, rel, entry, version, book_ok?, emit) do

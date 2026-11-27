@@ -21,13 +21,15 @@ defmodule Muro.Manifest do
       to the project root. The module is an alias atom
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
       `opts` is a keyword list: `kind: :elixir` (the default),
-      `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`,
+      `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`,
+      `kind: :csharp_test`, `kind: :fsm`,
       `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :otp`,
       `kind: :js`, or `kind: :mbi`.
       For `:exunit`, an optional `impl:` alias is the implementation
       the suite tests by default. For `:pytest`, `impl:` is a Python
-      module name. For `:rust_test`, `impl:` is a Rust path. An optional
-      `imports:` boolean is valid for all three.
+      module name. For `:rust_test`, `impl:` is a Rust path. For
+      `:csharp_test`, `impl:` is a C# type name. An optional
+      `imports:` boolean is valid for all four.
       `imports: true` collects closed equations from the files that
       book imports directly. The default is `false`. `imports:` on an
       `:elixir` entry is an error.
@@ -39,18 +41,19 @@ defmodule Muro.Manifest do
   A book or a target that leaves the project root is refused, and so
   is a missing book, a duplicate target, a module that is not an
   alias atom, an unknown option, an unknown kind, `impl:` on an
-  entry that is not `:exunit`, `:pytest`, or `:rust_test`, or `imports:`
-  on an entry that is not one of those three. `imports:` must be a
+  entry that is not `:exunit`, `:pytest`, `:rust_test`, or `:csharp_test`,
+  or `imports:` on an entry that is not one of those four. `imports:` must be a
   boolean. A pytest `impl:` must be a Python module name. A Rust test
-  `impl:` must be a Rust path. Two
+  `impl:` must be a Rust path. A C# test `impl:` must be a C# type name. Two
   pytest entries whose book stems fold to one `MURO_IMPL_` variable
   are refused. `foo-bar.muro` and `foo_bar.muro` are both
   `MURO_IMPL_FOO_BAR`.
 
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
-  `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:otp`, `:mbi`, `:pytest`, or `:rust_test`
+  `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:otp`, `:mbi`, `:pytest`, `:rust_test`,
+  or `:csharp_test`
   entry may omit it. The target then ends with `.c`, `.rs`, `.zig`,
-  `.s`, `.mjs`, `.ex`, `.mbi`, or `.py`. A `:rust` target and a `:rust_test` target
+  `.s`, `.mjs`, `.ex`, `.mbi`, `.py`, or `.cs`. A `:rust` target and a `:rust_test` target
   both end in `.rs`. The kind tells them apart. A `:c` target also reserves the `.h`
   written beside it, and a `:js` target reserves the `.d.ts`. That path is checked as a target before
   generation: a directory is refused, and it is a duplicate when
@@ -723,7 +726,8 @@ defmodule Muro.Manifest do
              :fsm,
              :exunit,
              :pytest,
-             :rust_test
+             :rust_test,
+             :csharp_test
            ] ->
         {backend, errors}
 
@@ -731,7 +735,7 @@ defmodule Muro.Manifest do
         {nil,
          errors ++
            [
-             "manifest backend: must be elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, or rust-test, got: #{inspect(backend)}"
+             "manifest backend: must be elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, rust-test, or csharp-test, got: #{inspect(backend)}"
            ]}
     end
   end
@@ -911,6 +915,7 @@ defmodule Muro.Manifest do
              :exunit,
              :pytest,
              :rust_test,
+             :csharp_test,
              :fsm,
              :otp,
              :c,
@@ -943,13 +948,13 @@ defmodule Muro.Manifest do
   end
 
   defp impl_kind_error(errors, kind, true, _index)
-       when kind in [:exunit, :pytest, :rust_test],
+       when kind in [:exunit, :pytest, :rust_test, :csharp_test],
        do: errors
 
   defp impl_kind_error(errors, _kind, true, index) do
     errors ++
       [
-        "modules entry #{index}: impl: is only valid for kind: :exunit, kind: :pytest, or kind: :rust_test"
+        "modules entry #{index}: impl: is only valid for kind: :exunit, kind: :pytest, kind: :rust_test, or kind: :csharp_test"
       ]
   end
 
@@ -971,13 +976,13 @@ defmodule Muro.Manifest do
   end
 
   defp import_kind_error(errors, kind, true, _index)
-       when kind in [:exunit, :pytest, :rust_test],
+       when kind in [:exunit, :pytest, :rust_test, :csharp_test],
        do: errors
 
   defp import_kind_error(errors, _kind, true, index) do
     errors ++
       [
-        "modules entry #{index}: imports: is only valid for kind: :exunit, kind: :pytest, or kind: :rust_test"
+        "modules entry #{index}: imports: is only valid for kind: :exunit, kind: :pytest, kind: :rust_test, or kind: :csharp_test"
       ]
   end
 
@@ -1049,6 +1054,15 @@ defmodule Muro.Manifest do
     end
   end
 
+  defp impl_alias_error(errors, impl, :csharp_test, index) do
+    if Muro.Emit.CSharpTest.type_name?(impl) do
+      errors
+    else
+      errors ++
+        ["modules entry #{index}: impl must be a C# type name, got: #{inspect(impl)}"]
+    end
+  end
+
   defp impl_alias_error(errors, impl, _kind, index) do
     if alias_atom?(impl) do
       errors
@@ -1105,7 +1119,7 @@ defmodule Muro.Manifest do
   end
 
   defp validate_module(nil, _index, kind)
-       when kind in [:c, :rust, :zig, :asm, :js, :otp, :mbi, :pytest, :rust_test],
+       when kind in [:c, :rust, :zig, :asm, :js, :otp, :mbi, :pytest, :rust_test, :csharp_test],
        do: []
 
   defp validate_module(module, index, _kind) do
@@ -1125,6 +1139,9 @@ defmodule Muro.Manifest do
 
   defp extension_errors(:rust_test, rel, index),
     do: extension_errors(rel, ".rs", :rust_test, index)
+
+  defp extension_errors(:csharp_test, rel, index),
+    do: extension_errors(rel, ".cs", :csharp_test, index)
 
   defp extension_errors(:otp, rel, index), do: extension_errors(rel, ".ex", :otp, index)
   defp extension_errors(:mbi, rel, index), do: extension_errors(rel, ".mbi", :mbi, index)

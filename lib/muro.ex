@@ -65,10 +65,10 @@ defmodule Muro do
   are the equations the suite lists and does not run. A book that does
   not check returns `{:error, message}` and no module.
 
-  This entry point, `emit_pytest/2`, and `emit_rust_test/2` load with
-  `params: :open`. A `param` nobody supplied is an assumption, so a
-  library of params can be the suite. Every other backend still refuses
-  that library.
+  This entry point, `emit_pytest/2`, `emit_rust_test/2`, and
+  `emit_csharp_test/2` load with `params: :open`. A `param` nobody
+  supplied is an assumption, so a library of params can be the suite.
+  Every other backend still refuses that library.
   `imports: true` also collects closed equations from the files this
   book imports directly. The default is `false`.
 
@@ -141,6 +141,34 @@ defmodule Muro do
 
     with {:ok, book} <- Load.file(path, load_opts) do
       Emit.RustTest.render(path, Grade.erase_book(book), Keyword.put(opts, :fuel, fuel))
+    end
+  end
+
+  @doc """
+  Emit the closed equations of `path` as a C# xUnit file.
+
+  With no `impl:`, each fact compares the two normal forms, so the
+  file names no host type. `impl:` names a C# type and the left-hand
+  side is a call of that type. `opts` also accepts `fuel:`, `root:`,
+  `book:`, and `imports:`.
+
+  Returns `{:ok, %{source: source, skips: skips, tests: n}}`. `skips`
+  are the equations the suite lists and does not run. A book that does
+  not check returns `{:error, message}` and no file.
+
+  This loads with `params: :open`, the same way `emit_rust_test/2` does.
+  `imports: true` also collects closed equations from the files this
+  book imports directly. The default is `false`.
+
+  Values are the expressions `Muro.Emit.CSharpTest.print_value/2` prints.
+  """
+  def emit_csharp_test(path, opts \\ []) when is_binary(path) and is_list(opts) do
+    fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
+
+    load_opts = [fuel: fuel, root: Keyword.get(opts, :root), params: :open]
+
+    with {:ok, book} <- Load.file(path, load_opts) do
+      Emit.CSharpTest.render(path, Grade.erase_book(book), Keyword.put(opts, :fuel, fuel))
     end
   end
 

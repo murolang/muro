@@ -62,7 +62,7 @@ mod rounding;
 
 `rustc --edition 2021 --test` accepts the two files as siblings. A Cargo `tests/` directory does not reach into `src/` that way. Pass `--impl crate::module`, or `impl:` on the manifest entry, and the tests call that path. The path is baked into the file. There is no environment override.
 
-`--impl` and `impl:` are a Rust path. Each segment is an identifier that is not a keyword, or a path keyword (`crate`, `self`, `super`, `Self`), or `r#` plus an identifier that is not one of those four. `crate::rounding`, `self::a`, and `r#fn` are accepted. `fn`, `r#crate`, `a::`, and `1bad` are refused: `impl must be a Rust path`. `--impl` with any backend other than `pytest` and `rust-test` is `--impl is only valid with --backend pytest or --backend rust-test`.
+`--impl` and `impl:` are a Rust path. Each segment is an identifier that is not a keyword, or a path keyword (`crate`, `self`, `super`, `Self`), or `r#` plus an identifier that is not one of those four. `crate::rounding`, `self::a`, and `r#fn` are accepted. `fn`, `r#crate`, `a::`, and `1bad` are refused: `impl must be a Rust path`. `--impl` with any backend other than `pytest`, `rust-test`, and `csharp-test` is `--impl is only valid with --backend pytest, --backend rust-test, or --backend csharp-test`.
 
 The file defines `MURO_BOOK`, the book sha256, the same hash an ExUnit suite stores in `@muro_book`. The inner attribute allows an unused module, that constant, and the names a book spells.
 
@@ -97,9 +97,9 @@ A function, a stream, an open name, `F32`, `Tensor`, and a word operation that d
 
 ## Param libraries
 
-`Muro.emit_rust_test/2`, `mix muro.emit --backend rust-test`, and a `kind: :rust_test` entry check a library of unsupplied `param`s as assumptions (`params: :open`). `mix muro.check`, and every backend other than `exunit`, `pytest`, and `rust-test`, still refuse the file. A `run` param at the head of a side is a call, `lib::p()`. An `evidence` param is not a call and not a candidate.
+`Muro.emit_rust_test/2`, `mix muro.emit --backend rust-test`, and a `kind: :rust_test` entry check a library of unsupplied `param`s as assumptions (`params: :open`). `mix muro.check`, and every backend other than `exunit`, `pytest`, `rust-test`, and `csharp-test`, still refuse the file. A `run` param at the head of a side is a call, `lib::p()`. An `evidence` param is not a call and not a candidate.
 
-`--imports` collects the same files the ExUnit flag collects. It is an error with any backend other than `exunit`, `pytest`, and `rust-test`: `--imports is only valid with --backend exunit, --backend pytest, or --backend rust-test`.
+`--imports` collects the same files the ExUnit flag collects. It is an error with any backend other than `exunit`, `pytest`, `rust-test`, and `csharp-test`: `--imports is only valid with --backend exunit, --backend pytest, --backend rust-test, or --backend csharp-test`.
 
 ## Manifest
 
@@ -107,7 +107,7 @@ A Rust test entry may omit the module. The target ends with `.rs`. `impl:` is a 
 
 ```elixir
 [
-  muro: "0.22.44",
+  muro: "0.22.47",
   modules: [
     {"priv/muro/rounding.muro", "test/rounding_test.rs",
      [kind: :rust_test, impl: "crate::rounding"]}

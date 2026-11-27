@@ -225,6 +225,7 @@ defmodule Muro.CliHelpTest do
           "exunit",
           "pytest",
           "rust-test",
+          "csharp-test",
           "mbi"
         ] do
       assert emit =~ backend
@@ -244,7 +245,7 @@ defmodule Muro.CliHelpTest do
     assert mix_gen =~ "adds the header except on an `:mbi` image"
 
     assert mix_gen =~
-             "Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`"
+             "Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi`"
 
     init = Muro.CLI.Init.help()
     assert init =~ "https://muro-lang.dev/docs/binary"

@@ -26,6 +26,7 @@ defmodule Muro.CLI.Emit do
           "exunit    one ExUnit module for the closed equations",
           "pytest    one pytest module for the closed equations",
           "rust-test one Rust test file for the closed equations",
+          "csharp-test one C# xUnit file for the closed equations",
           "mbi       <stem>.mbi beside the book, exactly one graded run"
         ]
       },
@@ -42,7 +43,7 @@ defmodule Muro.CLI.Emit do
         type: :boolean,
         default: "false",
         doc:
-          "With --backend exunit, --backend pytest, or --backend rust-test, also collect the closed equations of the files this book imports directly. It is an error with any other backend. Absent, the suite is this file only."
+          "With --backend exunit, --backend pytest, --backend rust-test, or --backend csharp-test, also collect the closed equations of the files this book imports directly. It is an error with any other backend. Absent, the suite is this file only."
       },
       %{
         name: :impl,
@@ -50,7 +51,7 @@ defmodule Muro.CLI.Emit do
         value: "MODULE",
         default: "the file stem",
         doc:
-          "With --backend pytest, the Python module the tests import. Each segment is an identifier and not a keyword. Absent, the module is the file stem. MURO_IMPL_<STEM> overrides it when the tests run, and that does not change the file. With --backend rust-test, a Rust path the tests call. Each segment is an identifier, a path keyword (crate, self, super, Self), or r# plus an identifier. Absent, the tests call the emitted <stem>.rs beside the test file. The Rust path is fixed in the file. Other backends refuse the flag."
+          "With --backend pytest, the Python module the tests import. Each segment is an identifier and not a keyword. Absent, the module is the file stem. MURO_IMPL_<STEM> overrides it when the tests run, and that does not change the file. With --backend rust-test, a Rust path the tests call. Each segment is an identifier, a path keyword (crate, self, super, Self), or r# plus an identifier. Absent, the tests call the emitted <stem>.rs beside the test file. The Rust path is fixed in the file. With --backend csharp-test, a C# type the tests call. Each segment is an identifier that is not a keyword, or @ plus an identifier. Absent, each fact compares the two normal forms, and a call names the file stem. The type is fixed in the file. Other backends refuse the flag."
       },
       %{
         name: :prefix,
@@ -67,7 +68,7 @@ defmodule Muro.CLI.Emit do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. js writes <stem>.mjs and <stem>.d.ts beside the book and prints both paths. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and, for a keyed family that checks, one dispatcher, and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. pytest prints one pytest module for those same equations. rust-test prints one Rust test file for those same equations. mbi writes <stem>.mbi beside the book only when exactly one exported run erases, and prints that path. The binder grades stay. A refusal writes nothing and prints no path. An image already beside the book stays byte for byte, including when the book has no exported run and when it has more than one. muro-beam loads that file. It is not Erlang BEAM bytecode. Data, a pair, a word, or a stream is refused. A run the entry calls is a definition in the image. A name that is not a run, and two definitions that call each other, are refused. Zero exported runs, and more than one, are refused. muro-beam checks the image again. Writing the file is not that check. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
+      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. js writes <stem>.mjs and <stem>.d.ts beside the book and prints both paths. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and, for a keyed family that checks, one dispatcher, and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. pytest prints one pytest module for those same equations. rust-test prints one Rust test file for those same equations. csharp-test prints one C# xUnit file for those same equations. mbi writes <stem>.mbi beside the book only when exactly one exported run erases, and prints that path. The binder grades stay. A refusal writes nothing and prints no path. An image already beside the book stays byte for byte, including when the book has no exported run and when it has more than one. muro-beam loads that file. It is not Erlang BEAM bytecode. Data, a pair, a word, or a stream is refused. A run the entry calls is a definition in the image. A name that is not a run, and two definitions that call each other, are refused. Zero exported runs, and more than one, are refused. muro-beam checks the image again. Writing the file is not that check. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
       """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -95,6 +96,7 @@ defmodule Muro.CLI.Emit do
             {"muro emit book.muro --backend exunit", "Print an ExUnit module."},
             {"muro emit book.muro --backend pytest", "Print a pytest module."},
             {"muro emit book.muro --backend rust-test", "Print a Rust test file."},
+            {"muro emit book.muro --backend csharp-test", "Print a C# xUnit file."},
             {"muro emit book.muro --backend mbi", "Write book.mbi beside the book."}
           ],
           "\n\n"
@@ -145,12 +147,13 @@ defmodule Muro.CLI.Emit do
         {:raise, "",
          "--backend beam is refused. Use --backend mbi. The file is the .mbi image muro-beam loads, not Erlang BEAM bytecode."}
 
-      imports? and backend not in ["exunit", "pytest", "rust-test"] ->
+      imports? and backend not in ["exunit", "pytest", "rust-test", "csharp-test"] ->
         {:raise, "",
-         "--imports is only valid with --backend exunit, --backend pytest, or --backend rust-test"}
+         "--imports is only valid with --backend exunit, --backend pytest, --backend rust-test, or --backend csharp-test"}
 
-      impl not in [nil, ""] and backend not in ["pytest", "rust-test"] ->
-        {:raise, "", "--impl is only valid with --backend pytest or --backend rust-test"}
+      impl not in [nil, ""] and backend not in ["pytest", "rust-test", "csharp-test"] ->
+        {:raise, "",
+         "--impl is only valid with --backend pytest, --backend rust-test, or --backend csharp-test"}
 
       prefix not in [nil, ""] and backend != "c" ->
         {:raise, "", "--prefix is only valid with --backend c"}
@@ -163,6 +166,9 @@ defmodule Muro.CLI.Emit do
 
       backend == "rust-test" and is_nil(node) ->
         emit_rust_test(path, imports?, impl)
+
+      backend == "csharp-test" and is_nil(node) ->
+        emit_csharp_test(path, imports?, impl)
 
       backend == "c" and is_nil(node) ->
         emit_c(path, nif, prefix)
@@ -223,6 +229,30 @@ defmodule Muro.CLI.Emit do
         opts = if is_binary(impl) and impl != "", do: Keyword.put(opts, :impl, impl), else: opts
 
         case Muro.emit_rust_test(path, opts) do
+          {:ok, %{source: src, skips: skips, tests: n}} ->
+            stderr =
+              Enum.map_join(skips, fn skip ->
+                "skipped #{skip.name} (#{skip.file}:#{skip.line}): #{skip.reason}\n"
+              end) <> "#{n} tests, #{length(skips)} skipped\n"
+
+            {:ok, src <> "\n", stderr}
+
+          {:error, message} ->
+            {:raise, "", message}
+        end
+    end
+  end
+
+  defp emit_csharp_test(path, imports?, impl) do
+    cond do
+      is_binary(impl) and impl != "" and not Muro.Emit.CSharpTest.type_name?(impl) ->
+        {:raise, "", "--impl must be a C# type name, got: #{inspect(impl)}"}
+
+      true ->
+        opts = if imports?, do: [imports: true], else: []
+        opts = if is_binary(impl) and impl != "", do: Keyword.put(opts, :impl, impl), else: opts
+
+        case Muro.emit_csharp_test(path, opts) do
           {:ok, %{source: src, skips: skips, tests: n}} ->
             stderr =
               Enum.map_join(skips, fn skip ->

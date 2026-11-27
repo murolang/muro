@@ -25,7 +25,7 @@ defmodule Muro.Toml do
   `[[package.metadata.muro.modules]]`).
   """
 
-  @backends ~w(elixir c rust zig asm otp js mbi fsm exunit pytest rust-test)
+  @backends ~w(elixir c rust zig asm otp js mbi fsm exunit pytest rust-test csharp-test)
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
 
   @doc """
@@ -1012,7 +1012,8 @@ defmodule Muro.Toml do
   end
 
   # An ExUnit `impl` names an Elixir module, read as `module` is (#300).
-  # pytest and rust-test keep the string: a Python module or a Rust path.
+  # pytest, rust-test, and csharp-test keep the string: a Python module,
+  # a Rust path, or a C# type name.
   defp field_impl(table, index, path, kind) do
     case Map.get(table, "impl") do
       nil ->
@@ -1173,6 +1174,7 @@ defmodule Muro.Toml do
   defp node_line(_other), do: 1
 
   defp backend_atom("rust-test"), do: {:ok, :rust_test}
+  defp backend_atom("csharp-test"), do: {:ok, :csharp_test}
   defp backend_atom(value) when value in @backends, do: {:ok, String.to_atom(value)}
   defp backend_atom(_value), do: :error
 

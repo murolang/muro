@@ -291,8 +291,8 @@ defmodule Muro.SkillsTest do
         {name, name |> String.replace("-", "_") |> String.to_existing_atom()}
       end
 
-    # rust_test is the kind whose atom contains an underscore.
-    assert hyphenated == [{"rust-test", :rust_test}]
+    # rust_test and csharp_test are the kinds whose atoms contain an underscore.
+    assert hyphenated == [{"rust-test", :rust_test}, {"csharp-test", :csharp_test}]
 
     for {flag, atom} <- hyphenated do
       toml_dir = tmp()
