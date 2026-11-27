@@ -9,6 +9,9 @@ defmodule Muro.IRDiff do
   #     normalize(run args) == Eval(elaborate) == Eval(Share(elaborate))
   #                         == Eval(elaborate(closures: true))
   #
+  # and each of those images in A-normal form (`Muro.IR.Anf`) beside it:
+  # `anf`, `anf_shared`, and `anf_closures`.
+  #
   # `Muro.Check.normalize/3` is the reference. A reference that does not
   # reach a closed first-order value (a λ, a stuck term, an `abort`, out
   # of fuel) is not compared; every such case is counted by reason.
@@ -20,7 +23,7 @@ defmodule Muro.IRDiff do
   # so every run of the suite sees the same inputs.
 
   alias Muro.{Ast, Check, IR, Load, Prelude}
-  alias Muro.IR.{Eval, Share}
+  alias Muro.IR.{Anf, Eval, Share}
   alias Muro.IR.Eval.Ref
 
   @heads 3
@@ -74,7 +77,7 @@ defmodule Muro.IRDiff do
           {:skip, {:no_image, plain_out |> Map.values() |> Enum.uniq()}}
         else
           {:ok,
-           %{
+           with_anf(%{
              path: path,
              book: emit,
              db: db,
@@ -83,7 +86,7 @@ defmodule Muro.IRDiff do
              shared: plain && Share.funs(plain),
              closures: closures,
              refused: %{plain: plain_out, closures: clos_out}
-           }}
+           })}
         end
 
       {:error, _} ->
@@ -98,7 +101,7 @@ defmodule Muro.IRDiff do
     {:ok, plain} = IR.elaborate(emit)
     {:ok, closures} = IR.elaborate(emit, closures: true)
 
-    %{
+    with_anf(%{
       path: path,
       book: emit,
       db: db,
@@ -107,7 +110,22 @@ defmodule Muro.IRDiff do
       shared: Share.funs(plain),
       closures: closures,
       refused: %{plain: %{}, closures: %{}}
-    }
+    })
+  end
+
+  # The A-normal form of each image, `nil` where the image is.
+  @anf_of [anf: :plain, anf_shared: :shared, anf_closures: :closures]
+
+  @doc "The images `compare/3` runs, in order."
+  def image_keys, do: [:plain, :shared, :closures | Keyword.keys(@anf_of)]
+
+  @doc "Rebuilds the A-normal images of `ctx` from the images they come from."
+  def with_anf(ctx) do
+    Enum.reduce(@anf_of, ctx, fn {k, src}, ctx ->
+      funs = Map.fetch!(ctx, src)
+      opts = [book: ctx.book, closures: src == :closures]
+      Map.put(ctx, k, funs && Anf.funs(funs, opts))
+    end)
   end
 
   def reach_map(emit) do
@@ -271,7 +289,8 @@ defmodule Muro.IRDiff do
     ast = Enum.reduce(terms, {:def, name}, &{:app, &2, &1})
 
     images =
-      [plain: ctx.plain, shared: ctx.shared, closures: ctx.closures]
+      image_keys()
+      |> Enum.map(&{&1, Map.get(ctx, &1)})
       |> Enum.reject(fn {_k, funs} -> funs == nil end)
       |> Enum.filter(fn {_k, funs} ->
         Enum.any?(funs, &(&1.name == name and arity_ok?(&1, vals)))
@@ -291,7 +310,8 @@ defmodule Muro.IRDiff do
   Eval spends fuel on every call and the closure image on every
   application, so one image may run out where another stops. Every image
   is observed. Results that did stop must agree with one another and
-  with the reference. An input where every image ran out of fuel is not
+  with the reference. A closure an A-normal image returns holds the
+  same code under other binder names, so closures agree by shape. An input where every image ran out of fuel is not
   compared, and the reference is not asked for it. An input where some
   did, and the rest agree, is a skip.
   """
@@ -306,7 +326,7 @@ defmodule Muro.IRDiff do
       done == [] ->
         {:skip, :eval_out_of_fuel}
 
-      length(Enum.uniq(Enum.map(done, &elem(&1, 1)))) > 1 ->
+      length(Enum.uniq(Enum.map(done, &erase_closures(elem(&1, 1))))) > 1 ->
         {:mismatch, %{run: name, args: vals, ref: :not_asked, got: got}}
 
       true ->
@@ -328,6 +348,15 @@ defmodule Muro.IRDiff do
         end
     end
   end
+
+  # Only the closures image and its A-normal form return a closure.
+  defp erase_closures({:clo, _env, _x, _body}), do: :closure
+
+  defp erase_closures(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.map(&erase_closures/1) |> List.to_tuple()
+
+  defp erase_closures(t) when is_list(t), do: Enum.map(t, &erase_closures/1)
+  defp erase_closures(t), do: t
 
   defp arity_ok?(fun, vals), do: length(fun.params) == length(vals)
 

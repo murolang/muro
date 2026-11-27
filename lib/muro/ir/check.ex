@@ -68,6 +68,61 @@ defmodule Muro.IR.Check do
     end
   end
 
+  # -- shared with Muro.IR.Anf and Muro.IR.Rep ----------------------------
+  #
+  # A later pass that adds binders keeps them in the same environment
+  # this module checks with: `%{name => %{grade: g, lay: lay}}`.
+
+  @doc false
+  # The context `infer_layout/3` and `arm_env/5` read: the callees by
+  # name, the book, and whether the image is the closures image.
+  def layout_ctx(funs, opts \\ []) when is_list(funs) do
+    funs = Enum.map(funs, &IR.normalize_fun/1)
+
+    %{
+      by_name: Map.new(funs, &{&1.name, &1}),
+      book: Keyword.get(opts, :book),
+      closures: Keyword.get(opts, :closures, closures_image?(funs))
+    }
+  end
+
+  @doc false
+  # The layout this module infers for `t`, `:unknown` when it has none.
+  def infer_layout(t, env, ctx), do: infer(t, env, ctx)
+
+  @doc false
+  # The `:linear` and `:affine` variables `t` mentions free, in order.
+  def restricted_vars(t, env), do: t |> restricted_free(env, MapSet.new()) |> Enum.uniq()
+
+  @doc false
+  # The grade a closure gets when it is the value of a let.
+  def arg_grade_of(t), do: arg_grade(t)
+
+  @doc false
+  # `env` with the binders of `arm` added, as the arm body is checked.
+  def arm_env(scrut, scrut_lay, {:arm, tag, names, _tm}, env, ctx) do
+    grades = arm_field_grades(scrut, scrut_lay, tag, names, env, ctx)
+    bind_arm(names, arm_field_lays(scrut_lay, tag, names, ctx), grades, env)
+  end
+
+  defp bind_arm(names, lays, grades, env) do
+    case grades do
+      {:ok, gs} ->
+        names
+        |> Enum.zip(lays)
+        |> Enum.zip(gs)
+        |> Enum.reduce(env, fn {{n, lay}, g}, env ->
+          Map.put(env, n, %{grade: g, lay: lay})
+        end)
+
+      :unknown ->
+        Enum.zip(names, lays)
+        |> Enum.reduce(env, fn {n, lay}, env ->
+          Map.put(env, n, %{grade: :unknown, lay: lay})
+        end)
+    end
+  end
+
   defp closures_image?(funs) do
     Enum.any?(funs, fn fun ->
       Enum.any?(fun.params, fn p -> fn_lay?(IR.param_lay(p)) end) or
@@ -366,26 +421,8 @@ defmodule Muro.IR.Check do
     walked =
       Enum.map(arms, fn {:arm, tag, names, tm} ->
         arity = arm_arity_errors(fun, scrut_lay, tag, names, ctx)
-        lays = arm_field_lays(scrut_lay, tag, names, ctx)
         grades = arm_field_grades(scrut, scrut_lay, tag, names, env, ctx)
-
-        env1 =
-          case grades do
-            {:ok, gs} ->
-              names
-              |> Enum.zip(lays)
-              |> Enum.zip(gs)
-              |> Enum.reduce(env, fn {{n, lay}, g}, env ->
-                Map.put(env, n, %{grade: g, lay: lay})
-              end)
-
-            :unknown ->
-              Enum.zip(names, lays)
-              |> Enum.reduce(env, fn {n, lay}, env ->
-                Map.put(env, n, %{grade: :unknown, lay: lay})
-              end)
-          end
-
+        env1 = bind_arm(names, arm_field_lays(scrut_lay, tag, names, ctx), grades, env)
         {paths, errors} = check_tm(tm, env1, fun, ctx)
 
         gerr =
