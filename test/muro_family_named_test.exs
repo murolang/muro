@@ -449,6 +449,314 @@ defmodule Muro.FamilyNamedTest do
              ])
   end
 
+  test "held until earlier resolved names those constructors" do
+    src = """
+    data Step : Type where
+      earlier : Step
+      any : Step
+      worker : Step
+    #{@meet}
+    family rollout : slot per key of Step
+      earlier held while earlier unresolved
+      any never held
+      worker held until earlier resolved, any resolved
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    family = Enum.find(book, &(&1.kind == :family))
+    assert [%{hold: :earlier}, %{hold: :never}, %{hold: hold}] = family.rules
+    assert hold == {:named, %{while: [], until: ["earlier", "any"]}}
+    assert check(src) == :ok
+
+    assert {:error, msg} =
+             Parser.parse(
+               "family rollout : slot per key of Step\n  worker held while front unresolved, earlier unresolved\n"
+             )
+
+    assert msg =~ "expected never held"
+
+    assert {:error, msg} =
+             Parser.parse(
+               "family rollout : slot per key of Step\n  worker held until earlier unresolved\n"
+             )
+
+    assert msg =~ "expected resolved"
+
+    assert {:error, msg} =
+             Parser.parse(
+               "family rollout : slot per key of Step\n  worker held until any unresolved\n"
+             )
+
+    assert msg =~ "expected resolved"
+  end
+
+  test "Graph.withdraw does not witness until or some_resolved" do
+    g = %{
+      instances: [
+        %{id: 0, key: "a", kind: "schema", index: 0},
+        %{id: 1, key: "a", kind: "front", index: 1},
+        %{id: 2, key: "a", kind: "worker", index: 2}
+      ],
+      rules: %{
+        "schema" => :never,
+        "front" => {:named, %{while: [], until: ["schema"]}},
+        "worker" => {:named, %{while: [], until: ["front"]}}
+      }
+    }
+
+    # `front` is the held prerequisite. Withdrawing it leaves `worker` held.
+    held = {:absent, :held, :held}
+    assert Graph.openable(g, held) == []
+    assert {:ok, dropped} = Graph.withdraw(g, held, 1)
+    assert Graph.phase(dropped, 1) == :withdrawn
+    assert Graph.phase(dropped, 2) == :held
+    assert Graph.openable(g, dropped) == []
+    refute Graph.holds?(g, {:some_resolved, "a", "front"}, dropped)
+    refute Graph.holds?(g, {:resolved, "a", "front"}, dropped)
+    refute Graph.holds?(g, {:some_resolved, "a", "schema"}, dropped)
+    assert {:error, {:resolved, 1}} = Graph.withdraw(g, dropped, 1)
+
+    gave = {:gave_up, :held, :held}
+    assert Graph.holds?(g, {:some_resolved, "a", "schema"}, gave)
+    assert Graph.openable(g, gave) == [1]
+
+    resolved = {:resolved, :held, :held}
+    assert Graph.holds?(g, {:some_resolved, "a", "schema"}, resolved)
+    assert Graph.openable(g, resolved) == [1]
+
+    # A withdrawn `while` witness stops blocking and is not a fact.
+    waiting = %{
+      g
+      | rules: %{
+          "schema" => :never,
+          "front" => {:named, %{while: [], until: ["schema"]}},
+          "worker" => {:named, %{while: ["front"], until: []}}
+        }
+    }
+
+    assert {:ok, opened} = Graph.withdraw(waiting, held, 1)
+    assert Graph.phase(opened, 1) == :withdrawn
+    assert Graph.phase(opened, 2) == :held
+    assert Graph.openable(waiting, opened) == [2]
+    refute Graph.holds?(waiting, {:some_resolved, "a", "front"}, opened)
+  end
+
+  test "lock_walk agrees with Graph.withdraw on an until family" do
+    instances = [
+      %{id: 0, key: "a", kind: "schema", index: 0},
+      %{id: 1, key: "a", kind: "front", index: 1},
+      %{id: 2, key: "a", kind: "worker", index: 2}
+    ]
+
+    src =
+      kinds(~w(schema front worker)) <>
+        @meet <>
+        """
+        family chain : slot per key of Step
+          schema never held
+          front held until schema resolved
+          worker held until front resolved
+        """
+
+    {disp, _parent, _emitted} = compile!(src, Chain)
+    assert {:ok, book} = Parser.parse(src)
+    family = Enum.find(book, &(&1.kind == :family))
+    assert {:ok, search} = Graph.prepare(book, family, instances: instances)
+    assert chain_walk(disp, search, disp.new(), search.g.start, instances, %{}, []) == 90
+  end
+
+  test "waiting_on refuses a malformed row the way the dispatcher does" do
+    ear = %{command: :earlier}
+    any = %{command: :any}
+    {commands, _parent, _} = compile!(File.read!("examples/keyed-commands.muro"), Commands)
+
+    {anys, _parent, _} =
+      compile!(
+        command_src("held while any unresolved"),
+        Commands
+      )
+
+    until = %{front: :never, worker: {:named, %{while: [], until: [:front]}}}
+
+    {roll, _parent, _} =
+      compile!(
+        kinds(~w(front worker)) <>
+          @meet <>
+          """
+          family rollout : slot per key of Step
+            front never held
+            worker held until front resolved
+          """,
+        Rollout
+      )
+
+    while_only = %{front: :never, worker: {:named, %{while: [:front], until: []}}}
+
+    {whiles, _parent, _} =
+      compile!(
+        kinds(~w(front worker)) <>
+          @meet <>
+          """
+          family rollout : slot per key of Step
+            front never held
+            worker held while front unresolved
+          """,
+        Rollout
+      )
+
+    mixed = %{
+      front: :never,
+      worker: {:named, %{while: [:front], until: []}},
+      cleanup: {:named, %{while: [], until: [:worker]}}
+    }
+
+    {mixd, _parent, _} =
+      compile!(
+        kinds(~w(front worker cleanup)) <>
+          @meet <>
+          """
+          family rollout : slot per key of Step
+            front never held
+            worker held while front unresolved
+            cleanup held until worker resolved
+          """,
+        Rollout
+      )
+
+    refuse_classic(Step, ear, commands, "a", 0, 1)
+    refuse_classic(Step, any, anys, "a", 0, 1)
+
+    {st, dst} = pair_until(Step, until, roll)
+    assert Step.waiting_on(st, 1, until) == {:ok, %{kinds: [:front], ids: [0]}}
+    assert roll.waiting_on(dst, 1) == {:ok, %{kinds: [:front], ids: [0]}}
+    refute Map.has_key?(st, :kinds)
+    refuse_rows(st, until, dst, roll, "a", 0, 1)
+
+    st_kinds = Map.put(st, :kinds, %{"a" => :nope})
+    dst_kinds = put_in(dst.kinds["a"], :nope)
+    assert_state(st_kinds, until, 1, dst_kinds, roll)
+
+    st_map = Map.put(st, :kinds, :nope)
+    dst_map = %{dst | kinds: :nope}
+    assert_state(st_map, until, 1, dst_map, roll)
+
+    {wst, wdst} = pair_until(Step, while_only, whiles)
+    assert Step.waiting_on(wst, 1, while_only) == {:ok, %{kinds: [:front], ids: [0]}}
+    assert whiles.waiting_on(wdst, 1) == {:ok, %{kinds: [:front], ids: [0]}}
+    wst = Map.put(wst, :kinds, :nope)
+    wdst = Map.put(wdst, :kinds, :nope)
+    assert Step.waiting_on(wst, 1, while_only) == {:ok, %{kinds: [:front], ids: [0]}}
+    assert whiles.waiting_on(wdst, 1) == {:ok, %{kinds: [:front], ids: [0]}}
+
+    {mst, mdst} = pair_until(Step, mixed, mixd)
+    assert Step.waiting_on(mst, 1, mixed) == {:ok, %{kinds: [:front], ids: [0]}}
+    assert mixd.waiting_on(mdst, 1) == {:ok, %{kinds: [:front], ids: [0]}}
+    assert_state(Map.put(mst, :kinds, :nope), mixed, 1, %{mdst | kinds: :nope}, mixd)
+  end
+
+  defp refuse_classic(step, rules, disp, key, open_id, held_id) do
+    st = Step.empty()
+    assert {:ok, :open, ^open_id, st} = step.arrive(st, key, :command, 0, rules)
+    assert {:ok, :held, ^held_id, st} = step.arrive(st, key, :command, 1, rules)
+    dst = disp.new()
+    assert {:open, ^open_id, dst} = disp.arrive(dst, key, :command, 0)
+    assert {:held, ^held_id, dst} = disp.arrive(dst, key, :command, 1)
+    assert step.waiting_on(st, held_id, rules) == {:ok, %{kinds: [:command], ids: [open_id]}}
+    assert disp.waiting_on(dst, held_id) == {:ok, %{kinds: [:command], ids: [open_id]}}
+
+    # A bad kinds field is not read on `earlier` or `any`.
+    assert step.waiting_on(Map.put(st, :kinds, :nope), held_id, rules) ==
+             {:ok, %{kinds: [:command], ids: [open_id]}}
+
+    refuse_rows(st, rules, dst, disp, key, open_id, held_id)
+
+    assert {:ok, :open, 2, st} = step.arrive(st, "b", :command, 0, rules)
+    assert {:open, 2, dst} = disp.arrive(dst, "b", :command, 0)
+    other = poison_step(st, 2, &%{&1 | index: -1})
+    other_d = move_disp_index(dst, "b", 0, -1)
+
+    assert step.waiting_on(other, held_id, rules) ==
+             {:ok, %{kinds: [:command], ids: [open_id]}}
+
+    assert disp.waiting_on(other_d, held_id) == {:ok, %{kinds: [:command], ids: [open_id]}}
+
+    broken = %{st | rows: [:nope | st.rows]}
+    assert {:error, {:state, ^broken}} = step.waiting_on(broken, held_id, rules)
+  end
+
+  defp pair_until(step, rules, disp) do
+    st = step.empty()
+    assert {:ok, :open, 0, st} = step.arrive(st, "a", :front, 0, rules)
+    assert {:ok, :held, 1, st} = step.arrive(st, "a", :worker, 1, rules)
+    dst = disp.new()
+    assert {:open, 0, dst} = disp.arrive(dst, "a", :front, 0)
+    assert {:held, 1, dst} = disp.arrive(dst, "a", :worker, 1)
+    {st, dst}
+  end
+
+  defp refuse_rows(st, rules, dst, disp, key, open_id, held_id) do
+    for bad <- [-1, :bad, ~D[2020-01-01]] do
+      assert_state(
+        poison_step(st, open_id, &%{&1 | index: bad}),
+        rules,
+        held_id,
+        move_disp_index(dst, key, 0, bad),
+        disp
+      )
+    end
+
+    assert_state(
+      poison_step(st, open_id, &%{&1 | id: :nope}),
+      rules,
+      held_id,
+      poison_disp_id(dst, key, 0, :nope),
+      disp
+    )
+
+    assert_state(
+      poison_step(st, held_id, &%{&1 | index: -1}),
+      rules,
+      held_id,
+      move_disp_index(dst, key, 1, -1),
+      disp
+    )
+  end
+
+  defp assert_state(st, rules, id, dst, disp) do
+    assert {:error, {:state, ^st}} = Step.waiting_on(st, id, rules)
+    assert {:error, {:state, ^dst}} = disp.waiting_on(dst, id)
+  end
+
+  defp poison_step(st, id, fun) do
+    %{st | rows: Enum.map(st.rows, fn row -> if row.id == id, do: fun.(row), else: row end)}
+  end
+
+  defp move_disp_index(st, key, from, to) do
+    rows = Map.fetch!(st.by, key)
+    {row, rows} = Map.pop!(rows, from)
+    {id, _kind, _phase} = row
+    rows = Map.put(rows, to, row)
+    %{st | by: Map.put(st.by, key, rows), id: Map.put(st.id, id, {key, to})}
+  end
+
+  defp poison_disp_id(st, key, index, id) do
+    rows = Map.fetch!(st.by, key)
+    {old, kind, phase} = Map.fetch!(rows, index)
+    rows = Map.put(rows, index, {id, kind, phase})
+    ids = st.id |> Map.delete(old) |> Map.put(id, {key, index})
+    %{st | by: Map.put(st.by, key, rows), id: ids}
+  end
+
+  defp command_src(rule) do
+    """
+    data Command : Type where
+      command : Command
+    #{@meet}
+    family commands : slot per key of Command
+      command #{rule}
+    """
+  end
+
   defp kinds(names) do
     ctors = Enum.map_join(names, "\n", &"  #{&1} : Step")
 
@@ -636,6 +944,134 @@ defmodule Muro.FamilyNamedTest do
     case disp.skip_below(dst, index) do
       {:ok, dst} -> {dst, :ok}
       {:error, reason} -> {dst, {:error, reason}}
+    end
+  end
+
+  # One dispatcher step at a time, matched on the graph. A withdrawal is
+  # Graph.withdraw. The phase is :withdrawn, so it does not witness
+  # some_resolved and the dispatcher's kinds map is unchanged.
+  defp chain_walk(disp, search, dst, gst, remaining, live, trace) do
+    g = search.g
+
+    arrived =
+      Enum.reduce(remaining, 0, fn inst, acc ->
+        kind = String.to_atom(inst.kind)
+        assert {phase, id, dst2} = disp.arrive(dst, inst.key, kind, inst.index)
+        tag = if phase == :open, do: {:open, inst.id}, else: {:hold, inst.id}
+        gst2 = chain_step!(search, gst, tag, trace)
+        left = Enum.reject(remaining, &(&1.id == inst.id))
+        step = {:arrive, inst.key, kind, inst.index, phase}
+        acc + chain_walk(disp, search, dst2, gst2, left, Map.put(live, id, inst), [step | trace])
+      end)
+
+    finished =
+      Enum.reduce(live, 0, fn {id, inst}, acc ->
+        {op, dst2, released, gst1} =
+          case Graph.phase(gst, inst.id) do
+            :held ->
+              before = Map.get(dst, :kinds, %{})
+              assert {:error, {:held, ^id}} = disp.resolved(dst, id)
+              assert {:ok, released, dst2} = disp.withdraw(dst, id)
+              assert {:ok, gst1} = Graph.withdraw(g, gst, inst.id)
+              assert Graph.phase(gst1, inst.id) == :withdrawn
+              assert Map.get(dst2, :kinds, %{}) == before
+
+              others =
+                Enum.any?(g.instances, fn other ->
+                  other.id != inst.id and other.key == inst.key and other.kind == inst.kind and
+                    Graph.phase(gst1, other.id) in [:resolved, :gave_up]
+                end)
+
+              assert Graph.holds?(g, {:some_resolved, inst.key, inst.kind}, gst1) == others
+              {:withdraw, dst2, released, gst1}
+
+            {:run, _, _, _} ->
+              assert {:error, {:opened, ^id}} = disp.withdraw(dst, id)
+              assert {:error, {:opened, _}} = Graph.withdraw(g, gst, inst.id)
+              assert {:ok, released, dst2} = disp.resolved(dst, id)
+              {:resolved, dst2, released, chain_resolve!(search, gst, inst.id, trace)}
+          end
+
+        trace = [{op, id, released} | trace]
+        gst2 = chain_release!(search, gst1, released, live, trace)
+        assert {:error, {:resolved, ^id}} = disp.withdraw(dst2, id)
+        assert {:error, {:resolved, _}} = Graph.withdraw(g, gst2, inst.id)
+        acc + chain_walk(disp, search, dst2, gst2, remaining, Map.delete(live, id), trace)
+      end)
+
+    max(arrived + finished, 1)
+  end
+
+  defp chain_release!(search, gst, released, live, trace) do
+    ids =
+      Enum.map(released, fn {id, key, kind} ->
+        inst = Map.fetch!(live, id)
+        assert {inst.key, inst.kind} == {key, Atom.to_string(kind)}
+        inst
+      end)
+
+    opened =
+      ids
+      |> Enum.sort_by(& &1.index)
+      |> Enum.reduce(gst, fn inst, st ->
+        assert inst.id in Graph.openable(search.g, st),
+               "dispatcher opened #{inspect(inst)} the graph holds after #{inspect(Enum.reverse(trace))}"
+
+        chain_step!(search, st, {:open, inst.id}, trace)
+      end)
+
+    assert Graph.openable(search.g, opened) == [],
+           "graph can still open #{inspect(Graph.openable(search.g, opened))} after #{inspect(Enum.reverse(trace))}"
+
+    opened
+  end
+
+  defp chain_resolve!(search, gst, gid, trace) do
+    chain_resolve_bfs(search, gid, MapSet.new(), [gst]) ||
+      flunk("resolve of #{gid} is not a graph run after #{inspect(Enum.reverse(trace))}")
+  end
+
+  defp chain_resolve_bfs(_search, _gid, _seen, []), do: nil
+
+  defp chain_resolve_bfs(search, gid, seen, [state | rest]) do
+    if MapSet.member?(seen, state) do
+      chain_resolve_bfs(search, gid, seen, rest)
+    else
+      steps = chain_steps(search, state)
+
+      case Enum.find(steps, fn {tag, _} -> tag in [{:resolve, gid}, {:give_up, gid}] end) do
+        {_tag, dest} ->
+          dest
+
+        nil ->
+          more =
+            for {tag, dest} <- steps,
+                match?({:meet, ^gid, _}, tag) or tag == {:retry, gid},
+                do: dest
+
+          chain_resolve_bfs(search, gid, MapSet.put(seen, state), rest ++ more)
+      end
+    end
+  end
+
+  defp chain_step!(search, state, tag, trace) do
+    steps = chain_steps(search, state)
+
+    case Enum.find(steps, fn {t, _} -> t == tag end) do
+      {_, dest} ->
+        dest
+
+      nil ->
+        flunk(
+          "graph has no #{inspect(tag)} after #{inspect(Enum.reverse(trace))}; edges #{inspect(Enum.map(steps, &elem(&1, 0)))}"
+        )
+    end
+  end
+
+  defp chain_steps(search, state) do
+    case Map.fetch(search.edges, state) do
+      {:ok, steps} -> steps
+      :error -> Graph.edges(search.g, state)
     end
   end
 end

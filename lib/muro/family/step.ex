@@ -387,8 +387,10 @@ defmodule Muro.Family.Step do
   sorted by creation index, then id. `{:error, {:opened, id}}` when the
   row is open. `{:error, {:unknown, id}}` when the id is not live,
   including one that has left. `{:error, {:state, state}}` when `state`
-  is not a step state, or a held row has no blocker this function can
-  name. The call does not raise.
+  is not a step state, a held row has no blocker this function can
+  name, a row of that key has an index or id that is not a non-negative
+  integer, or, on a family with an `until` clause, that key's kinds
+  entry is not a map. The call does not raise.
   """
   def waiting_on(state, id, rules) when is_map(state) and is_map(rules) do
     with {:ok, _floor} <- take_floor(state),
@@ -972,19 +974,27 @@ defmodule Muro.Family.Step do
     end)
   end
 
+  # A row of this key that is not a live open or held row, or whose
+  # index or id is not a non-negative integer, is the dispatcher's
+  # `:bad`. Another key is not scanned. A row that is not a row at all
+  # is a bad step state.
   defp explain_held(state, rows, row, rules) do
-    case hold_of(rules, row.kind) do
-      {:ok, :earlier} ->
-        pack_hits(state, classic_hits(rows, row, :earlier))
+    if wait_row?(row) do
+      case hold_of(rules, row.kind) do
+        {:ok, :earlier} ->
+          pack_hits(state, classic_hits(rows, row, :earlier))
 
-      {:ok, :any} ->
-        pack_hits(state, classic_hits(rows, row, :any))
+        {:ok, :any} ->
+          pack_hits(state, classic_hits(rows, row, :any))
 
-      {:ok, {:named, spec}} ->
-        pack_hits(state, named_hits(state, rows, row, spec))
+        {:ok, {:named, spec}} ->
+          pack_hits(state, named_hits(state, rows, row, spec, rules))
 
-      _ ->
-        {:error, {:state, state}}
+        _ ->
+          {:error, {:state, state}}
+      end
+    else
+      {:error, {:state, state}}
     end
   end
 
@@ -999,22 +1009,18 @@ defmodule Muro.Family.Step do
   end
 
   defp classic_hits(rows, %{key: key, index: index}, mode) do
-    case Enum.reduce_while(rows, [], fn row, acc ->
-           cond do
-             not match?(%{key: _, index: _, id: _, kind: _, phase: _}, row) ->
-               {:halt, :bad}
-
-             row.key == key and blocks_classic?(row, index, mode) ->
-               {:cont, [{row.index, row.id, row.kind} | acc]}
-
-             true ->
-               {:cont, acc}
-           end
-         end) do
+    case scan_key(rows, key) do
       :bad ->
         :bad
 
-      hits ->
+      {:ok, key_rows} ->
+        hits =
+          Enum.flat_map(key_rows, fn row ->
+            if blocks_classic?(row, index, mode),
+              do: [{row.index, row.id, row.kind}],
+              else: []
+          end)
+
         hits = Enum.sort_by(hits, fn {ix, id, _kind} -> {ix, id} end)
         kinds = hits |> Enum.map(fn {_ix, _id, kind} -> kind end) |> Enum.uniq()
         ids = Enum.map(hits, fn {_ix, id, _kind} -> id end)
@@ -1022,12 +1028,46 @@ defmodule Muro.Family.Step do
     end
   end
 
-  defp blocks_classic?(row, index, :earlier) do
-    row.index < index and row.phase in [:open, :held]
+  defp blocks_classic?(%{index: ix, phase: phase}, index, :earlier)
+       when is_integer(ix) and is_integer(index) do
+    ix < index and phase in [:open, :held]
   end
 
-  defp blocks_classic?(row, index, :any) do
-    row.index != index and row.phase == :open
+  defp blocks_classic?(%{index: ix, phase: phase}, index, :any)
+       when is_integer(ix) and is_integer(index) do
+    ix != index and phase == :open
+  end
+
+  defp blocks_classic?(_row, _index, _mode), do: false
+
+  defp wait_row?(%{index: ix, id: id, kind: kind, phase: phase})
+       when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and
+              phase in [:open, :held],
+       do: true
+
+  defp wait_row?(_), do: false
+
+  # Halt on a row that is not a row, and on a same-key row the
+  # dispatcher would refuse. Another key stays out of the comparison.
+  defp scan_key(rows, key) do
+    case Enum.reduce_while(rows, [], fn row, acc ->
+           cond do
+             not row_shape?(row) ->
+               {:halt, :bad}
+
+             row.key == key and not wait_row?(row) ->
+               {:halt, :bad}
+
+             row.key == key ->
+               {:cont, [row | acc]}
+
+             true ->
+               {:cont, acc}
+           end
+         end) do
+      :bad -> :bad
+      acc -> {:ok, acc}
+    end
   end
 
   defp clear_key(state, key) do
@@ -1061,51 +1101,106 @@ defmodule Muro.Family.Step do
     end
   end
 
-  defp named_hits(state, rows, row, %{while: while, until: until}) do
-    if Enum.all?(rows, &row_shape?/1) do
-      facts = kind_facts(state, row.key)
+  # While kinds, then until kinds. A kind named in both lists appears
+  # once, from the while pass. A family with no `until` clause does not
+  # read `:kinds`. One with an `until` clause reads it even when this
+  # row's until list is empty. A missing `:kinds` key is no facts. A
+  # kinds value that is not a map, or a key whose entry is not a map,
+  # is the dispatcher's `:bad`.
+  defp named_hits(state, rows, row, %{while: while, until: until}, rules) do
+    case scan_key(rows, row.key) do
+      :bad ->
+        :bad
 
-      {kinds, ids} =
-        Enum.reduce(while ++ until, {[], []}, &block_kind(&1, &2, while, until, facts, rows, row))
+      {:ok, key_rows} ->
+        {kinds, pairs} = gather_while(key_rows, while)
 
-      ids = ids |> Enum.sort() |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
-      {Enum.reverse(kinds), ids}
-    else
-      :bad
+        if until_family?(rules) do
+          add_until_hits(state, row.key, key_rows, until, kinds, pairs)
+        else
+          pack_named(kinds, pairs)
+        end
     end
   end
 
-  defp block_kind(kind, {kinds, ids}, while, until, facts, rows, row) do
-    cond do
-      kind in kinds ->
-        {kinds, ids}
+  defp gather_while(rows, kinds) do
+    Enum.reduce(kinds, {[], []}, fn kind, {acc, pairs} ->
+      case live_pairs(rows, kind) do
+        [] -> {acc, pairs}
+        hits -> {acc ++ [kind], pairs ++ hits}
+      end
+    end)
+  end
 
-      kind in while and kind_live?(rows, row.key, kind) ->
-        {[kind | kinds], ids ++ live_ids(rows, row.key, kind)}
+  defp live_pairs(rows, want) do
+    rows
+    |> Enum.flat_map(fn
+      %{kind: ^want, phase: phase, index: ix, id: id} when phase in [:open, :held] ->
+        [{ix, id}]
 
-      kind in until and not Map.has_key?(facts, kind) ->
-        {[kind | kinds], ids ++ live_ids(rows, row.key, kind)}
+      _ ->
+        []
+    end)
+    |> Enum.sort()
+  end
 
-      true ->
-        {kinds, ids}
+  defp add_until_hits(state, key, rows, until, kinds, pairs) do
+    case kinds_entry(state, key) do
+      :bad ->
+        :bad
+
+      {:ok, facts} ->
+        {kinds, pairs} =
+          Enum.reduce(until, {kinds, pairs}, fn kind, {kinds, pairs} ->
+            if Map.has_key?(facts, kind) or kind in kinds do
+              {kinds, pairs}
+            else
+              {kinds ++ [kind], pairs ++ live_pairs(rows, kind)}
+            end
+          end)
+
+        pack_named(kinds, pairs)
     end
+  end
+
+  defp pack_named(kinds, pairs) do
+    ids =
+      pairs
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(fn {_ix, id} -> id end)
+
+    {kinds, ids}
+  end
+
+  # The emitted `kinds_entry`. Missing `:kinds` is `%{}`. A non-map is
+  # `:bad`, and so is a non-map entry for this key. `kind_facts/2` is
+  # the invariant path and still treats a bad entry as no facts.
+  defp kinds_entry(state, key) do
+    case Map.fetch(state, :kinds) do
+      :error ->
+        {:ok, %{}}
+
+      {:ok, kinds} when is_map(kinds) ->
+        case Map.get(kinds, key, %{}) do
+          got when is_map(got) -> {:ok, got}
+          _ -> :bad
+        end
+
+      _ ->
+        :bad
+    end
+  end
+
+  defp until_family?(rules) do
+    Enum.any?(rules, fn
+      {_ctor, {:named, %{until: [_ | _]}}} -> true
+      _ -> false
+    end)
   end
 
   defp row_shape?(%{key: _, index: _, id: _, kind: _, phase: _}), do: true
   defp row_shape?(_), do: false
-
-  defp live_ids(rows, key, kind) do
-    rows
-    |> Enum.filter(fn
-      %{key: ^key, kind: ^kind, phase: phase, index: ix, id: id}
-      when phase in [:open, :held] and is_integer(ix) and is_integer(id) ->
-        true
-
-      _ ->
-        false
-    end)
-    |> Enum.map(fn row -> {row.index, row.id} end)
-  end
 
   defp resolved_any?(rows, rules) do
     Enum.all?(rows, fn opened ->

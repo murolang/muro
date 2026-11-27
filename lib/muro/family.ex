@@ -23,8 +23,10 @@ defmodule Muro.Family do
 
   @doc """
   `:ok` when the meeting is buffered and checks, the kind is closed, and
-  each constructor has one rule. `{:error, message}` otherwise. The
-  message has no location and no declaration name.
+  each constructor has one rule. `{:error, message}` when the refusal
+  has no location. `{:error, loc, message}` when a named kind is not a
+  constructor, or the named holds form a cycle: `loc` is that kind's
+  token. Neither message carries the declaration name.
 
   `status` is the meeting's recorded outcome: `:absent`, `:unchecked`,
   or `:ok`.

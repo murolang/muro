@@ -113,7 +113,7 @@ defmodule Muro.FamilyMoreTest do
     assert Graph.holds?(g, prop, {:held, :held, :absent})
   end
 
-  test "withdraw resolves a held instance without opening it, and is not a counted step" do
+  test "withdraw drops a held instance without opening it, and is not a counted step" do
     instances = [
       %{id: 0, key: "a", kind: "command", index: 0},
       %{id: 1, key: "a", kind: "command", index: 1},
@@ -135,10 +135,20 @@ defmodule Muro.FamilyMoreTest do
     blocked = {:resolved, :held, :held}
     assert Graph.openable(g, blocked) == [1]
     assert {:ok, dropped} = Graph.withdraw(g, blocked, 1)
-    assert Graph.phase(dropped, 1) == :resolved
+    assert Graph.phase(dropped, 1) == :withdrawn
     assert Graph.phase(dropped, 2) == :held
     assert Graph.openable(g, dropped) == [2]
     assert {:error, {:resolved, 1}} = Graph.withdraw(g, dropped, 1)
+
+    # A withdrawn earlier row stops blocking and is not resolved.
+    run = fn mask -> {:run, g.init, 0, mask} end
+    prop = {:earlier_resolved, "a", "command"}
+    refute Graph.holds?(g, prop, {:withdrawn, run.(3), :absent})
+    assert Graph.holds?(g, prop, {:resolved, run.(3), :absent})
+    refute Graph.holds?(g, {:resolved, "a", "command"}, {:withdrawn, :absent, :absent})
+    assert Graph.holds?(g, {:resolved, "a", "command"}, {:gave_up, :absent, :absent})
+    refute Graph.holds?(g, {:some_resolved, "a", "command"}, {:withdrawn, :absent, :absent})
+    assert Graph.holds?(g, {:some_resolved, "a", "command"}, {:gave_up, :absent, :absent})
 
     assert {:error, {:unknown, 0}} = Graph.withdraw(g, {:absent, :absent, :absent}, 0)
     assert {:error, {:unknown, 9}} = Graph.withdraw(g, {:absent, :absent, :absent}, 9)

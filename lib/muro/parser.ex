@@ -1529,8 +1529,9 @@ defmodule Muro.Parser do
   end
 
   # `while earlier` and `while any` stay the old complete rules. A comma
-  # after either is not a named-kind list. A kind named `earlier` cannot
-  # be a `while` target, because that spelling is the old rule.
+  # after either is not a named-kind list. A kind named `earlier` or
+  # `any` cannot be a `while` target, because that spelling is the old
+  # rule. An `until` rule may name those constructors.
   defp hold_body(s) do
     s = skip(s)
 
@@ -1575,7 +1576,7 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      word_kw?(s, "earlier") or word_kw?(s, "any") ->
+      mode == :while and (word_kw?(s, "earlier") or word_kw?(s, "any")) ->
         {:error, err(s, hold_rule())}
 
       true ->
