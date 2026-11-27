@@ -76,7 +76,7 @@ defmodule Muro.Emit.Asm do
   end
 
   defp emit_fun(fun, names, l) do
-    env = Enum.with_index(fun.params, fn {pname, _lay}, i -> {pname, i} end)
+    env = Enum.with_index(fun.params, fn {pname, _lay, _g}, i -> {pname, i} end)
     st = %{env: env, n: length(env), l: l, names: names}
 
     with {:ok, body, st} <- emit_tm(fun.body, st) do
@@ -131,7 +131,7 @@ defmodule Muro.Emit.Asm do
     end
   end
 
-  defp emit_tm({:let, name, :nat, val, body}, st) do
+  defp emit_tm({:let, name, :nat, _g, val, body}, st) do
     outer = st.env
 
     with {:ok, vlines, st} <- emit_tm(val, st) do
@@ -244,7 +244,7 @@ defmodule Muro.Emit.Asm do
   # the C, Rust, and Zig image. This backend keeps the refusal.
   defp string_image?(funs) do
     Enum.any?(funs, fn fun ->
-      string_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> string_lay?(lay) end) or
+      string_lay?(fun.ret) or Enum.any?(fun.params, fn p -> string_lay?(Muro.IR.param_lay(p)) end) or
         string_tm?(fun.body)
     end)
   end
@@ -267,7 +267,7 @@ defmodule Muro.Emit.Asm do
   defp scope_ok?(funs) do
     Enum.all?(funs, fn fun ->
       fun.ret == :nat and length(fun.params) <= 4 and
-        Enum.all?(fun.params, fn {_name, lay} -> lay == :nat end) and
+        Enum.all?(fun.params, fn p -> Muro.IR.param_lay(p) == :nat end) and
         nat_tm?(fun.body)
     end)
   end
@@ -281,7 +281,7 @@ defmodule Muro.Emit.Asm do
     Enum.all?(args, &nat_tm?/1)
   end
 
-  defp nat_tm?({:let, name, :nat, val, body}) when is_binary(name) do
+  defp nat_tm?({:let, name, :nat, _g, val, body}) when is_binary(name) do
     nat_tm?(val) and nat_tm?(body)
   end
 

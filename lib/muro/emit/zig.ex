@@ -129,7 +129,7 @@ defmodule Muro.Emit.Zig do
                 source: fun.name,
                 name: Map.fetch!(st.names, fun.name),
                 layout: fun.ret,
-                param_layouts: Enum.map(fun.params, fn {_n, lay} -> lay end),
+                param_layouts: Enum.map(fun.params, &Muro.IR.param_lay/1),
                 params: Enum.map(params, fn {_src, rn, _lay} -> rn end),
                 ret: "!" <> pty(fun.ret, st1),
                 export: fun.export,
@@ -260,7 +260,7 @@ defmodule Muro.Emit.Zig do
     scope0 = st0.globals |> Name.open() |> Name.see(al())
 
     {params, scope} =
-      Enum.reduce(fun.params, {[], scope0}, fn {pname, lay}, {acc, scope} ->
+      Enum.reduce(fun.params, {[], scope0}, fn {pname, lay, _g}, {acc, scope} ->
         {rn, scope} = Name.bind(spell(pname), scope)
         {acc ++ [{pname, rn, lay}], scope}
       end)
@@ -295,7 +295,7 @@ defmodule Muro.Emit.Zig do
     scope0 = st0.globals |> Name.open() |> Name.see(al())
 
     {params, scope} =
-      Enum.reduce(fun.params, {[], scope0}, fn {pname, lay}, {acc, scope} ->
+      Enum.reduce(fun.params, {[], scope0}, fn {pname, lay, _g}, {acc, scope} ->
         {rn, scope} = Name.bind(spell(pname), scope)
         {acc ++ [{pname, rn, lay}], scope}
       end)
@@ -357,7 +357,7 @@ defmodule Muro.Emit.Zig do
 
   defp bind_caps(body, caps, later, info, st) do
     used? =
-      Enum.with_index(caps, fn {name, _lay}, i ->
+      Enum.with_index(caps, fn {name, _lay, _g}, i ->
         binder_used?(body, name, Enum.drop(caps, i + 1) ++ later)
       end)
 
@@ -370,11 +370,11 @@ defmodule Muro.Emit.Zig do
         |> Enum.zip()
         |> Enum.with_index()
         |> Enum.reduce({[], [], st}, fn
-          {{{name, lay}, true}, i}, {consts, env, st} ->
+          {{{name, lay, _g}, true}, i}, {consts, env, st} ->
             {rn, st} = local(st, spell(name))
             {consts ++ ["const #{rn} = #{e}.#{g("f", i)};"], [{name, rn, lay} | env], st}
 
-          {{{_name, _lay}, false}, _i}, acc ->
+          {{{_name, _lay, _g}, false}, _i}, acc ->
             acc
         end)
 
@@ -386,7 +386,7 @@ defmodule Muro.Emit.Zig do
 
   defp bind_seed(_body, [], st), do: {["_ = #{g("seed")};"], [], st}
 
-  defp bind_seed(body, [{name, lay} | rest], st) do
+  defp bind_seed(body, [{name, lay, _g} | rest], st) do
     if binder_used?(body, name, rest) do
       {rn, st} = local(st, spell(name))
 
@@ -438,7 +438,7 @@ defmodule Muro.Emit.Zig do
 
       {:ok, fun} ->
         with {:ok, {lines, exprs, lays, effs, st}} <- emit_list(args, env, st) do
-          params = Enum.map(fun.params, fn {_n, lay} -> lay end)
+          params = Enum.map(fun.params, &Muro.IR.param_lay/1)
 
           if length(params) != length(exprs) do
             {:error, "c:unsupported"}
@@ -503,7 +503,7 @@ defmodule Muro.Emit.Zig do
   # An erased constructor field, marked `:erased`. The placeholder is
   # unit, and the payload is ignored. A zero passed under a spec alias
   # is bound at the argument's layout, so this clause does not see it.
-  defp emit_tm({:let, name, :erased, _val, body}, env, st) do
+  defp emit_tm({:let, name, :erased, _g, _val, body}, env, st) do
     if uses?(body, name) do
       {rn, st} = local(st, spell(name))
 
@@ -515,7 +515,7 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  defp emit_tm({:let, _name, _lay, val, :abort}, env, st) do
+  defp emit_tm({:let, _name, _lay, _g, val, :abort}, env, st) do
     with {:ok, {lines, ex, _lay, eff, st}} <- emit_tm(val, env, st) do
       {lines, ex, eff, st} = materialize(lines, ex, eff, st)
       {rn, st} = local(st, g("s"))
@@ -524,7 +524,7 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  defp emit_tm({:let, name, lay, val, body}, env, st) do
+  defp emit_tm({:let, name, lay, _g, val, body}, env, st) do
     with {:ok, {vlines, vex, vlay, veff, st}} <- emit_tm(val, env, st) do
       {vlines, vex, veff, st} = materialize(vlines, vex, veff, st)
       {rn, st} = local(st, spell(name))
@@ -1696,7 +1696,7 @@ defmodule Muro.Emit.Zig do
             true
         end
 
-      {:let, _, _, v, b} ->
+      {:let, _, _, _, v, b} ->
         mentions_alloc?(v, st) or mentions_alloc?(b, st)
 
       {:letp, _, _, e, b} ->
@@ -1721,7 +1721,7 @@ defmodule Muro.Emit.Zig do
 
   defp uses?({:var, n}, name, bound), do: n == name and not MapSet.member?(bound, name)
 
-  defp uses?({:let, n, _, v, b}, name, bound) do
+  defp uses?({:let, n, _, _, v, b}, name, bound) do
     uses?(v, name, bound) or uses?(b, name, MapSet.put(bound, n))
   end
 
@@ -2052,7 +2052,7 @@ defmodule Muro.Emit.Zig do
             fun.params
             |> Enum.take(n)
             |> Enum.with_index()
-            |> Enum.map_join("\n", fn {{_name, lay}, i} ->
+            |> Enum.map_join("\n", fn {{_name, lay, _g}, i} ->
               "    #{g("f", i)}: #{pty(lay, st)},"
             end)
 
@@ -2117,7 +2117,7 @@ defmodule Muro.Emit.Zig do
 
   defp lays?(funs, pred) do
     Enum.any?(funs, fn fun ->
-      pred.(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> pred.(lay) end)
+      pred.(fun.ret) or Enum.any?(fun.params, fn p -> pred.(Muro.IR.param_lay(p)) end)
     end)
   end
 

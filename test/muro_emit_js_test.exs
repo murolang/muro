@@ -322,7 +322,7 @@ defmodule Muro.EmitJSTest do
     assert {:ok, closed} = Muro.IR.elaborate(book, closures: true)
 
     for funs <- [plain, closed] do
-      assert fun_body(funs, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
+      assert fun_body(funs, "one") == {:let, "r", :nat, :affine, :ze, {:su, {:var, "r"}}}
       assert erased_lets(fun_body(funs, "live")) == ["e"]
       assert erased_lets(fun_body(funs, "steps")) == ["e"]
       refute opaque_zero?(fun_body(funs, "one"))
@@ -1736,7 +1736,14 @@ defmodule Muro.EmitJSTest do
   defp fun_body(funs, name), do: Enum.find(funs, &(&1.name == name)).body
 
   defp erased_lets(tm), do: erased_lets(tm, [])
+
+  defp erased_lets({:let, name, :erased, _g, _val, body}, acc),
+    do: erased_lets(body, [name | acc])
+
   defp erased_lets({:let, name, :erased, _val, body}, acc), do: erased_lets(body, [name | acc])
+
+  defp erased_lets({:let, _name, _lay, _g, val, body}, acc),
+    do: erased_lets(body, erased_lets(val, acc))
 
   defp erased_lets({:let, _name, _lay, val, body}, acc),
     do: erased_lets(body, erased_lets(val, acc))
@@ -1748,6 +1755,7 @@ defmodule Muro.EmitJSTest do
   defp erased_lets(_t, acc), do: acc
 
   defp opaque_zero?({:let, _, :opaque, :ze, _}), do: true
+  defp opaque_zero?({:let, _, :opaque, _, :ze, _}), do: true
   defp opaque_zero?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&opaque_zero?/1)
   defp opaque_zero?(t) when is_list(t), do: Enum.any?(t, &opaque_zero?/1)
   defp opaque_zero?(_), do: false
