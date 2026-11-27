@@ -324,6 +324,8 @@ The refusal is the whole module. A book that does not check is refused by the ch
 | `wrong number of session arguments` | the call's arity is not the declaration's |
 | `dual cycle` | two sessions that are each other's dual with no body |
 
+A book with a choreography and no session emits the monitor alone here. `Muro.Emit.Fsm.image/3`, the session image the C and JavaScript session emitters read, still answers `<file> has no session to emit` for that book: the monitor is Elixir only, in `--backend fsm`.
+
 `examples/talk.muro` and `examples/seated.muro` are refused because the protocol is a `seen` of a talk. A `seen` of a choreography is the projected session: `examples/two-phase-commit.muro` and `examples/release-plan.muro` emit completely, with one monitor each. `examples/meet.muro`, `examples/indexed.muro`, and `examples/recursive.muro` emit completely, and so do the other session examples whose protocols are the forms above. `--node` with this backend is refused (`--node writes the placement calls`). `--imports` with this backend is refused.
 
 ## Manifest

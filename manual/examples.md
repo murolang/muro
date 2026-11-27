@@ -159,7 +159,7 @@ See [Terms](language.md#session).
 
 ## two-phase-commit.muro
 
-One choreography, and each role has a session with each other role. The choreography is spec. Elixir, Rust, Zig, and assembly omit it. C refuses the book, because `seen` is not a state machine, and the run is not written.
+One choreography, and each role has a session with each other role. The choreography is spec. Elixir, Rust, Zig, and assembly omit it. C and JavaScript write the run and the session image of each `seen` session, a projection in the session vocabulary. `--backend fsm` emits those sessions and one monitor for the choreography.
 
 ```
 choreography two-phase-commit
