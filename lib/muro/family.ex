@@ -13,6 +13,9 @@ defmodule Muro.Family do
   `agda/Muro/Family.agda`. `Muro.Family.Step` is that step. The
   generator, the meeting steps, one retry then give-up, `fail stop`,
   and `resolved k init` are not.
+
+  A family with no kind, `family rollout : plan per key`, ranges over a
+  choreography. `Muro.ChoreoFamily` checks it and decides its formulas.
   """
 
   @run_msg "temporal formulas do not mention run definitions"
@@ -25,8 +28,13 @@ defmodule Muro.Family do
   `status` is the meeting's recorded outcome: `:absent`, `:unchecked`,
   or `:ok`.
   """
+  def check(book, %{key: nil} = family, _status) when is_list(book) do
+    Muro.ChoreoFamily.check(book, family)
+  end
+
   def check(book, %{meeting: meeting, key: key, rules: rules}, status) when is_list(book) do
-    with :ok <- meeting_ok(meeting, status),
+    with :ok <- Muro.ChoreoFamily.not_choreography(book, meeting),
+         :ok <- meeting_ok(meeting, status),
          :ok <- buffered(book, meeting),
          {:ok, data} <- closed_kind(book, key) do
       rules_ok(data, rules)
@@ -44,6 +52,8 @@ defmodule Muro.Family do
   A family marked `may redeliver` appends that mark. The mark widens
   the graph. It is not a contract a formula depends on.
   """
+  def line(%{key: nil} = family), do: Muro.ChoreoFamily.line(family)
+
   def line(%{name: name, meeting: meeting, key: key} = family) do
     mark = if Map.get(family, :redeliver, false), do: " may redeliver", else: ""
     "family #{name}: #{meeting} per key of #{key}#{mark}"
@@ -69,6 +79,10 @@ defmodule Muro.Family do
 
   def judge_formula(book, family, formula, status) when is_list(book) do
     judge_formula(book, family, formula, status, :auto)
+  end
+
+  def judge_formula(book, %{key: nil} = family, formula, :ok, _prep) when is_list(book) do
+    Muro.ChoreoFamily.judge_formula(book, family, formula)
   end
 
   def judge_formula(book, %{key: key} = family, formula, :ok, prep) when is_list(book) do
@@ -112,6 +126,9 @@ defmodule Muro.Family do
   defp leads_to?(_), do: false
 
   @doc false
+  def needs_graph?(book, %{key: nil}, formulas) when is_list(book) and is_list(formulas),
+    do: false
+
   def needs_graph?(book, %{key: key}, formulas) when is_list(book) and is_list(formulas) do
     case closed_kind(book, key) do
       {:ok, data} ->

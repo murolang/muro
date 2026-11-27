@@ -21,7 +21,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Either and Dec](https://muro-lang.dev/docs/either): Disjoint union and decisions. LEM is an evidence axiom.
 - [Machine numbers](https://muro-lang.dev/docs/machine): U8, U32, U64, and I64 are fixed-width residues. F32 and Tensor stay Nx. Nat stays Peano in the book.
 - [Emit](https://muro-lang.dev/docs/emit): What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
-- [State machines](https://muro-lang.dev/docs/fsm): Each session endpoint is a pure state machine, a keyed family is one dispatcher, and a choreography is one monitor. The transport stays with the host.
+- [State machines](https://muro-lang.dev/docs/fsm): Each session endpoint is a pure state machine, a keyed family is one dispatcher, a choreography is one monitor, and a family of a choreography is that monitor per key. The transport stays with the host.
 - [Closed equations as tests](https://muro-lang.dev/docs/exunit): A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.
 - [Pytest](https://muro-lang.dev/docs/pytest): A book's closed equations become one pytest module. The tests call a Python module the host names. A skip is a marked test and is recorded.
 - [Rust tests](https://muro-lang.dev/docs/rust-test): A book's closed equations become one Rust test file. The tests call the emitted Rust. A skip is an ignored test and is recorded.

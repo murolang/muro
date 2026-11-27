@@ -34,6 +34,12 @@ defmodule Muro.Emit.Fsm do
   share no role (`agda/Muro/ChoreoPrefix.agda`). A `seen` session of a
   choreography is the projection, and it is a session child like any
   other. A `seen` of a talk is refused.
+
+  A family of a choreography that checks is one more child, the monitor
+  replicated per key. `init/0` starts it. `step_shared/4`,
+  `step_shared/5`, and `choose_shared/3` take the shared preamble, once.
+  `step/5`, `step/6`, and `choose/4` take one key's event, and are
+  refused until the preamble is done.
   """
 
   alias Muro.{Ast, Emit, Session}
@@ -115,7 +121,12 @@ defmodule Muro.Emit.Fsm do
   defp plan(book, path, opts) do
     with {:ok, st} <- plan_sessions(book, path, opts),
          {:ok, globals} <- plan_globals(st) do
-      st = st |> Map.put(:families, ready_families(book)) |> Map.put(:globals, globals)
+      st =
+        st
+        |> Map.put(:families, ready_families(book))
+        |> Map.put(:globals, globals)
+        |> Map.put(:cfams, ready_cfams(book, globals))
+
       {:ok, st}
     end
   end
@@ -166,7 +177,7 @@ defmodule Muro.Emit.Fsm do
     end)
   end
 
-  defp plan_global(%{name: name, roles: roles, body: body} = chor, st) do
+  defp plan_global(%{name: name, body: body} = chor, st) do
     file = session_file(chor, st)
     line = line_of(chor)
     where = "#{file}:#{line} choreography #{name}"
@@ -178,7 +189,7 @@ defmodule Muro.Emit.Fsm do
       counts: %{msg: 0, choice: 0}
     }
 
-    with {:ok, _lines} <- choreo_ok(Muro.Choreo.check(name, roles, body, st.book), where),
+    with {:ok, _lines} <- choreo_ok(Muro.Choreo.check_decl(chor, st.book), where),
          {:ok, tree, _ctx} <- label_global(body, ctx) do
       {:ok, %{name: name, file: file, line: line, tree: tree, end_step: "#{where}: end"}}
     end
@@ -245,6 +256,153 @@ defmodule Muro.Emit.Fsm do
       end)
 
     mods
+  end
+
+  # ---- a family of a choreography ------------------------------------------
+  #
+  # One child per family of a choreography that checks. It reads the
+  # tree of that choreography's monitor. The preamble is the steps of
+  # that tree reached through shared steps only, named by their step.
+  defp ready_cfams(book, globals) do
+    book
+    |> Enum.filter(&(Map.get(&1, :kind) == :family and Map.get(&1, :key) == nil))
+    |> Enum.filter(&(Muro.ChoreoFamily.check(book, &1) == :ok))
+    |> Enum.flat_map(fn fam ->
+      plan = fam.meeting
+      chor = Enum.find(book, &match?(%{kind: :choreography, name: ^plan}, &1))
+
+      case Enum.find(globals, &(&1.name == fam.meeting)) do
+        nil ->
+          []
+
+        global ->
+          shared = Enum.map(Map.get(chor, :shared, []), &g_atom/1)
+          [%{name: fam.name, plan: fam.meeting, preamble: preamble_steps(global.tree, shared)}]
+      end
+    end)
+  end
+
+  defp preamble_steps({:msg, step, a, b, _l, _ty, cont}, shared) do
+    if a in shared and b in shared, do: [step | preamble_steps(cont, shared)], else: []
+  end
+
+  defp preamble_steps({:pick, step, p, arms}, shared) do
+    if p in shared do
+      [step | Enum.flat_map(arms, fn {_label, g} -> preamble_steps(g, shared) end)]
+    else
+      []
+    end
+  end
+
+  defp preamble_steps({:end, _step}, _shared), do: []
+
+  # Sessions claim first, then families, then choreographies, then
+  # families of a choreography.
+  defp cfam_mods(st) do
+    used =
+      st.sessions
+      |> Enum.map(& &1.name)
+      |> Emit.elixir_modules()
+      |> Map.values()
+      |> Kernel.++(Enum.map(family_mods(st), &elem(&1, 1)))
+      |> Kernel.++(Enum.map(global_mods(st), &elem(&1, 1)))
+      |> MapSet.new()
+
+    {mods, _} =
+      Enum.map_reduce(st.cfams, used, fn cfam, used ->
+        {mod, used} = Muro.Emit.Name.claim(Emit.elixir_alias(cfam.name), used)
+        {{cfam, mod}, used}
+      end)
+
+    mods
+  end
+
+  defp cfam_clauses(cfams) do
+    Enum.flat_map(cfams, fn {cfam, camel} ->
+      key = inspect(cfam.name)
+
+      [
+        "defmodule #{camel} do",
+        "def init",
+        "def step_shared(state, from, to, label)",
+        "def step_shared(state, from, to, label, value)",
+        "def choose_shared(state, role, label)",
+        "def step(state, key, from, to, label)",
+        "def step(state, key, from, to, label, value)",
+        "def choose(state, key, role, label)",
+        "muro_fsm_cf_expected_shared(#{key}, state)",
+        "muro_fsm_cf_expected(#{key}, state, key)",
+        "muro_fsm_cf_done?(#{key}, state, key)",
+        "muro_fsm_cf_keys(#{key}, state)",
+        "def check_trace(trace)",
+        "def check_trace(trace, opts)"
+      ]
+    end)
+  end
+
+  defp cfam_children(parent, st) do
+    st
+    |> cfam_mods()
+    |> Enum.map_join("\n\n", fn {cfam, camel} -> cfam_child(parent, camel, cfam) end)
+  end
+
+  defp cfam_child(parent, camel, %{name: name, plan: plan}) do
+    key = inspect(name)
+
+    """
+    defmodule #{camel} do
+      @moduledoc \"\"\"
+      Family `#{name}`: one run of choreography `#{plan}` per key, in the
+      order it is written. The shared preamble is `step_shared/4`,
+      `step_shared/5`, and `choose_shared/3`, once for every key. A key
+      steps with `step/5` (a Unit payload), `step/6`, and `choose/4`
+      after the preamble is done. Keys are compared with ==. The state is
+      opaque: thread it, compare it with ==, and do not depend on its shape.
+      \"\"\"
+
+      def init, do: #{parent}.muro_fsm_cf_init(#{key})
+
+      def step_shared(state, from, to, label) do
+        #{parent}.muro_fsm_cf_shared(#{key}, state, {from, to, label})
+      end
+
+      def step_shared(state, from, to, label, value) do
+        #{parent}.muro_fsm_cf_shared(#{key}, state, {from, to, label, value})
+      end
+
+      def choose_shared(state, role, label) do
+        #{parent}.muro_fsm_cf_shared(#{key}, state, {role, label})
+      end
+
+      def step(state, key, from, to, label) do
+        #{parent}.muro_fsm_cf_step(#{key}, state, key, {from, to, label})
+      end
+
+      def step(state, key, from, to, label, value) do
+        #{parent}.muro_fsm_cf_step(#{key}, state, key, {from, to, label, value})
+      end
+
+      def choose(state, key, role, label) do
+        #{parent}.muro_fsm_cf_step(#{key}, state, key, {role, label})
+      end
+
+      def expected_shared(state), do: #{parent}.muro_fsm_cf_expected_shared(#{key}, state)
+
+      def shared_done?(state), do: expected_shared(state) == :done
+
+      def expected(state, key), do: #{parent}.muro_fsm_cf_expected(#{key}, state, key)
+
+      def done?(state, key), do: #{parent}.muro_fsm_cf_done?(#{key}, state, key)
+
+      def keys(state), do: #{parent}.muro_fsm_cf_keys(#{key}, state)
+
+      def check_trace(trace), do: #{parent}.muro_fsm_cf_trace(#{key}, trace, false)
+
+      def check_trace(trace, opts) when is_list(opts) do
+        #{parent}.muro_fsm_cf_trace(#{key}, trace, Keyword.get(opts, :complete) == true)
+      end
+    end
+    """
   end
 
   defp global_clauses(globals) do
@@ -329,6 +487,7 @@ defmodule Muro.Emit.Fsm do
 
     fams = family_mods(st)
     globals = global_mods(st)
+    cfams = cfam_mods(st)
     ends = session_dispatchers(st)
 
     clauses =
@@ -365,12 +524,13 @@ defmodule Muro.Emit.Fsm do
         [inspect(module) | Map.values(aliases)]
         |> Enum.uniq()
         |> Kernel.++(Enum.map(fams, &elem(&1, 1)))
-        |> Kernel.++(Enum.map(globals, &elem(&1, 1))),
+        |> Kernel.++(Enum.map(globals, &elem(&1, 1)))
+        |> Kernel.++(Enum.map(cfams, &elem(&1, 1))),
       elixir: Emit.elixir_names(book),
       signatures: signatures,
       layouts:
         Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
-      clauses: clauses ++ family_clauses(fams) ++ global_clauses(globals)
+      clauses: clauses ++ family_clauses(fams) ++ global_clauses(globals) ++ cfam_clauses(cfams)
     }
   end
 
@@ -1419,6 +1579,8 @@ defmodule Muro.Emit.Fsm do
       #{indent(children(module, st), 2)}
 
       #{indent(global_children(inspect(module), st), 2)}
+
+      #{indent(cfam_children(inspect(module), st), 2)}
       end
       """
 
@@ -1437,6 +1599,7 @@ defmodule Muro.Emit.Fsm do
     text
     |> gate(Enum.any?(book, &Muro.Fail.marked?/1))
     |> region("choreo", st.globals != [])
+    |> region("cfam", st.cfams != [])
     |> Code.format_string!()
     |> IO.iodata_to_binary()
     |> Kernel.<>("\n")
@@ -1590,6 +1753,7 @@ defmodule Muro.Emit.Fsm do
     safe = safe_maps(decls)
     globals = Enum.map(st.globals, &{&1.name, &1.tree})
     g_ends = Enum.map(st.globals, &{&1.name, &1.end_step})
+    cfams = Enum.map(st.cfams, &{&1.name, {&1.plan, &1.preamble}})
 
     """
     @doc false
@@ -2952,6 +3116,166 @@ defmodule Muro.Emit.Fsm do
 
     #||/choreo
 
+    #||cfam
+    # A family of a choreography is one tree per key. The shared preamble
+    # is stepped once, before any key. A key that has not stepped is at
+    # the end of the preamble. The state is the rest of the preamble and
+    # the rest of each key's tree.
+    defp muro_fsm_cfams, do: :maps.from_list(#{lit(Enum.sort(cfams))})
+
+    defp muro_fsm_cf_plan(fam), do: elem(Map.fetch!(muro_fsm_cfams(), fam), 0)
+
+    @doc false
+    def muro_fsm_cf_init(fam) do
+      %{f: fam, s: Map.fetch!(muro_fsm_globals(), muro_fsm_cf_plan(fam)), k: %{}}
+    end
+
+    @doc false
+    def muro_fsm_cf_shared(fam, state, event) do
+      case muro_fsm_cf_prep(fam, state) do
+        {:ok, plan, pre, s, keys} ->
+          if muro_fsm_cf_pre?(pre, s) do
+            case muro_fsm_g_take(plan, s, event) do
+              {:ok, %{g: next}} -> {:ok, %{f: fam, s: next, k: keys}}
+              {:error, _} = err -> err
+            end
+          else
+            {:error, {:unexpected, elem(s, 1), :done, event}}
+          end
+
+        :bad ->
+          {:error, {:unexpected, muro_fsm_g_end(muro_fsm_cf_plan(fam)), :done, event}}
+      end
+    end
+
+    @doc false
+    def muro_fsm_cf_step(fam, state, key, event) do
+      case muro_fsm_cf_at(fam, state, key) do
+        {:ok, plan, s, keys, g} ->
+          case muro_fsm_g_take(plan, g, event) do
+            {:ok, %{g: next}} -> {:ok, %{f: fam, s: s, k: Map.put(keys, key, next)}}
+            {:error, reason} -> {:error, {:key, key, reason}}
+          end
+
+        {:preamble, s} ->
+          {:error, {:key, key, {:preamble, elem(s, 1), muro_fsm_g_expect(s), event}}}
+
+        :bad ->
+          plan = muro_fsm_cf_plan(fam)
+          {:error, {:key, key, {:unexpected, muro_fsm_g_end(plan), :done, event}}}
+      end
+    end
+
+    @doc false
+    def muro_fsm_cf_expected_shared(fam, state) do
+      case muro_fsm_cf_prep(fam, state) do
+        {:ok, _plan, pre, s, _keys} ->
+          if muro_fsm_cf_pre?(pre, s), do: muro_fsm_g_expect(s), else: :done
+
+        :bad ->
+          :done
+      end
+    end
+
+    @doc false
+    def muro_fsm_cf_expected(fam, state, key) do
+      case muro_fsm_cf_at(fam, state, key) do
+        {:ok, _plan, _s, _keys, g} -> muro_fsm_g_expect(g)
+        {:preamble, s} -> {:shared, muro_fsm_g_expect(s)}
+        :bad -> :done
+      end
+    end
+
+    @doc false
+    def muro_fsm_cf_done?(fam, state, key) do
+      match?({:ok, _, _, _, {:end, _}}, muro_fsm_cf_at(fam, state, key))
+    end
+
+    @doc false
+    def muro_fsm_cf_keys(fam, state) do
+      case muro_fsm_cf_prep(fam, state) do
+        {:ok, _plan, _pre, _s, keys} -> Enum.sort(Map.keys(keys))
+        :bad -> []
+      end
+    end
+
+    @doc false
+    def muro_fsm_cf_trace(fam, trace, complete?) when is_list(trace) do
+      muro_fsm_cf_walk(fam, muro_fsm_cf_init(fam), trace, 0, complete?)
+    end
+
+    def muro_fsm_cf_trace(_fam, other, _complete?), do: {:error, {:trace, other}}
+
+    defp muro_fsm_cf_walk(fam, state, [], index, true) do
+      case muro_fsm_cf_open(fam, state) do
+        nil -> :ok
+        open -> {:error, {index, open}}
+      end
+    end
+
+    defp muro_fsm_cf_walk(_fam, _state, [], _index, false), do: :ok
+
+    defp muro_fsm_cf_walk(fam, state, [event | rest], index, complete?) do
+      result =
+        case event do
+          {:shared, ev} -> muro_fsm_cf_shared(fam, state, ev)
+          {:key, key, ev} -> muro_fsm_cf_step(fam, state, key, ev)
+          other -> {:error, {:event, other}}
+        end
+
+      case result do
+        {:ok, next} -> muro_fsm_cf_walk(fam, next, rest, index + 1, complete?)
+        {:error, reason} -> {:error, {index, reason}}
+      end
+    end
+
+    # The first part of the run that has not reached its end: the
+    # preamble, then each key that has stepped, in key order.
+    defp muro_fsm_cf_open(fam, state) do
+      {:ok, _plan, pre, s, keys} = muro_fsm_cf_prep(fam, state)
+
+      if muro_fsm_cf_pre?(pre, s) do
+        {:incomplete, :shared, elem(s, 1), muro_fsm_g_expect(s)}
+      else
+        keys
+        |> Enum.sort()
+        |> Enum.find_value(fn
+          {_key, {:end, _}} -> nil
+          {key, g} -> {:incomplete, {:key, key}, elem(g, 1), muro_fsm_g_expect(g)}
+        end)
+      end
+    end
+
+    defp muro_fsm_cf_at(fam, state, key) do
+      case muro_fsm_cf_prep(fam, state) do
+        {:ok, plan, pre, s, keys} ->
+          g = Map.get(keys, key, s)
+
+          cond do
+            muro_fsm_cf_pre?(pre, s) -> {:preamble, s}
+            muro_fsm_g_node?(g) -> {:ok, plan, s, keys, g}
+            true -> :bad
+          end
+
+        :bad ->
+          :bad
+      end
+    end
+
+    defp muro_fsm_cf_prep(fam, %{f: fam, s: s, k: keys} = state)
+         when map_size(state) == 3 and is_map(keys) do
+      case Map.fetch(muro_fsm_cfams(), fam) do
+        {:ok, {plan, pre}} -> if muro_fsm_g_node?(s), do: {:ok, plan, pre, s, keys}, else: :bad
+        :error -> :bad
+      end
+    end
+
+    defp muro_fsm_cf_prep(_fam, _state), do: :bad
+
+    defp muro_fsm_cf_pre?(pre, g), do: :lists.member(elem(g, 1), pre)
+
+    #||/cfam
+
     defp muro_fsm_source_to_safe, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(safe.to)))})
 
     defp muro_fsm_safe_to_source, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(safe.from)))})
@@ -3429,7 +3753,7 @@ defmodule Muro.Emit.Fsm do
   # tuple, and the call does not raise.
   defp ready_families(book) do
     book
-    |> Enum.filter(&(Map.get(&1, :kind) == :family))
+    |> Enum.filter(&(Map.get(&1, :kind) == :family and Map.get(&1, :key) != nil))
     |> Enum.filter(&family_ready?(book, &1))
     |> Enum.map(fn family ->
       family

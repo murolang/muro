@@ -201,6 +201,30 @@ prefix front-first : plan :=
 
 `front-first` is a legal prefix in the written order. Starting with `release -> worker : deploy` is refused: `not enabled at start, expected release -> front : deploy, wrote release -> worker : deploy`. `mix muro.emit --backend fsm examples/release-plan.muro` emits `ReleasePlanFsm.Rf`, `ReleasePlanFsm.Rw`, and the monitor `ReleasePlanFsm.Plan`, which refuses the worker's deploy before the front's. See [Choreography](choreography.md#the-written-order) and [State machines](fsm.md#a-choreography).
 
+## release-rollout.muro
+
+The same release, carried out once per site. `registry` and `release` are shared: one party for every site. The registry publishes the version once, and then each site runs the rest of the plan and ends with the release keeping or undoing that site.
+
+```
+choreography plan
+  roles registry shared, release shared, front, worker
+  release -> registry : publish
+  registry -> release : published
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+  worker -> release : deployed
+  release chooses
+    keep: release -> front : keep
+          release -> worker : keep
+    undo: release -> worker : undo
+          release -> front : undo
+
+family rollout : plan per key
+```
+
+The two messages between shared roles are the shared preamble. `front-first`, `published-first`, and `decided` hold, each in 13 reachable states, 14 transitions: the check is one site and the preamble, which is exact because sites share nothing after it. `mix muro.emit --backend fsm examples/release-rollout.muro` emits the monitor `ReleaseRolloutFsm.Plan` and the dispatcher `ReleaseRolloutFsm.Rollout`, which refuses a site's step until the preamble is done and then steps each site on its own. See [Choreography](choreography.md#a-family-of-a-choreography), [Temporal](temporal.md#a-family-of-a-choreography), and [State machines](fsm.md#a-family-of-a-choreography).
+
 ## seated.muro
 
 A party of a description sits at a place. The seating is spec. The boundary is evidence. Elixir, Rust, Zig, and assembly omit both. C refuses the book, because `seen` is not a state machine, and the run is not written.

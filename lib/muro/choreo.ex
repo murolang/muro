@@ -13,6 +13,12 @@ defmodule Muro.Choreo do
   `prefix/3` is the legal-prefix judgment of the global type in its
   written order, the Elixir mirror of `accept` in
   `agda/Muro/ChoreoPrefix.agda`.
+
+  A role marked `shared` is one party for every key of a family that
+  ranges over the choreography. A message between two shared roles is
+  global. Those messages, and the choices of shared roles, written
+  before any other step form the shared preamble. A message between two
+  shared roles after a per-key step is refused (`check_decl/2`).
   """
 
   @doc """
@@ -65,6 +71,63 @@ defmodule Muro.Choreo do
       [] -> outline(name, roles, body)
       errs -> {:error, Enum.join(errs, "; ")}
     end
+  end
+
+  @doc """
+  `check/4` on a declaration, then the shared order: a message between
+  two shared roles is written before every per-key step.
+  """
+  def check_decl(%{name: name, roles: roles, body: body} = decl, book) do
+    case check(name, roles, body, book) do
+      {:ok, lines} ->
+        case shared_errors(Map.get(decl, :shared, []), body) do
+          [] -> {:ok, lines}
+          errs -> {:error, Enum.join(errs, "; ")}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  @doc """
+  True when the next interaction of `g` belongs to the shared preamble
+  when it is reached through preamble steps only: a message between two
+  shared roles, or a choice by a shared role.
+  """
+  def shared_step?({:comm, a, b, _label, _ty, _}, shared), do: a in shared and b in shared
+  def shared_step?({:choice, p, _}, shared), do: p in shared
+  def shared_step?(:end, _shared), do: false
+
+  defp shared_errors([], _body), do: []
+  defp shared_errors(shared, body), do: shared_walk(body, shared, :preamble) |> Enum.uniq()
+
+  defp shared_walk(:end, _shared, _phase), do: []
+
+  defp shared_walk({:comm, a, b, label, ty, g} = node, shared, phase) do
+    global? = shared_step?(node, shared)
+
+    cond do
+      phase == :preamble and global? ->
+        shared_walk(g, shared, :preamble)
+
+      phase == :per_key and global? ->
+        [
+          "#{show_message(a, b, label, ty)} is between shared roles after a per-key step; " <>
+            "a message between shared roles belongs in the shared preamble"
+          | shared_walk(g, shared, :per_key)
+        ]
+
+      true ->
+        shared_walk(g, shared, :per_key)
+    end
+  end
+
+  # A choice by a shared role in the preamble is global. After a
+  # per-key step it is that key's choice.
+  defp shared_walk({:choice, p, branches}, shared, phase) do
+    next = if phase == :preamble and p in shared, do: :preamble, else: :per_key
+    Enum.flat_map(branches, fn {_label, g} -> shared_walk(g, shared, next) end)
   end
 
   @doc """

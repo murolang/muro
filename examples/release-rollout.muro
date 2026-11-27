@@ -1,0 +1,38 @@
+-- A release carried out once per site. The registry publishes the
+-- version once, for every site. Then each site runs the same plan: the
+-- front is deployed before the worker, and the release keeps the site
+-- or undoes it. `registry` and `release` are shared: one party for
+-- every site. `front` and `worker` are that site's own.
+--
+-- `family rollout : plan per key` runs one instance of `plan` per site.
+-- The two messages between shared roles are the shared preamble, taken
+-- once before any site steps. `--backend fsm` emits the `Rollout`
+-- dispatcher: `step_shared` for the preamble, then `step(state, site,
+-- from, to, label)` and `choose(state, site, role, label)` per site.
+
+choreography plan
+  roles registry shared, release shared, front, worker
+  release -> registry : publish
+  registry -> release : published
+  release -> front : deploy
+  front -> release : deployed
+  release -> worker : deploy
+  worker -> release : deployed
+  release chooses
+    keep: release -> front : keep
+          release -> worker : keep
+    undo: release -> worker : undo
+          release -> front : undo
+
+family rollout : plan per key
+
+temporal front-first : rollout :=
+  forall (k : key). always ((done k (release -> worker : deploy)) implies (done k (front -> release : deployed)))
+
+temporal published-first : rollout :=
+  forall (k : key). always ((done k (release -> front : deploy)) implies (done k (registry -> release : published)))
+
+temporal decided : rollout :=
+  forall (k : key). (done k (worker -> release : deployed)) leads_to ((done k (release chooses keep)) or (done k (release chooses undo)))
+
+def kept : run Nat := 0

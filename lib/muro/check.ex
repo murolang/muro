@@ -4243,8 +4243,8 @@ defmodule Muro.Check do
 
   # Projection. A choreography is spec. The lines are the binary
   # session of each ordered pair of roles.
-  def check_def(book, %{kind: :choreography, name: name, roles: roles, body: body} = d, _fuel) do
-    case Muro.Choreo.check(name, roles, body, book) do
+  def check_def(book, %{kind: :choreography, name: name} = d, _fuel) do
+    case Muro.Choreo.check_decl(d, book) do
       {:ok, lines} ->
         {:choreo, lines}
 

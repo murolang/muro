@@ -33,7 +33,7 @@ pages:
   - file: temporal.md
     slug: temporal
     title: Temporal
-    summary: always, eventually, and leads_to on one buffered meeting, and a family per key of a closed kind.
+    summary: always, eventually, and leads_to on one buffered meeting, a family per key of a closed kind, and a family of a choreography.
   - file: choreography.md
     slug: choreography
     title: Choreography
@@ -129,7 +129,7 @@ pages:
   - file: fsm.md
     slug: fsm
     title: State machines
-    summary: Each session endpoint is a pure state machine, and a keyed family is one dispatcher. The transport stays with the host.
+    summary: Each session endpoint is a pure state machine, a keyed family is one dispatcher, a choreography is one monitor, and a family of a choreography is that monitor per key. The transport stays with the host.
   - file: mutate.md
     slug: mutate
     title: Mutation
