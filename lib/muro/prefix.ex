@@ -51,23 +51,24 @@ defmodule Muro.Prefix do
       move_loc: loc
     }
 
-    cond do
-      at not in [:start, {:name, "start"}] ->
-        {:error, blamed(loc, name, "at #{show_at(at)} is not a position of #{chor.name}")}
+    if at in [:start, {:name, "start"}] do
+      case Muro.Choreo.check(chor.name, chor.roles, chor.body, book) do
+        {:error, msg} -> {:error, blamed(loc, name, "#{chor.name}: #{msg}")}
+        {:ok, _lines} -> judge_global_moves(chor, moves, st)
+      end
+    else
+      {:error, blamed(loc, name, "at #{show_at(at)} is not a position of #{chor.name}")}
+    end
+  end
 
-      match?({:error, _}, Muro.Choreo.check(chor.name, chor.roles, chor.body, book)) ->
-        {:error, msg} = Muro.Choreo.check(chor.name, chor.roles, chor.body, book)
-        {:error, blamed(loc, name, "#{chor.name}: #{msg}")}
+  defp judge_global_moves(chor, moves, st) do
+    case Muro.Choreo.prefix(chor.roles, chor.body, Enum.map(moves, &global_move/1)) do
+      :ok ->
+        :ok
 
-      true ->
-        case Muro.Choreo.prefix(chor.roles, chor.body, Enum.map(moves, &global_move/1)) do
-          :ok ->
-            :ok
-
-          {:error, n, reason} ->
-            move = Enum.at(moves, n - 1)
-            blame(%{st | n: n, move_loc: move_loc(move)}, global_reason(reason, move, st))
-        end
+      {:error, n, reason} ->
+        move = Enum.at(moves, n - 1)
+        blame(%{st | n: n, move_loc: move_loc(move)}, global_reason(reason, move, st))
     end
   end
 

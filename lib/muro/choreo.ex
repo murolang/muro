@@ -54,7 +54,9 @@ defmodule Muro.Choreo do
   @doc """
   Declaration check. Roles are unique. Every name in the global type is
   one of those roles. A message is between two distinct roles. A choice
-  has two or more branches and the labels do not repeat. Each payload
+  has two or more branches and the labels do not repeat. Two roles, or
+  two labels of one choice, do not reach one host atom
+  (`Muro.Emit.elixir_atom_name/1`). Each payload
   is a session payload. The result is one line per ordered pair of
   distinct roles, in role-list order.
   """
@@ -166,12 +168,34 @@ defmodule Muro.Choreo do
   end
 
   defp role_errors(roles) do
-    roles
-    |> Enum.frequencies()
-    |> Enum.flat_map(fn
-      {name, n} when n > 1 -> ["duplicate role #{name}"]
-      _ -> []
+    dups =
+      roles
+      |> Enum.frequencies()
+      |> Enum.flat_map(fn
+        {name, n} when n > 1 -> ["duplicate role #{name}"]
+        _ -> []
+      end)
+
+    dups ++ spelling_clashes("roles", roles)
+  end
+
+  # A role and a choice label are atoms in the state machine, spelled
+  # by `Muro.Emit.elixir_atom_name/1`. Two distinct source names that
+  # reach one atom would be one role, or one branch, on the host, so
+  # they are refused here and the message names both.
+  defp spelling_clashes(kind, names) do
+    names
+    |> Enum.uniq()
+    |> Enum.reduce({%{}, []}, fn name, {seen, errs} ->
+      host = Muro.Emit.elixir_atom_name(name)
+
+      case Map.fetch(seen, host) do
+        {:ok, prev} -> {seen, ["#{kind} #{prev} and #{name} spell one Elixir atom" | errs]}
+        :error -> {Map.put(seen, host, name), errs}
+      end
     end)
+    |> elem(1)
+    |> Enum.reverse()
   end
 
   defp walk(_roles, :end, _book), do: []
@@ -211,7 +235,7 @@ defmodule Muro.Choreo do
         _ -> []
       end)
 
-    short ++ dups
+    short ++ dups ++ spelling_clashes("branches", labels)
   end
 
   defp payload(ty, book) do

@@ -313,6 +313,57 @@ defmodule Muro.ChoreoFsmTest do
       assert monitor.done?(s)
     end
 
+    test "two roles that reach one atom are refused, naming both" do
+      text = """
+      choreography deploy
+        roles front-end, front_end, ops
+        ops -> front-end : go
+        ops -> front_end : go
+
+      def kept : run Nat := 0
+      """
+
+      path = write_text("roles.muro", text)
+      assert {:error, msg} = Muro.check_file(path)
+      assert msg =~ "roles.muro:1:1: deploy: roles front-end and front_end spell one Elixir atom"
+      assert {:error, emitted} = Muro.emit_fsm(path, ChoreoFsmTRoles)
+      assert emitted =~ "roles front-end and front_end spell one Elixir atom"
+    end
+
+    test "two labels of one choice that reach one atom are refused, nested too" do
+      text = """
+      choreography deploy
+        roles front, ops
+        ops chooses
+          now: ops -> front : go
+          later: ops chooses
+            roll-out: ops -> front : a
+            roll_out: ops -> front : b
+
+      def kept : run Nat := 0
+      """
+
+      assert {:error, msg} = Muro.check_file(write_text("labels.muro", text))
+
+      assert msg =~
+               "labels.muro:1:1: deploy: branches roll-out and roll_out spell one Elixir atom"
+
+      top =
+        text
+        |> String.replace("now:", "roll-out-now:")
+        |> String.replace("later:", "roll_out_now:")
+
+      assert {:error, msg} = Muro.check_file(write_text("top.muro", top))
+      assert msg =~ "branches roll-out-now and roll_out_now spell one Elixir atom"
+      assert msg =~ "branches roll-out and roll_out spell one Elixir atom"
+
+      assert {:error, _} =
+               Choreo.check("d", ["a", "b"], {:choice, "a", [{"x-y", :end}, {"x_y", :end}]}, [])
+
+      assert {:ok, _} =
+               Choreo.check("d", ["a", "b"], {:choice, "a", [{"x-y", :end}, {"x-z", :end}]}, [])
+    end
+
     test "two-phase commit emits a monitor and its six projections" do
       {:ok, src} = Muro.emit_fsm("examples/two-phase-commit.muro", TwoPhaseCommitFsmProbe)
       parent = ChoreoFsmTTwoPhase
@@ -545,6 +596,15 @@ defmodule Muro.ChoreoFsmTest do
     {:ok, src} = Muro.emit_fsm(path, parent, book: name)
     compile!(src)
     {parent, src}
+  end
+
+  defp write_text(name, text) do
+    dir = Path.join(System.tmp_dir!(), "muro_choreo_fsm_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+    path = Path.join(dir, name)
+    File.write!(path, text)
+    path
   end
 
   defp compile!(src) do

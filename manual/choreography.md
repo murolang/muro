@@ -164,6 +164,7 @@ The position is the choreography. Several failures are joined with `; `.
 - A name in the global type that is not a role: `unknown role <name>`.
 - A message from a role to itself, or a projection of a role with itself: `self-interaction <name>`. One self-send is one error.
 - A branch label written twice in one choice: `duplicate branch <label>`.
+- Two roles that reach one atom spelling, `roles front-end, front_end`: `roles front-end and front_end spell one Elixir atom`. Two labels of one choice that do, `roll-out` and `roll_out`: `branches roll-out and roll_out spell one Elixir atom`. A role and a label are atoms in the [monitor](fsm.md#a-choreography), spelled as in [Emit](emit.md), and two of them on one atom would be one role, or one branch, there.
 - A choice with fewer than two branches: `a choice has two branches`.
 - Plain merge fails: `<role>: branches <label> and <label> disagree`. Three or more labels are joined with commas: `branches l, m, r disagree`. The role is the one being projected. Both ends of that pair are reported.
 - A payload that is not a session payload is refused with that session error. The wrong number of arguments is `<name> takes <n> arguments, given <k>`. One parameter is `argument`.
