@@ -604,7 +604,8 @@ defmodule Muro.Emit do
 
   defp emit_db({:word, op, args}, d, book, names), do: emit_word(op, args, d, book, names)
 
-  defp emit_db({:slit, bin}, _, _book, _names) when is_binary(bin), do: inspect(bin)
+  defp emit_db({:slit, bin}, _, _book, _names) when is_binary(bin),
+    do: inspect(bin, limit: :infinity, printable_limit: :infinity)
 
   defp emit_db({:scat, a, b}, d, book, names) do
     "(#{emit_db(a, d, book, names)}) <> (#{emit_db(b, d, book, names)})"
@@ -618,7 +619,8 @@ defmodule Muro.Emit do
     "(#{emit_db(a, d, book, names)}) == (#{emit_db(b, d, book, names)})"
   end
 
-  defp emit_db({:blit, bin}, _, _book, _names) when is_binary(bin), do: inspect(bin)
+  defp emit_db({:blit, bin}, _, _book, _names) when is_binary(bin),
+    do: inspect(bin, limit: :infinity, printable_limit: :infinity)
 
   defp emit_db({:bcat, a, b}, d, book, names) do
     "(#{emit_db(a, d, book, names)}) <> (#{emit_db(b, d, book, names)})"

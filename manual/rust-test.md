@@ -107,7 +107,7 @@ A Rust test entry may omit the module. The target ends with `.rs`. `impl:` is a 
 
 ```elixir
 [
-  muro: "0.22.36",
+  muro: "0.22.37",
   modules: [
     {"priv/muro/rounding.muro", "test/rounding_test.rs",
      [kind: :rust_test, impl: "crate::rounding"]}

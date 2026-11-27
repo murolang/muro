@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.37
+
+The Elixir backend truncates a `Bytes`, `Slice`, or `String` literal once it is longer than 4,096 printable bytes (`inspect/2`'s default `printable_limit`), and a non-printable one after 50 bytes (`limit`). The emitted module then contains `...` and either fails to compile or holds the wrong value. The emitter now passes `limit: :infinity` and `printable_limit: :infinity`. A test emits, compiles, and evaluates 5,000-byte printable and non-printable literals for both `Bytes` and `Slice`.
+
+### Manual
+
+- Elixir: a `Bytes`, `Slice`, or `String` literal of any length is written in full.
+
+### Package
+
+- Version 0.22.37.
+
 ## 0.22.36
 
 The ExUnit backend emits a closed equation whose argument or result is a numeral other than `0` (#299). `level 3 ≡ high`, `twice (suc (suc 0)) ≡ 4`, `level three` with `def three : run Nat := 3`, and `twice (plus 2 1) ≡ 6` were skipped with `argument 1 normal form has no literal` or `result normal form has no literal`, while a chain of `suc` and the pytest and rust-test backends emitted them. A normalized numeral is now a `Nat`, printed as the same non-negative integer, inside constructor fields and pairs too. A rewrite left around a value is looked through, as an annotation is.
