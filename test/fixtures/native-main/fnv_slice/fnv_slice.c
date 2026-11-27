@@ -59,10 +59,6 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
-static uint32_t muro__step_0(uint8_t b, muro__slice rest, uint32_t h) {
-  (void)rest;
-  return mix(h, b);
-}
 uint32_t offset(void) {
   return (uint32_t)UINT64_C(2166136261);
 }
@@ -81,7 +77,8 @@ uint32_t hash(muro__slice s) {
   while (muro__s_1.n > 0) {
     uint8_t muro__s_2 = muro__s_1.p[0];
     muro__slice muro__s_3 = (muro__slice){muro__s_1.p + 1, muro__s_1.n - 1};
-    muro__s_0 = muro__step_0(muro__s_2, muro__s_3, muro__s_0);
+    (void)muro__s_3;
+    muro__s_0 = mix(muro__s_0, muro__s_2);
     muro__s_1 = muro__s_3;
   }
   return muro__s_0;

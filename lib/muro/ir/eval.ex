@@ -5,7 +5,8 @@ defmodule Muro.IR.Eval do
   `call/4` runs one function of an image on argument values. It reads
   every image `Muro.IR` produces: the default image of
   `Muro.IR.elaborate/2`, the same image after `Muro.IR.Share.funs/2`,
-  and the closure image of `Muro.IR.elaborate(book, closures: true)`.
+  the closure image of `Muro.IR.elaborate(book, closures: true)`, and
+  any of those after `Muro.IR.Anf.funs/2` or `Muro.IR.Loop.funs/2`.
   No emitter reads this module. It is the reference the differential
   tests hold every image to, against `Muro.Check.normalize/3`.
 
@@ -32,8 +33,19 @@ defmodule Muro.IR.Eval do
   ## Fuel
 
   Every function call, closure application, stream `uncons`, and
-  octet of a `bfold` spends one unit of fuel. Nothing else loops, so a
-  non-terminating image always ends in `{:error, :out_of_fuel}`.
+  octet of a `bfold` or a `loop` spends one unit of fuel. Nothing else
+  loops, so a non-terminating image always ends in
+  `{:error, :out_of_fuel}`.
+
+  ## Loops
+
+  `{:loop, caps, octet, rest, acc, z, s, stop, body}` (`Muro.IR.Loop`)
+  binds the captures once, then runs `body` once per octet of `s` with
+  the captures, the octet, the remaining bytes, and the accumulator
+  bound, exactly as the fold step it came from was called. Before each
+  octet a `{v, test}` stop is evaluated with `v` bound to the
+  accumulator, and the loop ends when it is the `:u64` `1`.
+  `{:inout, f, args}` is the call `{:call, f, args}`.
 
   ## Word operations
 
@@ -353,6 +365,23 @@ defmodule Muro.IR.Eval do
     fold(prog, step_fun(prog, step), cvs, zv, bytes!(sv), fuel)
   end
 
+  defp ev(prog, {:loop, caps, octet, rest, acc, z, s, stop, body}, env, fuel) do
+    {cvs, fuel} = ev_list(prog, Enum.map(caps, &elem(&1, 3)), env, fuel)
+    {zv, fuel} = ev(prog, z, env, fuel)
+    {sv, fuel} = ev(prog, s, env, fuel)
+
+    base =
+      caps
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.zip(cvs)
+      |> Map.new()
+
+    names = {Muro.IR.param_name(octet), Muro.IR.param_name(rest), Muro.IR.param_name(acc)}
+    loop(prog, {base, names, stop, body}, zv, bytes!(sv), fuel)
+  end
+
+  defp ev(prog, {:inout, name, ts}, env, fuel), do: ev(prog, {:call, name, ts}, env, fuel)
+
   defp ev(_prog, t, _env, _fuel), do: throw({:ir_eval, {:unknown_term, t}})
 
   defp ev_list(prog, ts, env, fuel) do
@@ -370,6 +399,31 @@ defmodule Muro.IR.Eval do
   defp fold(prog, step, caps, acc, <<b, rest::binary>>, fuel) do
     {acc, fuel} = invoke(prog, step, caps ++ [{:word, :u8, b}, {:bytes, rest}, acc], fuel)
     fold(prog, step, caps, acc, rest, fuel)
+  end
+
+  defp loop(_prog, _l, acc, <<>>, fuel), do: {acc, fuel}
+
+  defp loop(prog, {base, {o, r, a}, stop, body} = l, acc, <<b, rest::binary>>, fuel) do
+    case stopped(prog, stop, acc, fuel) do
+      {true, fuel} ->
+        {acc, fuel}
+
+      {false, fuel} ->
+        fuel = spend(fuel)
+        env = base |> Map.put(o, {:word, :u8, b}) |> Map.put(r, {:bytes, rest}) |> Map.put(a, acc)
+        {acc, fuel} = ev(prog, body, env, fuel)
+        loop(prog, l, acc, rest, fuel)
+    end
+  end
+
+  defp stopped(_prog, :none, _acc, fuel), do: {false, fuel}
+
+  defp stopped(prog, {v, test}, acc, fuel) do
+    case ev(prog, test, %{v => acc}, fuel) do
+      {{:word, :u64, 1}, fuel} -> {true, fuel}
+      {{:word, :u64, 0}, fuel} -> {false, fuel}
+      {other, _} -> throw({:ir_eval, {:type, :u64, other}})
+    end
   end
 
   # A stream step takes the captures, then the seed when the seed is

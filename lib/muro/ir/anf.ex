@@ -42,8 +42,8 @@ defmodule Muro.IR.Anf do
   `Muro.IR.Check` accepts the result of an image it accepts, and
   `Muro.IR.Eval` computes the same value on it. No emitter reads this
   image yet: C, Rust, and Zig emit the image before this pass, so
-  their bytes do not change. `Muro.IR.Loop` (Phase 1a) is the first
-  consumer.
+  their bytes do not change. `Muro.IR.Loop` accepts it as it accepts
+  any image.
   """
 
   alias Muro.IR

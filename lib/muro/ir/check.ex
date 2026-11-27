@@ -29,6 +29,29 @@ defmodule Muro.IR.Check do
   `:affine` otherwise. Constructor field grades and binder counts are
   taken from the book; without a book they are not guessed (a missing
   book does not default those fields to `:reuse`).
+
+  ## Loops
+
+  `{:loop, caps, octet, rest, acc, z, s, stop, body}` (`Muro.IR.Loop`)
+  is checked as the fold it replaced: the capture terms, `z`, and `s`
+  in the enclosing scope, in that order, and `body` as the body of a
+  closed function whose parameters are the captures, the octet
+  (`:u8`), the rest (`:slice`), and the accumulator, with their own
+  grades. A variable of the enclosing scope in `body` is free. The
+  binders are distinct, `z` and `body` agree with the accumulator's
+  layout, and `s` is a slice. A `{v, test}` stop is checked with only
+  `v`, at the accumulator's layout, in scope, and is a `:u64`.
+
+  `{:inout, f, args}` is checked as the call `{:call, f, args}`, and
+  also: `f` has `inout: p`, the argument in `p`'s place is the
+  accumulator of the innermost enclosing loop, no other argument
+  mentions it, and the call is in tail position of that loop's body
+  (through `let`, `letp`, and match arms that do not rebind the
+  accumulator), so nothing reads the old value after `f` updates it.
+  That accumulator is `:linear` or `:affine`, so no copy of the old
+  value is kept either. A function with `inout: p` has a parameter `p`
+  whose layout is the return layout, a by-value struct when a book is
+  given (`Muro.IR.Rep.value_lay?/2`).
   """
 
   alias Muro.IR
@@ -201,7 +224,139 @@ defmodule Muro.IR.Check do
 
     ret_agree = layout_agree(fun, "return", infer(fun.body, env, ctx), fun.ret)
 
-    param_errors ++ ret_errors ++ body_errors ++ grade_errors ++ ret_agree
+    param_errors ++
+      ret_errors ++
+      body_errors ++
+      grade_errors ++
+      ret_agree ++ inout_param_errors(fun, ctx) ++ placement(ctx, fun, fun.body, nil)
+  end
+
+  # -- loops and in-place calls -------------------------------------------
+
+  defp inout_param_errors(fun, ctx) do
+    case Map.get(fun, :inout) do
+      nil ->
+        []
+
+      name ->
+        case Enum.find(fun.params, &(IR.param_name(&1) == name)) do
+          nil ->
+            ["#{fun.name}: inout #{inspect(name)} is not a parameter"]
+
+          p ->
+            lay = IR.param_lay(p)
+
+            cond do
+              lay != fun.ret ->
+                ["#{fun.name}: inout parameter #{name} does not have the return layout"]
+
+              ctx.book != nil and not Muro.IR.Rep.value_lay?(ctx.book, lay) ->
+                ["#{fun.name}: inout parameter #{name} is not a by-value struct"]
+
+              true ->
+                []
+            end
+        end
+    end
+  end
+
+  # `acc` is the accumulator a tail `{:inout, ...}` may update here, or
+  # nil outside a loop body's tail.
+  defp placement(ctx, fun, {:inout, f, args}, acc) when is_list(args) do
+    here =
+      cond do
+        acc == nil ->
+          ["#{fun.name}: inout call #{f} outside the tail of a loop body"]
+
+        match?({:unrestricted, _}, acc) ->
+          ["#{fun.name}: inout call #{f} updates the :reuse accumulator #{elem(acc, 1)}"]
+
+        Muro.IR.Loop.acc_slot(args, acc) == :error ->
+          ["#{fun.name}: inout call #{f} does not pass the accumulator #{acc} once"]
+
+        true ->
+          inout_slot_errors(ctx, fun, f, args, acc)
+      end
+
+    here ++ placement(ctx, fun, args, nil)
+  end
+
+  defp placement(ctx, fun, {:loop, caps, _o, _r, a, z, s, stop, body}, _acc) do
+    stop_tm =
+      case stop do
+        {_v, test} -> [test]
+        _ -> []
+      end
+
+    placement(ctx, fun, Enum.map(caps, &elem(&1, 3)) ++ [z, s] ++ stop_tm, nil) ++
+      placement(ctx, fun, body, loop_acc(a))
+  end
+
+  defp placement(ctx, fun, {:let, x, _lay, _g, v, b}, acc),
+    do: placement(ctx, fun, v, nil) ++ placement(ctx, fun, b, unless_bound(acc, [x]))
+
+  defp placement(ctx, fun, {:letp, a, b, e, body}, acc),
+    do: placement(ctx, fun, e, nil) ++ placement(ctx, fun, body, unless_bound(acc, [a, b]))
+
+  defp placement(ctx, fun, {:match, s, arms}, acc) when is_list(arms),
+    do: placement(ctx, fun, s, nil) ++ placement_arms(ctx, fun, arms, acc)
+
+  defp placement(ctx, fun, {:match, s, _lay, arms}, acc) when is_list(arms),
+    do: placement(ctx, fun, s, nil) ++ placement_arms(ctx, fun, arms, acc)
+
+  defp placement(ctx, fun, t, _acc) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.flat_map(&placement(ctx, fun, &1, nil))
+
+  defp placement(ctx, fun, t, _acc) when is_list(t),
+    do: Enum.flat_map(t, &placement(ctx, fun, &1, nil))
+
+  defp placement(_ctx, _fun, _t, _acc), do: []
+
+  defp placement_arms(ctx, fun, arms, acc) do
+    Enum.flat_map(arms, fn
+      {:arm, _c, names, tm} -> placement(ctx, fun, tm, unless_bound(acc, names))
+      other -> placement(ctx, fun, other, nil)
+    end)
+  end
+
+  defp unless_bound(nil, _names), do: nil
+  defp unless_bound({:unrestricted, x} = acc, names), do: if(x in names, do: nil, else: acc)
+  defp unless_bound(acc, names), do: if(acc in names, do: nil, else: acc)
+
+  # The accumulator an in-place call may update. A `:reuse` one is
+  # remembered only to name it in the error.
+  defp loop_acc({n, _lay, g}) when g in [:linear, :affine], do: n
+  defp loop_acc({n, _lay, _g}), do: {:unrestricted, n}
+  defp loop_acc(_), do: nil
+
+  defp inout_slot_errors(ctx, fun, f, args, acc) do
+    {:ok, i} = Muro.IR.Loop.acc_slot(args, acc)
+
+    case fun_inout(f, ctx) do
+      {:ok, nil} ->
+        ["#{fun.name}: inout call #{f}, which has no inout parameter"]
+
+      {:ok, params, name} ->
+        if IR.param_name(Enum.at(params, i, {nil, nil, nil})) == name,
+          do: [],
+          else: ["#{fun.name}: inout call #{f} passes #{acc} outside its inout parameter"]
+
+      :unknown ->
+        []
+    end
+  end
+
+  defp fun_inout(f, ctx) do
+    case Map.fetch(ctx.by_name, f) do
+      {:ok, callee} ->
+        case Map.get(callee, :inout) do
+          nil -> {:ok, nil}
+          name -> {:ok, callee.params, name}
+        end
+
+      :error ->
+        :unknown
+    end
   end
 
   defp path_grade_errors(fun, name, grade, paths) do
@@ -401,6 +556,46 @@ defmodule Muro.IR.Check do
     {ps, es ++ step_err ++ cap_errors(fun, caps, step, env, ctx)}
   end
 
+  defp check_tm({:loop, caps, octet, rest, acc, z, s, stop, body}, env, fun, ctx)
+       when is_list(caps) do
+    binders = Enum.map(caps, fn {n, lay, g, _tm} -> {n, lay, g} end) ++ [octet, rest, acc]
+    {ps, es} = check_seq(Enum.map(caps, &elem(&1, 3)) ++ [z, s], env, fun, ctx)
+
+    case loop_binder_errors(fun, binders, octet, rest) do
+      [] ->
+        {_, alay, _} = acc
+
+        cap_err =
+          Enum.flat_map(caps, fn {n, lay, g, tm} ->
+            layout_agree(fun, "capture #{n}", infer(tm, env, ctx), lay) ++
+              reuse_capture_errors(fun, "capture #{n}", g, tm, env, lay)
+          end)
+
+        benv = Map.new(binders, fn {n, lay, g} -> {n, %{grade: g, lay: lay}} end)
+        {bpaths, berr} = check_tm(body, benv, fun, ctx)
+
+        gerr =
+          Enum.flat_map(binders, fn {n, _lay, g} -> path_grade_errors(fun.name, n, g, bpaths) end)
+
+        errors =
+          cap_err ++
+            layout_agree(fun, "loop start", infer(z, env, ctx), alay) ++
+            layout_agree(fun, "loop input", infer(s, env, ctx), :slice) ++
+            berr ++
+            gerr ++
+            layout_agree(fun, "loop body", infer(body, benv, ctx), alay) ++
+            stop_errors(fun, stop, alay, ctx)
+
+        {ps, es ++ errors}
+
+      errors ->
+        {ps, es ++ errors}
+    end
+  end
+
+  defp check_tm({:inout, name, args}, env, fun, ctx) when is_list(args),
+    do: check_tm({:call, name, args}, env, fun, ctx)
+
   defp check_tm(:abort, _env, _fun, _ctx), do: {[{:dead, %{}}], []}
 
   defp check_tm(t, env, fun, ctx) when is_tuple(t) do
@@ -409,6 +604,52 @@ defmodule Muro.IR.Check do
 
   defp check_tm(t, env, fun, ctx) when is_list(t), do: check_seq(t, env, fun, ctx)
   defp check_tm(_t, _env, _fun, _ctx), do: {[{:live, %{}}], []}
+
+  defp loop_binder_errors(fun, binders, octet, rest) do
+    shape =
+      Enum.flat_map(binders, fn
+        {n, lay, g} when is_binary(n) ->
+          cond do
+            g not in @live_grades ->
+              ["#{fun.name}: loop binder #{n} has invalid grade #{inspect(g)}"]
+
+            lay == :erased ->
+              ["#{fun.name}: loop binder #{n} has erased layout"]
+
+            true ->
+              []
+          end
+
+        other ->
+          ["#{fun.name}: malformed loop binder #{inspect(other)}"]
+      end)
+
+    names = Enum.map(binders, &elem(&1, 0))
+
+    dup =
+      if length(Enum.uniq(names)) == length(names),
+        do: [],
+        else: ["#{fun.name}: loop binders are not distinct"]
+
+    kinds =
+      case {octet, rest} do
+        {{_, :u8, _}, {_, :slice, _}} -> []
+        _ -> ["#{fun.name}: loop octet must be :u8 and rest :slice"]
+      end
+
+    if shape == [], do: dup ++ kinds, else: shape
+  end
+
+  defp stop_errors(_fun, :none, _alay, _ctx), do: []
+
+  defp stop_errors(fun, {v, test}, alay, ctx) when is_binary(v) do
+    senv = %{v => %{grade: :reuse, lay: alay}}
+    {_paths, errors} = check_tm(test, senv, fun, ctx)
+    errors ++ layout_agree(fun, "loop stop", infer(test, senv, ctx), :u64)
+  end
+
+  defp stop_errors(fun, stop, _alay, _ctx),
+    do: ["#{fun.name}: malformed loop stop #{inspect(stop)}"]
 
   defp check_match(s, arms, env, fun, ctx, scrut_lay) do
     {spaths, serr} = check_tm(s, env, fun, ctx)
@@ -924,6 +1165,8 @@ defmodule Muro.IR.Check do
   end
 
   defp infer({:bfold, _, _, z, _}, env, ctx), do: infer(z, env, ctx)
+  defp infer({:loop, _, _, _, {_, lay, _}, _, _, _, _}, _env, _ctx), do: lay
+  defp infer({:inout, name, _}, _env, ctx), do: call_ret(ctx, name)
   defp infer(_, _, _), do: :unknown
 
   defp infer_arm({:arm, tag, names, tm}, scrut_lay, env, ctx) do
@@ -1142,6 +1385,13 @@ defmodule Muro.IR.Check do
 
       {:bfold, _, caps, z, s} ->
         Enum.map(caps, &elem(&1, 1)) ++ [z, s]
+
+      # The body and the stop are closed over the loop's binders.
+      {:loop, caps, _o, _r, _a, z, s, _stop, _body} ->
+        Enum.map(caps, &elem(&1, 3)) ++ [z, s]
+
+      {:inout, _, args} ->
+        args
 
       {:bcat, a, b} ->
         [a, b]

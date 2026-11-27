@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.22.43
+
+`Muro.IR.Loop.funs/2` turns every byte fold into a loop. `{:bfold, step, caps, z, s}` becomes `{:loop, caps, octet, rest, acc, z, s, stop, body}`: the generated fold step's captures, each bound once before the first octet; its octet, rest, and accumulator parameters with their grades; the start and the input; the early exit of `Muro.IR.Share.stop/2` as `{v, test}` or `:none`; and the step's body, inlined. The body sees only the loop's binders. A fold step no fold names any more is dropped from the image.
+
+A loop body whose tail (through `let`, `letp`, and match arms that do not rebind the accumulator) is a call that passes a `:linear` or `:affine` accumulator once, at a parameter of the same by-value struct layout (`Muro.IR.Rep.value_lay?/2`) that the callee also returns, becomes `{:inout, f, args}`, and the callee gets `inout: name`. Its value is the call's. `Muro.IR.Check` checks a loop as the fold it replaced (captures, start, and input in the enclosing scope; the body as a closed function of the loop's binders, with their grades; the stop as a `:u64` of the accumulator alone) and an in-place call as a call in tail position of the loop that owns the accumulator, passing it once at the callee's `inout` parameter. `Muro.IR.Eval` runs the body once per octet, one unit of fuel each as the step call spent, and leaves the loop when the stop is `1`.
+
+`Muro.Emit.C` runs the pass after `Muro.IR.Share`. A fold is a `while` over the slice with the step body inline; the octet and the rest are declared only when the body reads them, a body that returns the accumulator assigns nothing, and the early exit is the same `break`. An in-place call passes the accumulator's address to `muro__io_N`, the run's twin that writes its result through that pointer after every read of the old value. No `muro__step_N` fold function is emitted, so the HTTP step book no longer calls a step that takes and returns `HSt` by value on every octet: `scan` calls `stepB`'s twin on `&acc`.
+
+Only C changed. Every Rust, Zig, JavaScript, assembly, Elixir, OTP, MBI, and C outline output of `examples`, `test/fixtures`, `lib/muro/std`, and `test/http_step` (118 emittable books) hashes the same before and after. The C of the seven books with a fold changed; every C book still compiles with `cc -std=c11 -O2 -Wall -Wextra` with the same warnings as before.
+
+### Tests
+
+- `test/muro_ir_loop_test.exs`: the inlined step and its captures, the loop exit, nested folds, in-place eligibility (by-value struct, boxed, `:reuse`, rebound, or doubled accumulator, no book), `Muro.IR.Check` on the loop image of every corpus book and the HTTP step book (default, Share, and A-normal images) and its refusal of malformed loops and in-place calls, `Muro.IR.Eval` against the fold image (and the fuel the exit saves), and C compiled with `-Wall -Wextra -Werror` agreeing with `Muro.IR.Eval` on a by-value struct accumulator, an early exit, a nested fold, and a boxed accumulator.
+- The pinned C images of `bytes` and `fnv_slice` (`test/fixtures/native-main`) and the `emit-examples.digest` lines of `bytes`, `fnv_slice`, and `unboxed` are the new C; every other image they pin is unchanged. `test/muro_unboxed_test.exs` reads the loop in `scan` instead of `muro__step_0`.
+- The differential harness runs the loop image (`loop`, the Share image after `Muro.IR.Loop`) beside the others on the corpus, the edge values of `ir_eval_ops.muro`, and the HTTP step book, with no mismatch.
+
+### Manual
+
+- Extending: `Muro.IR.Loop`.
+
+### Package
+
+- Version 0.22.43.
+
 ## 0.22.42
 
 A choreography keeps the order between pairs that projection drops, and a run of the whole choreography can be checked against it (#308). The order is the written order: the next legal interaction is the next one written in the global type, or one label of the choice written next, and two interactions that share no role are still taken in the order they are written. `expected` therefore names one next interaction, and a prefix and a monitor agree on one list.

@@ -10,7 +10,8 @@ defmodule Muro.IRDiff do
   #                         == Eval(elaborate(closures: true))
   #
   # and each of those images in A-normal form (`Muro.IR.Anf`) beside it:
-  # `anf`, `anf_shared`, and `anf_closures`.
+  # `anf`, `anf_shared`, and `anf_closures`, and the image C emits, the
+  # shared image with every byte fold a loop (`Muro.IR.Loop`): `loop`.
   #
   # `Muro.Check.normalize/3` is the reference. A reference that does not
   # reach a closed first-order value (a λ, a stuck term, an `abort`, out
@@ -23,7 +24,7 @@ defmodule Muro.IRDiff do
   # so every run of the suite sees the same inputs.
 
   alias Muro.{Ast, Check, IR, Load, Prelude}
-  alias Muro.IR.{Anf, Eval, Share}
+  alias Muro.IR.{Anf, Eval, Loop, Share}
   alias Muro.IR.Eval.Ref
 
   @heads 3
@@ -117,15 +118,21 @@ defmodule Muro.IRDiff do
   @anf_of [anf: :plain, anf_shared: :shared, anf_closures: :closures]
 
   @doc "The images `compare/3` runs, in order."
-  def image_keys, do: [:plain, :shared, :closures | Keyword.keys(@anf_of)]
+  def image_keys, do: [:plain, :shared, :closures | Keyword.keys(@anf_of)] ++ [:loop]
 
-  @doc "Rebuilds the A-normal images of `ctx` from the images they come from."
+  @doc """
+  Rebuilds the A-normal images of `ctx` and the loop image from the
+  images they come from.
+  """
   def with_anf(ctx) do
-    Enum.reduce(@anf_of, ctx, fn {k, src}, ctx ->
-      funs = Map.fetch!(ctx, src)
-      opts = [book: ctx.book, closures: src == :closures]
-      Map.put(ctx, k, funs && Anf.funs(funs, opts))
-    end)
+    ctx =
+      Enum.reduce(@anf_of, ctx, fn {k, src}, ctx ->
+        funs = Map.fetch!(ctx, src)
+        opts = [book: ctx.book, closures: src == :closures]
+        Map.put(ctx, k, funs && Anf.funs(funs, opts))
+      end)
+
+    Map.put(ctx, :loop, ctx.shared && Loop.funs(ctx.shared, book: ctx.book))
   end
 
   def reach_map(emit) do
