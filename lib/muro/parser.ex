@@ -380,6 +380,9 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 
@@ -1221,6 +1224,9 @@ defmodule Muro.Parser do
         word_kw?(rest, "redeliver") ->
           {:error, err(s, redeliver_only())}
 
+        word_kw?(rest, "revert") ->
+          {:error, err(s, revert_only())}
+
         true ->
           {:error, err(s, may_fail_only())}
       end
@@ -1241,10 +1247,22 @@ defmodule Muro.Parser do
     word_kw?(s, "may") and word_kw?(skip(after_kw(s, "may")), "redeliver")
   end
 
+  defp may_revert_mark?(s) do
+    s = skip(s)
+    word_kw?(s, "may") and word_kw?(skip(after_kw(s, "may")), "revert")
+  end
+
   defp redeliver_only, do: "may redeliver is only a mark on a family"
+
+  defp revert_only, do: "may revert is only a mark on a family"
+
+  defp family_marks_only, do: "may redeliver and may revert are the marks on a family"
 
   defp refuse_stray_may_fail(s) do
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(skip(s), revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(skip(s), redeliver_only())}
 
@@ -1315,7 +1333,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- kw(skip(rest), "per"),
          {:ok, rest} <- kw(skip(rest), "key"),
          {:ok, key, rest} <- parse_family_kind(skip(rest)),
-         {:ok, redeliver, rest} <- parse_family_redeliver(skip(rest)),
+         {:ok, marks, rest} <- parse_family_marks(skip(rest)),
          {:ok, rules, rest} <- parse_family_rules(skip(rest)) do
       {:ok,
        %{
@@ -1324,7 +1342,8 @@ defmodule Muro.Parser do
          mode: :spec,
          meeting: meeting,
          key: key,
-         redeliver: redeliver,
+         redeliver: marks.redeliver,
+         revert: marks.revert,
          rules: rules,
          loc: loc
        }, rest}
@@ -1342,9 +1361,13 @@ defmodule Muro.Parser do
     end
   end
 
-  # `may redeliver` sits after the kind and before the rules. `may fail`
-  # stays the meeting mark. Any other `may` here is still this mark.
-  defp parse_family_redeliver(s) do
+  # `may redeliver` and `may revert` sit after the kind and before the
+  # rules, in either order, each at most once. On a family with no kind
+  # they sit after `per key`. `may fail` stays the meeting mark. Any
+  # other `may` here is still a family mark.
+  defp parse_family_marks(s), do: parse_family_marks(skip(s), false, false)
+
+  defp parse_family_marks(s, redeliver, revert) do
     s = skip(s)
 
     if word_kw?(s, "may") do
@@ -1352,23 +1375,43 @@ defmodule Muro.Parser do
 
       cond do
         word_kw?(rest, "redeliver") ->
-          rest = after_kw(rest, "redeliver")
-          skipped = skip(rest)
-
-          if word_kw?(skipped, "skip") do
-            {:error, err(skipped, "skip is a mark on a contract entry, not on may redeliver")}
+          if redeliver do
+            {:error, err(s, "duplicate family mark may redeliver")}
           else
-            {:ok, true, rest}
+            case mark_tail(after_kw(rest, "redeliver"), "redeliver") do
+              {:ok, rest} -> parse_family_marks(rest, true, revert)
+              {:error, _} = err -> err
+            end
+          end
+
+        word_kw?(rest, "revert") ->
+          if revert do
+            {:error, err(s, "duplicate family mark may revert")}
+          else
+            case mark_tail(after_kw(rest, "revert"), "revert") do
+              {:ok, rest} -> parse_family_marks(rest, redeliver, true)
+              {:error, _} = err -> err
+            end
           end
 
         word_kw?(rest, "fail") ->
           {:error, err(s, may_fail_only())}
 
         true ->
-          {:error, err(s, redeliver_only())}
+          {:error, err(s, family_marks_only())}
       end
     else
-      {:ok, false, s}
+      {:ok, %{redeliver: redeliver, revert: revert}, s}
+    end
+  end
+
+  defp mark_tail(rest, word) do
+    skipped = skip(rest)
+
+    if word_kw?(skipped, "skip") do
+      {:error, err(skipped, "skip is a mark on a contract entry, not on may #{word}")}
+    else
+      {:ok, rest}
     end
   end
 
@@ -1405,6 +1448,9 @@ defmodule Muro.Parser do
       rest = s |> after_kw("relies") |> skip()
 
       cond do
+        may_revert_mark?(rest) ->
+          {:error, err(rest, "may revert is a mark, not a contract a formula relies on")}
+
         may_redeliver_mark?(rest) ->
           {:error, err(rest, "may redeliver is a mark, not a contract a formula relies on")}
 
@@ -1430,6 +1476,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, "may revert is a mark on a family, not a contract entry")}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, "may redeliver is a mark on a family, not a contract entry")}
 
@@ -1487,6 +1536,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 
@@ -2595,6 +2647,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 
@@ -2778,6 +2833,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 
@@ -2958,6 +3016,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 
@@ -3517,6 +3578,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 
@@ -4796,6 +4860,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_revert_mark?(s) ->
+        {:error, err(s, revert_only())}
+
       may_redeliver_mark?(s) ->
         {:error, err(s, redeliver_only())}
 

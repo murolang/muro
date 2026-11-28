@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.22.46
+
+A family may be marked `may revert`, after the kind and before the rules, in either order with `may redeliver`, each mark at most once. A resolved row stays addressable until `drop_key` or `skip_below` prunes it. `revert(state, id)` on the emitted dispatcher, and `Muro.Family.Step.revert/3`, puts that row back to `:open` on the same id and returns `{:ok, state}`. The row may run its session again and call `resolved` again. No other row changes phase. An open or resolved same-key row that was held behind it refuses the call with `{:error, {:held_by, ids}}`, ids sorted by creation index then id. Behind is a named rule whose `while` or `until` list names the kind, and a later creation index for `held while earlier unresolved` and for `held while any unresolved`. A held row does not block. An open id is `{:error, {:opened, id}}`, a held id is `{:error, {:held, id}}`, and a withdrawn id that has not been pruned is `{:error, {:withdrawn, id}}`. An id never minted, or one `drop_key` or `skip_below` has pruned, is `{:error, {:unknown, id}}`. A bad state is `{:error, {:state, state}}`. `waiting_on` continues past a retained resolved row of the same key, in `Muro.Family.Step` and in the emitted dispatcher. A family without the mark has no `revert/2`. `Step.revert/3` is `{:error, {:unmarked, :revert}}` before it reads the state. An unmarked dispatcher is byte-identical. `may revert` on a family of a choreography is refused: `may revert is a mark on a family of a meeting`.
+
+Reverting the only resolved row of a key and kind drops that kind from `kinds`, so `some_resolved` and a later `until` waiter see the fact as false again. An open dependent still blocks, so a two-step rollback of `front` waits until that worker is pruned. `in order`, `dense`, and `idempotent init` compose with the mark. Resolve of a retained row does not advance the in-order waterline. `drop_key` still refuses an open or held row, and it removes resolved rows of a key that has none. `skip_below` removes resolved rows at or below the floor.
+
+The family graph adds the revert edge under that same guard. `examples/keyed-rollback.muro` holds `always ((some_resolved k worker) implies (resolved k front))` and the `some_resolved` variant in 247 reachable states, 557 transitions. `resolved k worker` is true when no worker counts, so it is not the antecedent. `Muro.Family.Graph.prepare/3` with `revert: :free` is the same book with the guard off (535 states, 1489 transitions) and refuses the formula on a path that reverts `a front 0` and then resolves `a worker 1`. A second path reverts `front` while `worker` is already resolved. The mirror graph has no such edge. `examples/keyed-slots.muro` stays 171,649 states and 729,184 transitions. `examples/keyed-commands.muro` stays 370 states and 835 transitions. `examples/keyed-release.muro` stays 8,906 states and 26,423 transitions.
+
+`agda/Muro/Family.agda` (`--safe`, no postulates) gains `NamedHold.Revert`: `revert-inv` preserves `VInv` for a named-kind revert the mirror rule allows, `guarded-keeps` leaves a resolved worker in front of a resolved front, and `unguarded-breaks` is that step with the guard off. `earlier`, `any`, the meeting graph, and Elixir agreement are not that proof.
+
+### Tests
+
+- `test/muro_family_revert_test.exs`: the mark and its refusals, Step revert and the mirror rule, facts after revert, `drop_key` and `skip_below`, the dispatcher, Step-versus-dispatcher agreement including `waiting_on` on a retained resolved row, the 247/557 graph, the free-revert counterexample, and byte-identical unmarked dispatchers.
+- `test/muro_choreo_family_test.exs`: `may revert` on a family of a choreography is refused the same way `may redeliver` is.
+
+### Manual
+
+- Fsm, grammar, temporal, limits, examples, extending, for-agents, sessions, and emit: `may revert`, `revert/2`, and `examples/keyed-rollback.muro`.
+
+### Package
+
+- Version 0.22.46.
+
+
 ## 0.22.45
 
 A family rule can name the kinds an instance waits for. On a family whose kind is a closed `data`, `held while <kind> unresolved` (comma lists allowed) is the open-world reading of `earlier` filtered by kind: the instance is held while an arrived instance of a listed kind with the same key is unresolved, and opens when none has arrived. `held until <kind> resolved` (comma lists allowed) is a prerequisite: the instance is held until at least one instance of each listed kind and key has arrived and resolved, so a `worker` stays held until a `front` arrives and resolves. One resolved instance satisfies the prerequisite even while another instance of that kind is unresolved; repeating `held` mixes the two (`held until front resolved, held while front unresolved`). `withdraw` does not satisfy `until`. On the family graph the phase is `:withdrawn`, neither unresolved nor resolved, so it does not witness `until` or `some_resolved`. The fact that a kind resolved survives the row leaving (`departed`, `skip_below`) and is forgotten by `drop_key`. `never held`, `held while earlier unresolved`, and `held while any unresolved` are unchanged.

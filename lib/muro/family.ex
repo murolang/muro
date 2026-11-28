@@ -52,14 +52,18 @@ defmodule Muro.Family do
   @doc """
   The success line `family <name>: <meeting> per key of <kind>`.
 
-  A family marked `may redeliver` appends that mark. The mark widens
-  the graph. It is not a contract a formula depends on.
+  A family marked `may redeliver` appends that mark. A family marked
+  `may revert` appends that mark after it. The printed order is fixed
+  even when the source writes `may revert` first. `may redeliver`
+  widens the graph. `may revert` keeps a resolved row and adds a
+  revert edge. Neither mark is a contract a formula depends on.
   """
   def line(%{key: nil} = family), do: Muro.ChoreoFamily.line(family)
 
   def line(%{name: name, meeting: meeting, key: key} = family) do
-    mark = if Map.get(family, :redeliver, false), do: " may redeliver", else: ""
-    "family #{name}: #{meeting} per key of #{key}#{mark}"
+    redeliver = if Map.get(family, :redeliver, false), do: " may redeliver", else: ""
+    revert = if Map.get(family, :revert, false), do: " may revert", else: ""
+    "family #{name}: #{meeting} per key of #{key}#{redeliver}#{revert}"
   end
 
   @doc """

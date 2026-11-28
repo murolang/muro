@@ -1,0 +1,37 @@
+-- A release that can be undone. front opens when it arrives.
+-- worker stays held until a front of the same key has resolved.
+-- may revert keeps a resolved row, and puts it back to open.
+-- A worker that is open or resolved blocks a revert of front.
+-- A held worker does not. The fact drops when the last resolved
+-- row of that kind is reverted, so a later worker is held again.
+
+data Step : Type where
+  front : Step
+  worker : Step
+
+data Report : Type where
+  ok : Report
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+
+meet slot : server with task buffer 1
+
+family rollout : slot per key of Step may revert
+  front never held
+  worker held until front resolved
+
+-- `resolved k worker` is true when no worker of that key has arrived,
+-- so it cannot be the antecedent. `some_resolved` is the fact that a
+-- worker has resolved. `resolved k front` then says every front that
+-- counts is resolved.
+temporal front-before-worker : rollout :=
+  forall (k : key). always ((some_resolved k worker) implies (resolved k front))
+
+temporal some-front-before-worker : rollout :=
+  forall (k : key). always ((some_resolved k worker) implies (some_resolved k front))

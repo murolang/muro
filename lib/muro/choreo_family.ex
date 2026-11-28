@@ -47,6 +47,9 @@ defmodule Muro.ChoreoFamily do
       Map.get(family, :redeliver, false) ->
         {:error, "may redeliver is a mark on a family of a meeting"}
 
+      Map.get(family, :revert, false) ->
+        {:error, "may revert is a mark on a family of a meeting"}
+
       true ->
         case Choreo.check_decl(chor, book) do
           {:ok, _} -> per_key_role(chor)
