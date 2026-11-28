@@ -35,47 +35,25 @@ __attribute__((unused)) static Maybe *just(void *muro__f_0) {
   return muro__p;
 }
 Bool mark(Item f) {
-  Bool muro__t_0 = 0;
   {
   Item muro__s_0 = f;
-  switch (muro__s_0) {
-  case 0: {
-  muro__t_0 = muro__tag_Bool_true_k;
-  break;
-  }
-  case 1: {
-  muro__t_0 = muro__tag_Bool_false_k;
-  break;
-  }
-  default: {
-  /* unreachable */
-  abort();
+  if (muro__s_0 == muro__tag_Item_self) {
+  return muro__tag_Bool_true_k;
+  } else {
+  return muro__tag_Bool_false_k;
   }
   }
-  }
-  return muro__t_0;
 }
 
 Maybe *effective(Item f) {
-  Maybe *muro__t_0 = 0;
   {
   Item muro__s_0 = f;
-  switch (muro__s_0) {
-  case 0: {
-  muro__t_0 = just((void *)(uintptr_t)(muro__tag_Bool_true_k));
-  break;
-  }
-  case 1: {
-  muro__t_0 = nothing();
-  break;
-  }
-  default: {
-  /* unreachable */
-  abort();
+  if (muro__s_0 == muro__tag_Item_self) {
+  return just((void *)(uintptr_t)(muro__tag_Bool_true_k));
+  } else {
+  return nothing();
   }
   }
-  }
-  return muro__t_0;
 }
 
 muro__nat *kept(void) {

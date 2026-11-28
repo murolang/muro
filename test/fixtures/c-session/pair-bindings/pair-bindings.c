@@ -19,25 +19,14 @@ __attribute__((unused)) static Bool true_k(void) { return muro__tag_Bool_true_k;
 
 __attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_k; }
 Bool grant(Bool b) {
-  Bool muro__t_0 = 0;
   {
   Bool muro__s_0 = b;
-  switch (muro__s_0) {
-  case 0: {
-  muro__t_0 = muro__tag_Bool_true_k;
-  break;
-  }
-  case 1: {
-  muro__t_0 = muro__tag_Bool_false_k;
-  break;
-  }
-  default: {
-  /* unreachable */
-  abort();
+  if (muro__s_0 == muro__tag_Bool_true_k) {
+  return muro__tag_Bool_true_k;
+  } else {
+  return muro__tag_Bool_false_k;
   }
   }
-  }
-  return muro__t_0;
 }
 #ifndef muro__DROP
 #define muro__DROP(p) free(p)

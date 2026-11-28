@@ -34,7 +34,16 @@ defmodule Muro.Emit.C do
   breaks. When the step's value is a run that updates a by-value
   struct accumulator, the loop calls that run's in-place twin
   `muro__io_N` on the accumulator's address instead of copying the
-  struct into the call and back.
+  struct into the call and back. When every octet outside a set of one,
+  two, or three constant bytes returns that accumulator unchanged, the
+  loop advances to the next such byte with `muro__find2` or
+  `muro__find3` and runs the body only there. A fold of `U64` whose
+  step is the border automaton of a fixed octet string, state in the
+  low three bits and the index above them, scans for that string
+  instead. A scalar run with no loop that such a byte loop reaches,
+  and whose body is no wider than that name step, is `always_inline`.
+  A step the emitter cannot read that way keeps the byte-by-byte loop.
+  A match on an enum of two constructors is an `if` on the first tag.
 
   Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor of an all-nullary data type is the
@@ -462,7 +471,12 @@ defmodule Muro.Emit.C do
 
     env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
 
-    st = fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+    # A match in tail position returns from each arm (`:return`), so no
+    # temporary holds the result. A string result is converted by
+    # `as_ret/3` after the match, so it keeps the temporary.
+    st =
+      fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+      |> Map.put(:dest, if(fun.ret == :string, do: nil, else: :return))
 
     with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
       expr = as_ret(expr, lay, fun.ret)
@@ -474,6 +488,9 @@ defmodule Muro.Emit.C do
 
       body =
         cond do
+          expr == :return ->
+            [discards, indent(pre, 2)] |> Enum.reject(&(&1 == "")) |> Enum.join("\n")
+
           discards != "" and pre != "" ->
             discards <> "\n" <> indent(pre, 2) <> "\n  return #{expr};"
 
@@ -494,6 +511,7 @@ defmodule Muro.Emit.C do
   defp fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope) do
     %{
       t: 0,
+      dest: nil,
       s: 0,
       steps: [],
       envs: [],
@@ -537,7 +555,12 @@ defmodule Muro.Emit.C do
 
     {_, ptr, _} = Enum.find(bound, fn {n, _c, _lay} -> n == target end)
     ret = ctype(fun.ret, book, prefix)
-    st = fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+
+    # A match in tail position stores its arms' values through `p`
+    # directly, and an arm whose value is `(*p)` stores nothing.
+    st =
+      fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+      |> Map.put(:dest, "(*#{ptr})")
 
     with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, ret) do
       expr = as_ret(expr, lay, fun.ret)
@@ -575,7 +598,53 @@ defmodule Muro.Emit.C do
   defp telescope({:pi, q, a, x, b}, acc), do: telescope(b, [{q, a, x} | acc])
   defp telescope(ret, acc), do: {Enum.reverse(acc), ret}
 
-  defp emit_ir({:var, name}, env, st, expect) do
+  # A term in tail position of a match arm, or of a `let` body there,
+  # writes the arm's value straight into the enclosing match's temporary
+  # (`st.dest`) instead of into a fresh temporary that each level copies
+  # up. Any other term is emitted with no destination, and the arm
+  # assigns its value. The one store on a path is the last statement of
+  # its innermost arm.
+  defp emit_ir(tm, env, st, expect) do
+    case Map.get(st, :dest) do
+      nil ->
+        emit_ir0(tm, env, st, expect)
+
+      d ->
+        if dest_form?(tm) do
+          emit_ir0(tm, env, st, expect)
+        else
+          with {:ok, {pre, ex, lay, st}} <- emit_ir0(tm, env, %{st | dest: nil}, expect) do
+            {:ok, {pre, ex, lay, %{st | dest: d}}}
+          end
+        end
+    end
+  end
+
+  defp dest_form?({:match, _, _}), do: true
+  defp dest_form?({:let, _, lay, _, _, body}) when lay != :erased and body != :abort, do: true
+  defp dest_form?(_), do: false
+
+  # A match's temporary: the destination it inherits, or a fresh one.
+  # Its arms are emitted with that temporary as their destination.
+  defp slot(st) do
+    case Map.get(st, :dest) do
+      nil ->
+        {t, st} = newt(st)
+        {t, true, Map.put(st, :dest, t)}
+
+      d ->
+        {d, false, st}
+    end
+  end
+
+  defp slot_init(true, expect, tname, st), do: init_temp(expect, tname, st)
+  defp slot_init(false, _expect, _tname, _st), do: ""
+
+  defp assign(tname, ex) when tname == ex, do: ""
+  defp assign(:return, ex), do: "return #{ex};"
+  defp assign(tname, ex), do: "#{tname} = #{ex};"
+
+  defp emit_ir0({:var, name}, env, st, expect) do
     case lookup(env, name) do
       {c, lay} ->
         {:ok, {"", adapt(c, lay, expect, st), adapted_lay(lay, expect, st), st}}
@@ -585,31 +654,31 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(:ze, _env, st, _expect), do: {:ok, {"", "#{g("zero")}()", :nat, st}}
-  defp emit_ir(:tt, _env, st, _expect), do: {:ok, {"", "#{g("tt")}()", :unit, st}}
+  defp emit_ir0(:ze, _env, st, _expect), do: {:ok, {"", "#{g("zero")}()", :nat, st}}
+  defp emit_ir0(:tt, _env, st, _expect), do: {:ok, {"", "#{g("tt")}()", :unit, st}}
 
-  defp emit_ir({:nat, n}, env, st, expect) when is_integer(n) and n >= 0 do
+  defp emit_ir0({:nat, n}, env, st, expect) when is_integer(n) and n >= 0 do
     emit_ir(nat_spine(n), env, st, expect)
   end
 
-  defp emit_ir({:su, u}, env, st, _expect) do
+  defp emit_ir0({:su, u}, env, st, _expect) do
     with {:ok, {pre, ex, _lay, st}} <- emit_ir(u, env, st, nat_ptr()) do
       {:ok, {pre, "#{g("suc")}(#{ex})", :nat, st}}
     end
   end
 
-  defp emit_ir({:call, name, args}, env, st, _expect) do
+  defp emit_ir0({:call, name, args}, env, st, _expect) do
     with {:ok, {pres, exprs, st}} <- emit_args(args, live_ctypes(st, name), env, st) do
       {:ok,
        {squash(pres), "#{ename(st, name)}(#{Enum.join(exprs, ", ")})", call_lay(st, name), st}}
     end
   end
 
-  defp emit_ir({:con, "Atom", name, []}, _env, st, _expect) do
+  defp emit_ir0({:con, "Atom", name, []}, _env, st, _expect) do
     {:ok, {"", atom_c(name, st.nm), {:data, "Atom"}, st}}
   end
 
-  defp emit_ir({:con, dname, cname, args}, env, st, _expect) do
+  defp emit_ir0({:con, dname, cname, args}, env, st, _expect) do
     with {:ok, {pres, exprs, st}} <- emit_args(args, con_ctypes(st, cname), env, st) do
       fun = Map.fetch!(st.nm.ctors, {dname, cname})
       expr = enum_ctor_expr(dname, cname, fun, exprs, st)
@@ -620,7 +689,7 @@ defmodule Muro.Emit.C do
   # An erased constructor field, marked `:erased`. `0`, and the payload
   # is ignored. A zero passed under a spec alias is bound at the
   # argument's layout, so this clause does not see it.
-  defp emit_ir({:let, name, :erased, _g, _val, body}, env, st, expect) do
+  defp emit_ir0({:let, name, :erased, _g, _val, body}, env, st, expect) do
     {c, scope} = Name.bind(spell(name), st.scope)
     st = %{st | scope: scope}
 
@@ -631,18 +700,19 @@ defmodule Muro.Emit.C do
   end
 
   # `matchEmpty`. The scrutinee is bound only so the expression is evaluated.
-  defp emit_ir({:let, _name, _lay, _g, val, :abort}, env, st, _expect) do
+  defp emit_ir0({:let, _name, _lay, _g, val, :abort}, env, st, _expect) do
     with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, "void *") do
       stmt = squash([pre, "(void)(#{ex});", "/* unreachable */", "abort();"])
       {:ok, {stmt, "0", :opaque, st}}
     end
   end
 
-  defp emit_ir({:let, name, lay, _g, val, body}, env, st, expect) do
+  defp emit_ir0({:let, name, lay, _g, val, body}, env, st, expect) do
     ty = ctype(lay, st.book, st.prefix)
+    d = Map.get(st, :dest)
 
-    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, ty) do
-      {local, st} = news(st)
+    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, Map.put(st, :dest, nil), ty) do
+      {local, st} = news(Map.put(st, :dest, d))
 
       with {:ok, {pre2, ex2, blay, st}} <-
              emit_ir(body, [{name, local, lay} | env], st, expect) do
@@ -653,7 +723,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:pair, a, b}, env, st, _expect) do
+  defp emit_ir0({:pair, a, b}, env, st, _expect) do
     with {:ok, {pre, ea, la, st}} <- emit_ir(a, env, st, "void *"),
          {:ok, {pre2, eb, lb, st}} <- emit_ir(b, env, st, "void *") do
       if Rep.value_lay?(st.book, la) or Rep.value_lay?(st.book, lb) do
@@ -667,7 +737,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:letp, a, b, e, body}, env, st, expect) do
+  defp emit_ir0({:letp, a, b, e, body}, env, st, expect) do
     with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, pair_ptr()) do
       {sname, st} = news(st)
       {ca, scope} = Name.bind(spell(a), st.scope)
@@ -697,7 +767,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:uncons, e}, env, st, _expect) do
+  defp emit_ir0({:uncons, e}, env, st, _expect) do
     with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, stream_ptr()) do
       {sname, st} = news(st)
       {pname, st} = news(st)
@@ -718,7 +788,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:stream, seed, caps, step_name}, env, st, _expect) do
+  defp emit_ir0({:stream, seed, caps, step_name}, env, st, _expect) do
     with {:ok, step} <- fetch_step(st, step_name),
          {:ok, {seed_p, cap_ps}} <- ok_split(step.params, caps),
          {:ok, {pre, seed_ex, seed_lay, st}} <-
@@ -748,21 +818,24 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:match, scrut, arms} = tm, env, st, expect) do
+  defp emit_ir0({:match, scrut, arms} = tm, env, st, expect) do
     kind = match_kind(lay_of(scrut, env, st), arms, st.book)
     rlay = lay_of(tm, env, st)
     # A word operation emits its operand as `void *`. The arms still
     # name a word, so the temporary uses that layout.
     expect = match_expect(expect, rlay, st.book, st.prefix)
 
+    d = Map.get(st, :dest)
+
     with {:ok, {pre, ex, _lay, st}} <-
-           emit_ir(scrut, env, st, scrut_ty(kind, st.book, st.prefix)),
-         {:ok, {stmt, name, st}} <- emit_switch(kind, pre, ex, arms, env, st, expect) do
-      {:ok, {stmt, name, rlay, st}}
+           emit_ir(scrut, env, Map.put(st, :dest, nil), scrut_ty(kind, st.book, st.prefix)),
+         {:ok, {stmt, name, st}} <-
+           emit_switch(kind, pre, ex, arms, env, Map.put(st, :dest, d), expect) do
+      {:ok, {stmt, name, rlay, Map.put(st, :dest, d)}}
     end
   end
 
-  defp emit_ir({:wrd, k, op, args}, env, st, expect) do
+  defp emit_ir0({:wrd, k, op, args}, env, st, expect) do
     with {:ok, {pres, exprs, st}} <- emit_word_args(args, env, st) do
       case word_c(k, op, exprs, st, expect) do
         {:ok, {more, expr, lay, st}} ->
@@ -774,11 +847,11 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(:abort, _env, st, _expect) do
+  defp emit_ir0(:abort, _env, st, _expect) do
     {:ok, {squash(["/* unreachable */", "abort();"]), "0", :opaque, st}}
   end
 
-  defp emit_ir({:byt, bin}, _env, st, _expect) when is_binary(bin) do
+  defp emit_ir0({:byt, bin}, _env, st, _expect) when is_binary(bin) do
     if bin == "" do
       {:ok, {"", "#{g("slice_empty")}()", :slice, st}}
     else
@@ -790,27 +863,27 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:bcat, a, b}, env, st, _expect) do
+  defp emit_ir0({:bcat, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, _, st}} <- emit_ir(a, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, slice_ty()) do
       {:ok, {squash([pa, pb]), "#{g("bytes_cat")}(#{ea}, #{eb})", :slice, st}}
     end
   end
 
-  defp emit_ir({:blen, a}, env, st, _expect) do
+  defp emit_ir0({:blen, a}, env, st, _expect) do
     with {:ok, {pre, ex, _, st}} <- emit_ir(a, env, st, slice_ty()) do
       {:ok, {pre, "(uint64_t)((#{ex}).n)", :u64, st}}
     end
   end
 
-  defp emit_ir({:beq, a, b}, env, st, _expect) do
+  defp emit_ir0({:beq, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, _, st}} <- emit_ir(a, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, slice_ty()) do
       {:ok, {squash([pa, pb]), "#{g("slice_eq")}(#{ea}, #{eb})", :wbool, st}}
     end
   end
 
-  defp emit_ir({:bsub, s, off, len}, env, st, _expect) do
+  defp emit_ir0({:bsub, s, off, len}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {po, eo, _, st}} <- emit_ir(off, env, st, "uint64_t "),
          {:ok, {pn, en, _, st}} <- emit_ir(len, env, st, "uint64_t ") do
@@ -818,34 +891,34 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:bget, s, i}, env, st, _expect) do
+  defp emit_ir0({:bget, s, i}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {pi, ei, _, st}} <- emit_ir(i, env, st, "uint64_t ") do
       {:ok, {squash([ps, pi]), "#{g("slice_get")}(#{es}, #{ei})", {:opt, :u8}, st}}
     end
   end
 
-  defp emit_ir({:btil, s, b}, env, st, _expect) do
+  defp emit_ir0({:btil, s, b}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, "uint8_t ") do
       {:ok, {squash([ps, pb]), "#{g("slice_until")}(#{es}, #{eb})", :slice, st}}
     end
   end
 
-  defp emit_ir({:baft, s, b}, env, st, _expect) do
+  defp emit_ir0({:baft, s, b}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, "uint8_t ") do
       {:ok, {squash([ps, pb]), "#{g("slice_after")}(#{es}, #{eb})", :slice, st}}
     end
   end
 
-  defp emit_ir({:sbytes, s}, env, st, _expect) do
+  defp emit_ir0({:sbytes, s}, env, st, _expect) do
     with {:ok, {pre, ex, lay, st}} <- emit_ir(s, env, st, str_ty()) do
       {:ok, {pre, "#{g("str_bytes")}(#{as_str(ex, lay)})", :slice, st}}
     end
   end
 
-  defp emit_ir({:bunc, s}, env, st, _expect) do
+  defp emit_ir0({:bunc, s}, env, st, _expect) do
     nothing = Map.get(st.nm.ctors, {"Maybe", "nothing"})
     just = Map.get(st.nm.ctors, {"Maybe", "just"})
 
@@ -884,65 +957,27 @@ defmodule Muro.Emit.C do
   # that returns the accumulator unchanged assigns nothing. A body that
   # ends in `{:inout, f, args}` calls `f`'s in-place twin on the
   # accumulator's address. The body sees only the loop's binders.
-  defp emit_ir({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
-    {on, _, _} = octet
-    {rn, _, _} = rest
-    {an, alay, _} = acc
-    cty = ctype(alay, st.book, st.prefix)
-    cap_tys = Enum.map(caps, fn {_n, lay, _g, _tm} -> ctype(lay, st.book, st.prefix) end)
-
-    with {:ok, {cpres, cexs, st}} <- emit_args(Enum.map(caps, &elem(&1, 3)), cap_tys, env, st),
-         {:ok, {pz, ez, _zlay, st}} <- emit_ir(z, env, st, cty),
-         {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
-      {accv, st} = news(st)
-      {cur, st} = news(st)
-      sl = g("slice")
-
-      {cap_decls, benv, st} =
-        caps
-        |> Enum.zip(Enum.zip(cap_tys, cexs))
-        |> Enum.reduce({[], [], st}, fn {{n, lay, _g, _tm}, {ty, ex}}, {decls, benv, st} ->
-          {local, st} = news(st)
-          void = if uses?(body, n) or stop_uses?(stop, n), do: "", else: "(void)#{local};"
-          {decls ++ ["#{ty}#{local} = #{ex};", void], [{n, local, lay} | benv], st}
-        end)
-
-      {bv, st} = news(st)
-      {rv, st} = news(st)
-      benv = [{an, accv, alay}, {rn, rv, :slice}, {on, bv, :u8} | benv]
-
-      with {:ok, {stop_src, st}} <- loop_stop(stop, accv, alay, st),
-           {:ok, {bpre, step, st}} <- loop_body(body, an, accv, benv, cty, st) do
-        octet_decl = if uses?(body, on), do: "uint8_t #{bv} = #{cur}.p[0];", else: ""
-        rest_decl = "#{sl} #{rv} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};"
-        rest_void = if uses?(body, rn), do: "", else: "(void)#{rv};"
-
-        inner =
-          squash([stop_src, octet_decl, rest_decl, rest_void, bpre, step, "#{cur} = #{rv};"])
-
-        loop =
-          squash([
-            "#{cty}#{accv} = #{ez};",
-            "#{sl} #{cur} = #{es};",
-            "while (#{cur}.n > 0) {",
-            indent(inner, 2),
-            "}"
-          ])
-
-        {:ok, {squash(cpres ++ cap_decls ++ [pz, ps, loop]), accv, alay, st}}
-      end
+  # `inert_skip/5` jumps to the next byte that can change the
+  # accumulator, when that set is one, two, or three constants.
+  # `needle_loop/3` replaces a fold that is the border automaton of a
+  # fixed string. Anything else is the byte loop.
+  defp emit_ir0({:loop, _, _, _, _, _, _, _, _} = tm, env, st, expect) do
+    case needle_loop(tm, env, st) do
+      {:ok, emitted} -> {:ok, emitted}
+      :no -> emit_byte_loop(tm, env, st, expect)
+      {:error, _} = err -> err
     end
   end
 
   # In expression position (a match arm of a loop body) the in-place
   # call is a comma expression whose value is the updated accumulator.
-  defp emit_ir({:inout, name, args}, env, st, _expect) do
+  defp emit_ir0({:inout, name, args}, env, st, _expect) do
     with {:ok, {pre, call, acc_c, st}} <- io_call(name, args, env, st) do
       {:ok, {pre, "(#{call}, #{acc_c})", call_lay(st, name), st}}
     end
   end
 
-  defp emit_ir({:bfold, step, caps, z, s}, env, st, _expect) do
+  defp emit_ir0({:bfold, step, caps, z, s}, env, st, _expect) do
     with {:ok, st} <- ensure_fold_step(step, st),
          {:ok, {cpre, cexs, st}} <- emit_cap_list(caps, env, st),
          {:ok, {pz, ez, lay, st}} <-
@@ -973,7 +1008,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:str, bin}, _env, st, _expect) when is_binary(bin) do
+  defp emit_ir0({:str, bin}, _env, st, _expect) when is_binary(bin) do
     if bin == "" do
       {:ok, {"", "#{g("str_empty")}()", :string, st}}
     else
@@ -985,7 +1020,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:scat, a, b}, env, st, _expect) do
+  defp emit_ir0({:scat, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, la, st}} <- emit_ir(a, env, st, str_ty()),
          {:ok, {pb, eb, lb, st}} <- emit_ir(b, env, st, str_ty()) do
       {:ok,
@@ -993,13 +1028,13 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:slen, a}, env, st, _expect) do
+  defp emit_ir0({:slen, a}, env, st, _expect) do
     with {:ok, {pre, ex, lay, st}} <- emit_ir(a, env, st, str_ty()) do
       {:ok, {pre, "#{g("str_len")}(#{as_str(ex, lay)})", :nat, st}}
     end
   end
 
-  defp emit_ir({:seq, a, b}, env, st, _expect) do
+  defp emit_ir0({:seq, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, la, st}} <- emit_ir(a, env, st, str_ty()),
          {:ok, {pb, eb, lb, st}} <- emit_ir(b, env, st, str_ty()) do
       {:ok,
@@ -1007,7 +1042,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
+  defp emit_ir0(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
 
   # A nullary constructor of an enum-scalar type is the enumerator.
   # The function is still emitted for a host that calls it.
@@ -1021,6 +1056,66 @@ defmodule Muro.Emit.C do
 
   defp enum_ctor_expr(_dname, _cname, fun, exprs, _st) do
     "#{fun}(#{Enum.join(exprs, ", ")})"
+  end
+
+  defp emit_byte_loop({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
+    {on, _, _} = octet
+    {rn, _, _} = rest
+    {an, alay, _} = acc
+    cty = ctype(alay, st.book, st.prefix)
+    cap_tys = Enum.map(caps, fn {_n, lay, _g, _tm} -> ctype(lay, st.book, st.prefix) end)
+
+    with {:ok, {cpres, cexs, st}} <- emit_args(Enum.map(caps, &elem(&1, 3)), cap_tys, env, st),
+         {:ok, {pz, ez, _zlay, st}} <- emit_ir(z, env, st, cty),
+         {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+      {accv, st} = news(st)
+      {cur, st} = news(st)
+      sl = g("slice")
+
+      {cap_decls, benv, st} =
+        caps
+        |> Enum.zip(Enum.zip(cap_tys, cexs))
+        |> Enum.reduce({[], [], st}, fn {{n, lay, _g, _tm}, {ty, ex}}, {decls, benv, st} ->
+          {local, st} = news(st)
+          void = if uses?(body, n) or stop_uses?(stop, n), do: "", else: "(void)#{local};"
+          {decls ++ ["#{ty}#{local} = #{ex};", void], [{n, local, lay} | benv], st}
+        end)
+
+      {bv, st} = news(st)
+      {rv, st} = news(st)
+      benv = [{an, accv, alay}, {rn, rv, :slice}, {on, bv, :u8} | benv]
+
+      with {:ok, {stop_src, st}} <- loop_stop(stop, accv, alay, st),
+           {:ok, {bpre, step, st}} <- loop_body(body, an, accv, benv, cty, st) do
+        {skip, st} = inert_skip(body, on, an, cur, st)
+        octet_decl = if uses?(body, on), do: "uint8_t #{bv} = #{cur}.p[0];", else: ""
+        rest_decl = "#{sl} #{rv} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};"
+        rest_void = if uses?(body, rn), do: "", else: "(void)#{rv};"
+
+        inner =
+          squash([
+            stop_src,
+            skip,
+            octet_decl,
+            rest_decl,
+            rest_void,
+            bpre,
+            step,
+            "#{cur} = #{rv};"
+          ])
+
+        loop =
+          squash([
+            "#{cty}#{accv} = #{ez};",
+            "#{sl} #{cur} = #{es};",
+            "while (#{cur}.n > 0) {",
+            indent(inner, 2),
+            "}"
+          ])
+
+        {:ok, {squash(cpres ++ cap_decls ++ [pz, ps, loop]), accv, alay, st}}
+      end
+    end
   end
 
   # A pair slot and a stream seed are `void *`. The struct is copied
@@ -1186,7 +1281,7 @@ defmodule Muro.Emit.C do
 
   defp emit_switch(:nat, pre, ex, [{:arm, "zero", [], z}, {:arm, "suc", [y], s}], env, st, expect) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
     st = %{st | scope: st.base_scope}
 
     with {:ok, {zpre, zex, _lay, st}} <- emit_ir(z, env, st, expect) do
@@ -1198,19 +1293,19 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            init_temp(expect, tname, st),
+            slot_init(fresh, expect, tname, st),
             "{",
             "#{nat_ptr()}#{sname} = #{ex};",
             "switch (#{sname}->#{g("field_tag")}) {",
             "case 0: {",
             zpre,
-            "#{tname} = #{zex};",
+            assign(tname, zex),
             "break;",
             "}",
             "case 1: {",
             "#{nat_ptr()}#{yname} = #{sname}->#{g("field_suc")};",
             spre,
-            "#{tname} = #{sex};",
+            assign(tname, sex),
             "break;",
             "}",
             "default: {",
@@ -1228,13 +1323,13 @@ defmodule Muro.Emit.C do
 
   defp emit_switch(:atom, pre, ex, arms, env, st, expect) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
 
     with {:ok, {cases, st}} <- emit_atom_arms(arms, tname, env, st, expect) do
       stmt =
         squash([
           pre,
-          init_temp(expect, tname, st),
+          slot_init(fresh, expect, tname, st),
           "{",
           "#{atom_ty()}#{sname} = #{ex};",
           "switch (#{sname}) {",
@@ -1256,29 +1351,10 @@ defmodule Muro.Emit.C do
         {:error, "c:unsupported"}
 
       data ->
-        {sname, st} = news(st)
-        {tname, st} = newt(st)
-        {ptr, switch_on, arrow} = data_scrut(data, dname, sname, st)
-
-        with {:ok, {cases, st}} <-
-               emit_data_arms(arms, data, sname, tname, arrow, env, st, expect) do
-          stmt =
-            squash([
-              pre,
-              init_temp(expect, tname, st),
-              "{",
-              "#{ptr}#{sname} = #{ex};",
-              "switch (#{switch_on}) {",
-              cases,
-              "default: {",
-              "/* unreachable */",
-              "abort();",
-              "}",
-              "}",
-              "}"
-            ])
-
-          {:ok, {stmt, tname, st}}
+        if enum_if?(data, arms) do
+          emit_enum_if(data, dname, pre, ex, arms, env, st, expect)
+        else
+          emit_data_switch(data, dname, pre, ex, arms, env, st, expect)
         end
     end
   end
@@ -1294,7 +1370,7 @@ defmodule Muro.Emit.C do
          expect
        ) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
     st = %{st | scope: st.base_scope}
 
     with {:ok, {tpre, tex, _lay, st}} <- emit_ir(t, env, st, expect) do
@@ -1304,15 +1380,15 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            init_temp(expect, tname, st),
+            slot_init(fresh, expect, tname, st),
             "{",
             "#{ctype(:wbool, st.book, st.prefix)}#{sname} = #{ex};",
             "if (#{sname}) {",
             tpre,
-            "#{tname} = #{tex};",
+            assign(tname, tex),
             "} else {",
             fpre,
-            "#{tname} = #{fex};",
+            assign(tname, fex),
             "}",
             "}"
           ])
@@ -1333,7 +1409,7 @@ defmodule Muro.Emit.C do
          expect
        ) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
     st = %{st | scope: st.base_scope}
 
     with {:ok, {npre, nex, _lay, st}} <- emit_ir(n, env, st, expect) do
@@ -1353,16 +1429,16 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            init_temp(expect, tname, st),
+            slot_init(fresh, expect, tname, st),
             "{",
             "#{ctype({:opt, pay}, st.book, st.prefix)}#{sname} = #{ex};",
             "if (#{sname}.tag) {",
             bind,
             spre,
-            "#{tname} = #{sex};",
+            assign(tname, sex),
             "} else {",
             npre,
-            "#{tname} = #{nex};",
+            assign(tname, nex),
             "}",
             "}"
           ])
@@ -1386,6 +1462,82 @@ defmodule Muro.Emit.C do
     end
   end
 
+  # Both tags are the whole type, so an out-of-range value is not a
+  # third arm. The `else` is the second constructor. A wider enum keeps
+  # the switch and its `abort`.
+  defp enum_if?(data, arms) do
+    Rep.enum_data?(data) and length(data.ctors) == 2 and enum_arms?(data, arms)
+  end
+
+  defp enum_arms?(data, [{:arm, a, [], _}, {:arm, b, [], _}]) do
+    Enum.map(data.ctors, & &1.name) == [a, b]
+  end
+
+  defp enum_arms?(_data, _arms), do: false
+
+  defp emit_enum_if(data, dname, pre, ex, arms, env, st, expect) do
+    {sname, st} = news(st)
+    {tname, fresh, st} = slot(st)
+    [c0 | _] = data.ctors
+    [arm0, arm1] = arms
+    tag0 = ctor_tag(dname, c0.name, st.prefix)
+    ptr = struct_name(dname, st.prefix) <> " "
+
+    with {:ok, {t0, st}} <- enum_if_arm(arm0, tname, env, st, expect),
+         {:ok, {t1, st}} <- enum_if_arm(arm1, tname, env, st, expect) do
+      stmt =
+        squash([
+          pre,
+          slot_init(fresh, expect, tname, st),
+          "{",
+          "#{ptr}#{sname} = #{ex};",
+          "if (#{sname} == #{tag0}) {",
+          t0,
+          "} else {",
+          t1,
+          "}",
+          "}"
+        ])
+
+      {:ok, {stmt, tname, st}}
+    end
+  end
+
+  defp enum_if_arm({:arm, _cname, [], body}, tname, env, st, expect) do
+    st = %{st | scope: st.base_scope}
+
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, expect) do
+      {:ok, {squash([pre, assign(tname, ex)]), st}}
+    end
+  end
+
+  defp emit_data_switch(data, dname, pre, ex, arms, env, st, expect) do
+    {sname, st} = news(st)
+    {tname, fresh, st} = slot(st)
+    {ptr, switch_on, arrow} = data_scrut(data, dname, sname, st)
+
+    with {:ok, {cases, st}} <-
+           emit_data_arms(arms, data, sname, tname, arrow, env, st, expect) do
+      stmt =
+        squash([
+          pre,
+          slot_init(fresh, expect, tname, st),
+          "{",
+          "#{ptr}#{sname} = #{ex};",
+          "switch (#{switch_on}) {",
+          cases,
+          "default: {",
+          "/* unreachable */",
+          "abort();",
+          "}",
+          "}",
+          "}"
+        ])
+
+      {:ok, {stmt, tname, st}}
+    end
+  end
+
   defp emit_atom_arms(arms, tname, env, st, expect) do
     emit_arm_list(arms, st, fn {:arm, name, _bs, body}, st ->
       st = %{st | scope: st.base_scope}
@@ -1395,7 +1547,7 @@ defmodule Muro.Emit.C do
           squash([
             "case #{atom_c(name, st.nm)}: {",
             pre,
-            "#{tname} = #{ex};",
+            assign(tname, ex),
             "break;",
             "}"
           ])
@@ -1454,7 +1606,7 @@ defmodule Muro.Emit.C do
             "case #{tag}: {",
             Enum.join(decls, "\n"),
             pre,
-            "#{tname} = #{ex};",
+            assign(tname, ex),
             "break;",
             "}"
           ])
@@ -2384,6 +2536,8 @@ defmodule Muro.Emit.C do
   end
 
   defp source(book, runs, sigs, funs, extras, stem, nm, _opts, bytes?, strings?, prefix) do
+    {funs, extras} = inline_hot(funs, extras, book, prefix)
+
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -2394,6 +2548,7 @@ defmodule Muro.Emit.C do
       "#include \"#{stem}.h\"",
       "#include <stdlib.h>",
       if(bytes?, do: "#include <string.h>\n" <> bytes_helpers(), else: ""),
+      find_helpers(Enum.join(funs ++ extras, "\n")),
       nat_helpers(),
       unit_helpers(),
       if(strings?, do: "#include <string.h>\n" <> string_helpers(bytes?), else: ""),
@@ -2407,6 +2562,153 @@ defmodule Muro.Emit.C do
 
     join_parts(parts)
   end
+
+  # A scalar run the byte loops reach, with no loop of its own and a
+  # body no wider than the name step. Inlining it removes the call
+  # around each octet. A run past that width, or one the loops do not
+  # reach, stays a call: inlining it bloated the request step.
+  @inline_body 700
+
+  defp inline_hot(funs, extras, book, prefix) do
+    parsed = Enum.flat_map(funs ++ extras, &parse_cfun/1)
+    by = Map.new(parsed, fn p -> {p.name, p} end)
+    chosen = inline_names(parsed, by, scalar_rets(book, prefix))
+    {Enum.map(funs, &apply_inline(&1, chosen)), Enum.map(extras, &apply_inline(&1, chosen))}
+  end
+
+  defp scalar_rets(book, prefix) do
+    enums =
+      book
+      |> data_defs()
+      |> Enum.filter(&Rep.enum_data?/1)
+      |> Enum.map(&struct_name(&1.name, prefix))
+
+    MapSet.new(["uint8_t", "uint32_t", "uint64_t", "int64_t" | enums])
+  end
+
+  defp inline_names(parsed, by, scalar) do
+    small =
+      parsed
+      |> Enum.filter(fn p ->
+        MapSet.member?(scalar, p.ret) and not p.loop and not p.field and p.size <= @inline_body
+      end)
+      |> MapSet.new(& &1.name)
+
+    parsed
+    |> hot_steps()
+    |> Enum.reduce(MapSet.new(), fn name, seen -> inline_walk(name, by, seen) end)
+    |> MapSet.intersection(small)
+  end
+
+  defp hot_steps(parsed) do
+    Enum.reduce(parsed, MapSet.new(), fn p, acc ->
+      if p.loop, do: MapSet.union(acc, assigned_in_loops(p.body, p.name)), else: acc
+    end)
+  end
+
+  defp inline_walk(name, by, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        seen
+
+      match?(%{loop: true}, Map.get(by, name)) ->
+        seen
+
+      is_map(Map.get(by, name)) ->
+        seen = MapSet.put(seen, name)
+        Enum.reduce(Map.fetch!(by, name).calls, seen, &inline_walk(&1, by, &2))
+
+      true ->
+        seen
+    end
+  end
+
+  defp assigned_in_loops(body, self) do
+    body
+    |> String.split("\n")
+    |> Enum.reduce({MapSet.new(), 0, false}, fn line, {set, depth, pending} ->
+      pending = pending or Regex.match?(~r/\b(while|for)\s*\(/, line)
+      opens = length(:binary.matches(line, "{"))
+      closes = length(:binary.matches(line, "}"))
+
+      set =
+        if depth > 0 or pending do
+          ~r/=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/
+          |> Regex.scan(line)
+          |> Enum.reduce(set, fn [_, n], s ->
+            if n == self, do: s, else: MapSet.put(s, n)
+          end)
+        else
+          set
+        end
+
+      {depth, pending} =
+        cond do
+          pending and opens > 0 -> {depth + opens, false}
+          depth > 0 -> {max(depth + opens - closes, 0), false}
+          true -> {depth, pending}
+        end
+
+      {set, depth, pending}
+    end)
+    |> elem(0)
+  end
+
+  defp parse_cfun(text) when is_binary(text) do
+    case Regex.run(~r/\A(.*?)\{(.*)\}\s*\z/s, text) do
+      [_, head, body] ->
+        cleaned =
+          head
+          |> String.replace(~r/__attribute__\(\([^)]*\)\)/, "")
+          |> String.replace(~r/\b(static|inline)\b/, "")
+          |> String.trim()
+
+        case Regex.run(~r/\A(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/s, cleaned) do
+          [_, ret, name] ->
+            [
+              %{
+                name: name,
+                ret: String.trim(ret),
+                size: byte_size(text),
+                loop: Regex.match?(~r/\b(while|for)\s*\(/, body),
+                field: String.contains?(body, "muro__field_tag"),
+                calls: c_calls(body, name),
+                body: body
+              }
+            ]
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp c_calls(body, self) do
+    ~r/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/
+    |> Regex.scan(body)
+    |> Enum.map(fn [_, n] -> n end)
+    |> Enum.reject(&(&1 == self))
+    |> MapSet.new()
+  end
+
+  defp apply_inline(text, chosen) do
+    case parse_cfun(text) do
+      [%{name: name}] ->
+        if MapSet.member?(chosen, name), do: prefix_inline(text), else: text
+
+      _ ->
+        text
+    end
+  end
+
+  defp prefix_inline("__attribute__((unused)) static " <> rest) do
+    "__attribute__((always_inline, unused)) static inline " <> rest
+  end
+
+  defp prefix_inline(text), do: "__attribute__((always_inline)) inline " <> text
 
   defp join_parts(parts) do
     parts
@@ -2773,15 +3075,115 @@ defmodule Muro.Emit.C do
     }
 
     __attribute__((unused)) static #{sl} #{til}(#{sl} s, uint8_t b) {
-      size_t i;
-      for (i = 0; i < s.n; i++) if (s.p[i] == b) return (#{sl}){s.p, i};
-      return s;
+      const uint8_t *q;
+      if (s.n == 0) return s;
+      q = memchr(s.p, b, s.n);
+      if (q == 0) return s;
+      return (#{sl}){s.p, (size_t)(q - s.p)};
     }
 
     __attribute__((unused)) static #{sl} #{aft}(#{sl} s, uint8_t b) {
+      const uint8_t *q;
       size_t i;
-      for (i = 0; i < s.n; i++) if (s.p[i] == b) return (#{sl}){s.p + i + 1, s.n - i - 1};
-      return #{emp}();
+      if (s.n == 0) return #{emp}();
+      q = memchr(s.p, b, s.n);
+      if (q == 0) return #{emp}();
+      i = (size_t)(q - s.p);
+      return (#{sl}){s.p + i + 1, s.n - i - 1};
+    }
+    """
+    |> String.trim()
+  end
+
+  # Emitted only when a loop jumps to a short set of bytes. A book
+  # with no such loop keeps the bytes it had. SSE2 compares sixteen
+  # octets and stops on the first equal one. The scalar tail is that
+  # same scan, and it is the whole function where SSE2 is absent.
+  # Either way the pointer is the first hit or the end, never a later
+  # octet. `memcpy` keeps the wide load off the slice's element type.
+  defp find_helpers(text) when is_binary(text) do
+    want2 = String.contains?(text, g("find2") <> "(")
+    want3 = String.contains?(text, g("find3") <> "(")
+    sse = want2 or want3 or String.contains?(text, "_mm_cmpeq_epi8")
+
+    parts =
+      []
+      |> then(fn acc -> if want2, do: acc ++ [find2_helper()], else: acc end)
+      |> then(fn acc -> if want3, do: acc ++ [find3_helper()], else: acc end)
+
+    hdr =
+      if sse do
+        """
+        #include <string.h>
+        #if defined(__SSE2__)
+        #include <emmintrin.h>
+        #endif
+        """
+      else
+        ""
+      end
+
+    hdr <> Enum.join(parts, "\n\n")
+  end
+
+  defp find2_helper do
+    name = g("find2")
+
+    """
+    __attribute__((always_inline, unused)) static inline const uint8_t *#{name}(const uint8_t *p, size_t n, uint8_t a, uint8_t b) {
+      const uint8_t *end = p + n;
+    #if defined(__SSE2__)
+      const __m128i va = _mm_set1_epi8((char)a);
+      const __m128i vb = _mm_set1_epi8((char)b);
+      while (n >= 16) {
+        __m128i v;
+        __m128i m;
+        unsigned bits;
+        memcpy(&v, p, 16);
+        m = _mm_or_si128(_mm_cmpeq_epi8(v, va), _mm_cmpeq_epi8(v, vb));
+        bits = (unsigned)_mm_movemask_epi8(m);
+        if (bits) return p + (unsigned)__builtin_ctz(bits);
+        p += 16;
+        n -= 16;
+      }
+    #endif
+      while (p < end) {
+        if (*p == a || *p == b) return p;
+        p++;
+      }
+      return end;
+    }
+    """
+    |> String.trim()
+  end
+
+  defp find3_helper do
+    name = g("find3")
+
+    """
+    __attribute__((always_inline, unused)) static inline const uint8_t *#{name}(const uint8_t *p, size_t n, uint8_t a, uint8_t b, uint8_t c) {
+      const uint8_t *end = p + n;
+    #if defined(__SSE2__)
+      const __m128i va = _mm_set1_epi8((char)a);
+      const __m128i vb = _mm_set1_epi8((char)b);
+      const __m128i vc = _mm_set1_epi8((char)c);
+      while (n >= 16) {
+        __m128i v;
+        __m128i m;
+        unsigned bits;
+        memcpy(&v, p, 16);
+        m = _mm_or_si128(_mm_cmpeq_epi8(v, va), _mm_or_si128(_mm_cmpeq_epi8(v, vb), _mm_cmpeq_epi8(v, vc)));
+        bits = (unsigned)_mm_movemask_epi8(m);
+        if (bits) return p + (unsigned)__builtin_ctz(bits);
+        p += 16;
+        n -= 16;
+      }
+    #endif
+      while (p < end) {
+        if (*p == a || *p == b || *p == c) return p;
+        p++;
+      }
+      return end;
     }
     """
     |> String.trim()
@@ -2925,10 +3327,886 @@ defmodule Muro.Emit.C do
   end
 
   defp loop_body(body, _an, acc, env, cty, st) do
-    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, cty) do
-      {:ok, {pre, "#{acc} = #{ex};", st}}
+    d = Map.get(st, :dest)
+
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, Map.put(st, :dest, acc), cty) do
+      {:ok, {pre, assign(acc, ex), Map.put(st, :dest, d)}}
     end
   end
+
+  # A fold of a `U64` whose step is the border automaton of one octet
+  # string: the low three bits are the matched length, the bits above
+  # them are how far the fold has read, and the matched length sticks
+  # once it is the whole string. The loop is a scan for that string.
+  # The unmatched suffix is the automaton, so the packed miss state is
+  # the one the byte loop would have returned. A step this cannot read
+  # stays the byte loop. Recognition is the transition table, not the
+  # step's name.
+  defp needle_loop({:loop, [], octet, rest, {an, :u64, _}, z, s, _stop, body}, env, st) do
+    {on, _, _} = octet
+    {rn, _, _} = rest
+
+    with false <- uses?(body, rn),
+         {:ok, bytes, delta, accept} <- needle_table(z, body, on, an, st) do
+      cty = ctype(:u64, st.book, st.prefix)
+      sl = g("slice")
+
+      with {:ok, {pz, ez, _, st}} <- emit_ir(z, env, st, cty),
+           {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+        {accv, st} = news(st)
+        {cur, st} = news(st)
+        {lab, st} = news(st)
+
+        stmt =
+          squash([
+            pz,
+            ps,
+            "#{cty}#{accv} = #{ez};",
+            "#{sl} #{cur} = #{es};",
+            needle_c(bytes, delta, accept, accv, cur, lab)
+          ])
+
+        {:ok, {stmt, accv, :u64, st}}
+      end
+    else
+      _ -> :no
+    end
+  end
+
+  defp needle_loop(_, _, _), do: :no
+
+  defp needle_table(z, body, on, an, st) do
+    funs = Map.values(st.funs)
+
+    with {:ok, {:word, :u64, 0}} <- Muro.IR.Eval.eval(funs, z, %{}, fuel: 8_000),
+         {:ok, delta, accept} <- probe_states(funs, body, on, an),
+         {:ok, bytes} <- chain_needle(delta, accept),
+         true <- border_matches?(bytes, delta, accept) do
+      {:ok, bytes, delta, accept}
+    else
+      _ -> :no
+    end
+  end
+
+  defp probe_states(funs, body, on, an) do
+    walk_states([0], MapSet.new(), %{}, nil, funs, body, on, an)
+  end
+
+  defp walk_states([], _seen, _delta, nil, _funs, _body, _on, _an), do: :no
+
+  defp walk_states([], _seen, delta, accept, _funs, _body, _on, _an),
+    do: {:ok, delta, accept}
+
+  defp walk_states([s | rest], seen, delta, accept, funs, body, on, an) do
+    cond do
+      s > 7 or MapSet.member?(seen, s) ->
+        walk_states(rest, seen, delta, accept, funs, body, on, an)
+
+      true ->
+        seen = MapSet.put(seen, s)
+
+        case classify_state(s, funs, body, on, an) do
+          :no ->
+            :no
+
+          :absorb ->
+            if accept == nil do
+              walk_states(rest, seen, delta, s, funs, body, on, an)
+            else
+              :no
+            end
+
+          {:move, map} ->
+            delta = Enum.reduce(map, delta, fn {b, n}, d -> Map.put(d, {s, b}, n) end)
+            more = map |> Map.values() |> Enum.uniq()
+            walk_states(rest ++ more, seen, delta, accept, funs, body, on, an)
+        end
+    end
+  end
+
+  defp classify_state(s, funs, body, on, an) do
+    acc = Bitwise.bor(Bitwise.band(s, 7), 40)
+
+    0..255
+    |> Enum.reduce_while({:same, %{}}, fn b, {mode, map} ->
+      case probe_step(funs, body, on, an, b, acc) do
+        {:ok, ^acc} ->
+          if mode == :move, do: {:halt, :no}, else: {:cont, {:same, map}}
+
+        {:ok, r} ->
+          next = Bitwise.band(r, 7)
+          moved = Bitwise.bsr(r, 3) == 6 and next <= 7 and mode != :same_bad
+
+          cond do
+            moved and mode in [:same, :move] -> {:cont, {:move, Map.put(map, b, next)}}
+            true -> {:halt, :no}
+          end
+
+        :no ->
+          {:halt, :no}
+      end
+    end)
+    |> case do
+      {:same, _} -> :absorb
+      {:move, map} when map_size(map) == 256 -> {:move, map}
+      _ -> :no
+    end
+  end
+
+  defp probe_step(funs, body, on, an, byte, acc) do
+    env = %{on => {:word, :u8, byte}, an => {:word, :u64, acc}}
+
+    case Muro.IR.Eval.eval(funs, body, env, fuel: 8_000) do
+      {:ok, {:word, :u64, n}} when is_integer(n) and n >= 0 -> {:ok, n}
+      _ -> :no
+    end
+  end
+
+  defp chain_needle(delta, accept) when is_integer(accept) and accept >= 2 and accept <= 7 do
+    0..(accept - 1)
+    |> Enum.reduce_while([], fn s, acc ->
+      bytes = for b <- 0..255, Map.get(delta, {s, b}) == s + 1, do: b
+
+      case bytes do
+        [b] -> {:cont, acc ++ [b]}
+        _ -> {:halt, :no}
+      end
+    end)
+    |> case do
+      bytes when is_list(bytes) and length(bytes) == accept -> {:ok, bytes}
+      _ -> :no
+    end
+  end
+
+  defp chain_needle(_delta, _accept), do: :no
+
+  # `pi` is the border table of the needle. Every reached state has to
+  # be that automaton, including a byte that is not the next octet of
+  # the needle.
+  defp border_matches?(bytes, delta, accept) do
+    pi = prefix_borders(bytes)
+
+    covered =
+      Enum.all?(0..(accept - 1), fn s -> Enum.all?(0..255, &Map.has_key?(delta, {s, &1})) end)
+
+    covered and
+      Enum.all?(delta, fn {{s, b}, n} ->
+        s <= accept and border_step(bytes, pi, s, b) == n
+      end)
+  end
+
+  defp prefix_borders(bytes) do
+    m = length(bytes)
+
+    {pi, _} =
+      Enum.reduce(1..max(m - 1, 0)//1, {%{0 => 0}, 0}, fn q, {pi, k} ->
+        k = drop_border(bytes, pi, k, q)
+        k = if Enum.at(bytes, k) == Enum.at(bytes, q), do: k + 1, else: k
+        {Map.put(pi, q, k), k}
+      end)
+
+    pi
+  end
+
+  defp drop_border(bytes, pi, k, q) when k > 0 do
+    if Enum.at(bytes, k) == Enum.at(bytes, q),
+      do: k,
+      else: drop_border(bytes, pi, Map.fetch!(pi, k - 1), q)
+  end
+
+  defp drop_border(_bytes, _pi, 0, _q), do: 0
+
+  # The step walks borders against the octet just read. `drop_border/4`
+  # walks them against a later needle index, which is how `pi` is built.
+  defp fall_border(bytes, pi, k, b) when k > 0 do
+    if Enum.at(bytes, k) == b,
+      do: k,
+      else: fall_border(bytes, pi, Map.fetch!(pi, k - 1), b)
+  end
+
+  defp fall_border(_bytes, _pi, 0, _b), do: 0
+
+  defp border_step(bytes, pi, s, b) do
+    if s == length(bytes) do
+      s
+    else
+      s = fall_border(bytes, pi, s, b)
+      if s < length(bytes) and Enum.at(bytes, s) == b, do: s + 1, else: s
+    end
+  end
+
+  defp needle_c(bytes, delta, accept, accv, cur, lab) do
+    len = length(bytes)
+    b0 = hd(bytes)
+    stride = 16 - (len - 1)
+    hit = lab <> "_hit"
+    done = lab <> "_done"
+    tail = len - 1
+
+    """
+    {
+      const uint8_t *p = #{cur}.p;
+      size_t n = #{cur}.n;
+      const uint8_t *hit = 0;
+      if (n >= #{len}) {
+    #if defined(__SSE2__)
+        const __m128i v0 = _mm_set1_epi8((char)#{b0});
+        const uint8_t *q = p;
+        const uint8_t *end = p + n;
+        while ((size_t)(end - q) >= 16) {
+          __m128i v;
+          unsigned bits;
+          memcpy(&v, q, 16);
+          bits = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(v, v0));
+          while (bits) {
+            unsigned i = (unsigned)__builtin_ctz(bits);
+            if ((size_t)(q - p) + i + #{len} <= n && #{sse_verify(bytes)}) {
+              hit = q + i;
+              goto #{hit};
+            }
+            bits &= bits - 1;
+          }
+          q += #{stride};
+        }
+        while (q + #{len} <= end) {
+          if (#{scalar_verify(bytes)}) { hit = q; goto #{hit}; }
+          q++;
+        }
+    #else
+        const uint8_t *q = p;
+        const uint8_t *end = p + n;
+        while (q + #{len} <= end) {
+          if (#{scalar_verify(bytes)}) { hit = q; goto #{hit}; }
+          q++;
+        }
+    #endif
+      }
+      {
+        size_t i;
+        size_t start;
+        unsigned st;
+        uint8_t b;
+        start = n > #{tail} ? n - #{tail} : 0;
+        st = 0;
+        for (i = start; i < n; i++) {
+          b = p[i];
+          #{miss_switch(delta, accept)}
+          if (st == #{accept}) {
+            #{accv} = ((uint64_t)#{accept}) | ((uint64_t)(i + 1) << 3);
+            goto #{done};
+          }
+        }
+        #{accv} = ((uint64_t)st) | ((uint64_t)n << 3);
+        goto #{done};
+      }
+    #{hit}:
+      #{accv} = ((uint64_t)#{accept}) | ((uint64_t)((size_t)(hit - p) + #{len}) << 3);
+    #{done}:
+      ;
+    }
+    """
+  end
+
+  defp sse_verify([_b]), do: "1"
+
+  defp sse_verify(bytes) do
+    bytes
+    |> Enum.drop(1)
+    |> Enum.with_index(1)
+    |> Enum.map_join(" && ", fn {b, i} -> "q[i + #{i}] == #{b}" end)
+  end
+
+  defp scalar_verify(bytes) do
+    bytes
+    |> Enum.with_index()
+    |> Enum.map_join(" && ", fn {b, i} -> "q[#{i}] == #{b}" end)
+  end
+
+  defp miss_switch(delta, accept) do
+    arms =
+      Enum.map(0..(accept - 1), fn s ->
+        "case #{s}: { #{miss_arm(delta, s)} break; }"
+      end)
+
+    """
+    switch (st) {
+    #{Enum.join(arms, "\n")}
+    case #{accept}: break;
+    default: st = 0; break;
+    }
+    """
+    |> String.trim()
+  end
+
+  defp miss_arm(delta, s) do
+    groups = Enum.group_by(0..255, fn b -> Map.fetch!(delta, {s, b}) end)
+    {default, _} = Enum.max_by(groups, fn {_n, bs} -> length(bs) end)
+
+    specials =
+      groups
+      |> Enum.reject(fn {n, _} -> n == default end)
+      |> Enum.sort_by(fn {n, _} -> n end)
+
+    cond do
+      specials == [] ->
+        "st = #{default};"
+
+      true ->
+        chain =
+          specials
+          |> Enum.with_index()
+          |> Enum.map_join(" ", fn {{n, bs}, i} ->
+            kw = if i == 0, do: "if", else: "else if"
+            test = Enum.map_join(bs, " || ", fn b -> "b == #{b}" end)
+            "#{kw} (#{test}) st = #{n};"
+          end)
+
+        chain <> " else st = #{default};"
+    end
+  end
+
+  # A byte the step returns the accumulator for is inert. When every
+  # inert byte is outside a set of one, two, or three constants, the
+  # loop may jump to the next byte in that set and run the body once
+  # there. The index is the distance from the slice the fold was given,
+  # so moving the cursor keeps it. A false hit is an earlier byte, and
+  # the body is the identity on it, so the loop still moves forward.
+  # Anything the walk cannot read (an unconstrained change, a test it
+  # does not know, an empty set, a set larger than three) keeps today's
+  # loop. The predicates are recognised by their bodies, not their names.
+  defp inert_skip(body, oct, acc, cur, st) do
+    case hot_bytes(body, oct, acc, st.funs) do
+      :no ->
+        {"", st}
+
+      {:ok, ks} ->
+        {hit, st} = news(st)
+        {sk, st} = news(st)
+        sl = g("slice")
+
+        src =
+          [
+            "{",
+            "const uint8_t *#{hit} = #{find_call(ks, cur)};",
+            "size_t #{sk} = (size_t)(#{hit} - #{cur}.p);",
+            "#{cur} = (#{sl}){#{hit}, #{cur}.n - #{sk}};",
+            "}",
+            "if (#{cur}.n == 0) break;"
+          ]
+          |> Enum.join("\n")
+
+        {src, st}
+    end
+  end
+
+  defp find_call([k], cur), do: "#{g("find2")}(#{cur}.p, #{cur}.n, #{k}, #{k})"
+
+  defp find_call([a, b], cur), do: "#{g("find2")}(#{cur}.p, #{cur}.n, #{a}, #{b})"
+
+  defp find_call([a, b, c], cur), do: "#{g("find3")}(#{cur}.p, #{cur}.n, #{a}, #{b}, #{c})"
+
+  defp hot_bytes(body, oct, acc, funs) do
+    case follow_step(body, oct, acc, funs, 0) do
+      {:ok, set} ->
+        ks = set |> MapSet.to_list() |> Enum.sort()
+
+        if ks != [] and length(ks) <= 3 and Enum.all?(ks, &(&1 in 0..255)),
+          do: {:ok, ks},
+          else: :no
+
+      :no ->
+        :no
+    end
+  end
+
+  # Follow a tail call that passes the octet and the accumulator once
+  # each, into that callee, and then read the body. A `let` that binds
+  # neither is substituted first. Four hops is enough for a fold that
+  # names its step; past that the byte loop stays.
+  defp follow_step(tm, oct, acc, funs, depth) do
+    case peel_lets(tm, oct, acc) do
+      :no ->
+        :no
+
+      {:ok, {:call, f, args}} ->
+        descend_step(f, args, oct, acc, funs, depth)
+
+      {:ok, {:inout, f, args}} ->
+        descend_step(f, args, oct, acc, funs, depth)
+
+      {:ok, other} ->
+        walk_hot(other, oct, acc, empty_hot(), funs)
+    end
+  end
+
+  defp descend_step(f, args, oct, acc, funs, depth) do
+    with true <- depth < 4,
+         %{} = fun <- Map.get(funs, f),
+         {:ok, oct2, acc2} <- map_step_params(fun.params, args, oct, acc) do
+      follow_step(fun.body, oct2, acc2, funs, depth + 1)
+    else
+      _ -> walk_hot({:call, f, args}, oct, acc, empty_hot(), funs)
+    end
+  end
+
+  defp map_step_params(params, args, oct, acc) do
+    pairs = Enum.zip(params, args)
+    oct_ps = for {p, {:var, ^oct}} <- pairs, do: IR.param_name(p)
+    acc_ps = for {p, {:var, ^acc}} <- pairs, do: IR.param_name(p)
+
+    if length(oct_ps) == 1 and length(acc_ps) == 1 and hd(oct_ps) != hd(acc_ps) do
+      {:ok, hd(oct_ps), hd(acc_ps)}
+    else
+      :no
+    end
+  end
+
+  defp peel_lets({:let, x, _lay, _g, val, body}, oct, acc) do
+    if x == oct or x == acc do
+      :no
+    else
+      case peel_lets(body, oct, acc) do
+        :no -> :no
+        {:ok, inner} -> {:ok, subst_term(inner, x, val)}
+      end
+    end
+  end
+
+  defp peel_lets(tm, _oct, _acc), do: {:ok, tm}
+
+  defp subst_term({:var, x}, x, val), do: val
+  defp subst_term({:var, y}, _x, _val), do: {:var, y}
+
+  defp subst_term({:let, z, lay, g, v, b}, x, val) do
+    v = subst_term(v, x, val)
+    if z == x, do: {:let, z, lay, g, v, b}, else: {:let, z, lay, g, v, subst_term(b, x, val)}
+  end
+
+  defp subst_term({:letp, a, b, e, body}, x, val) do
+    e = subst_term(e, x, val)
+
+    if x in [a, b],
+      do: {:letp, a, b, e, body},
+      else: {:letp, a, b, e, subst_term(body, x, val)}
+  end
+
+  defp subst_term({:match, scrut, arms}, x, val) when is_list(arms) do
+    {:match, subst_term(scrut, x, val), subst_arms(arms, x, val)}
+  end
+
+  defp subst_term({:match, scrut, lay, arms}, x, val) when is_list(arms) do
+    {:match, subst_term(scrut, x, val), lay, subst_arms(arms, x, val)}
+  end
+
+  defp subst_term(t, x, val) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.map(&subst_term(&1, x, val)) |> List.to_tuple()
+  end
+
+  defp subst_term(t, x, val) when is_list(t), do: Enum.map(t, &subst_term(&1, x, val))
+  defp subst_term(t, _x, _val), do: t
+
+  defp subst_arms(arms, x, val) do
+    Enum.map(arms, fn
+      {:arm, c, names, tm} = arm ->
+        if is_list(names) and x in names, do: arm, else: {:arm, c, names, subst_term(tm, x, val)}
+
+      other ->
+        subst_term(other, x, val)
+    end)
+  end
+
+  defp empty_hot, do: %{eq: nil, neq: MapSet.new(), inset: MapSet.new()}
+
+  # `{:ok, set}` is the bytes a non-identity leaf may see. `:no` means
+  # some leaf is reachable with no finite byte, so the fold is not a
+  # search for a short set.
+  defp walk_hot({:var, name}, _oct, acc, _c, _funs) when name == acc, do: {:ok, MapSet.new()}
+
+  defp walk_hot({:let, x, _lay, _g, val, body}, oct, acc, c, funs) do
+    if x == oct or x == acc do
+      :no
+    else
+      walk_hot(subst_term(body, x, val), oct, acc, c, funs)
+    end
+  end
+
+  defp walk_hot({:match, scrut, arms}, oct, acc, c, funs) when is_list(arms) do
+    walk_match_arms(arms, classify(scrut, oct, funs), oct, acc, c, funs)
+  end
+
+  defp walk_hot({:match, scrut, _lay, arms}, oct, acc, c, funs) when is_list(arms) do
+    walk_hot({:match, scrut, arms}, oct, acc, c, funs)
+  end
+
+  defp walk_hot(_tm, _oct, _acc, c, _funs), do: hot_leaf(c)
+
+  defp walk_match_arms(arms, class, oct, acc, c, funs) do
+    Enum.reduce_while(arms, {:ok, MapSet.new()}, fn arm, {:ok, accs} ->
+      case arm_hot(arm, class, oct, acc, c, funs) do
+        :no -> {:halt, :no}
+        {:ok, s} -> {:cont, {:ok, MapSet.union(accs, s)}}
+      end
+    end)
+  end
+
+  defp arm_hot({:arm, ctor, binders, body}, class, oct, acc, c, funs) when is_list(binders) do
+    if oct in binders or acc in binders do
+      :no
+    else
+      case arm_constraint(class, ctor, c) do
+        :dead -> {:ok, MapSet.new()}
+        {:ok, c2} -> walk_hot(body, oct, acc, c2, funs)
+      end
+    end
+  end
+
+  defp arm_hot(_, _, _, _, _, _), do: :no
+
+  defp arm_constraint({:bool_eq, k}, "true", c), do: put_eq(c, k)
+  defp arm_constraint({:bool_eq, k}, "false", c), do: add_neq(c, k)
+  defp arm_constraint({:bool_neq, k}, "true", c), do: add_neq(c, k)
+  defp arm_constraint({:bool_neq, k}, "false", c), do: put_eq(c, k)
+  defp arm_constraint({:and_byte, k}, "true", c), do: put_eq(c, k)
+  defp arm_constraint({:and_byte, _k}, "false", c), do: {:ok, c}
+  defp arm_constraint({:byte_in, ks}, "true", c), do: hot_in(c, ks)
+  defp arm_constraint({:byte_in, ks}, "false", c), do: add_neq_all(c, ks)
+  defp arm_constraint({:wbool_eq, k}, "wtrue", c), do: put_eq(c, k)
+  defp arm_constraint({:wbool_eq, k}, "wfalse", c), do: add_neq(c, k)
+  defp arm_constraint(_class, _ctor, c), do: {:ok, c}
+
+  defp put_eq(%{eq: eq, neq: neq} = c, k) do
+    cond do
+      eq == k ->
+        {:ok, c}
+
+      eq == nil and not MapSet.member?(neq, k) ->
+        {:ok, %{c | eq: k}}
+
+      eq == :in and MapSet.member?(c.inset, k) and not MapSet.member?(neq, k) ->
+        {:ok, %{c | eq: k}}
+
+      true ->
+        :dead
+    end
+  end
+
+  defp add_neq(%{eq: k}, k) when is_integer(k), do: :dead
+
+  defp add_neq(%{eq: :in, inset: inset, neq: neq} = c, k) do
+    inset = MapSet.delete(inset, k)
+
+    case MapSet.size(inset) do
+      0 ->
+        :dead
+
+      1 ->
+        {:ok, %{c | eq: hd(MapSet.to_list(inset)), inset: MapSet.new(), neq: MapSet.put(neq, k)}}
+
+      _ ->
+        {:ok, %{c | inset: inset, neq: MapSet.put(neq, k)}}
+    end
+  end
+
+  defp add_neq(%{neq: neq} = c, k), do: {:ok, %{c | neq: MapSet.put(neq, k)}}
+
+  defp add_neq_all(c, ks) do
+    Enum.reduce_while(ks, {:ok, c}, fn k, {:ok, c} ->
+      case add_neq(c, k) do
+        :dead -> {:halt, :dead}
+        {:ok, c2} -> {:cont, {:ok, c2}}
+      end
+    end)
+  end
+
+  defp hot_in(%{eq: eq, neq: neq, inset: inset} = c, ks) do
+    ks = MapSet.difference(ks, neq)
+
+    cond do
+      is_integer(eq) and MapSet.member?(ks, eq) ->
+        {:ok, c}
+
+      is_integer(eq) ->
+        :dead
+
+      eq == :in ->
+        both = MapSet.intersection(inset, ks)
+
+        case MapSet.size(both) do
+          0 -> :dead
+          1 -> {:ok, %{c | eq: hd(MapSet.to_list(both))}}
+          _ -> {:ok, %{c | inset: both}}
+        end
+
+      MapSet.size(ks) == 0 ->
+        :dead
+
+      MapSet.size(ks) == 1 ->
+        {:ok, %{c | eq: hd(MapSet.to_list(ks))}}
+
+      true ->
+        {:ok, %{c | eq: :in, inset: ks}}
+    end
+  end
+
+  defp hot_leaf(%{eq: k, neq: neq}) when is_integer(k) do
+    if MapSet.member?(neq, k), do: {:ok, MapSet.new()}, else: {:ok, MapSet.new([k])}
+  end
+
+  defp hot_leaf(%{eq: :in, inset: inset, neq: neq}) do
+    ks = MapSet.difference(inset, neq)
+    if MapSet.size(ks) == 0, do: {:ok, MapSet.new()}, else: {:ok, ks}
+  end
+
+  defp hot_leaf(_c), do: :no
+
+  # A scrutinee that does not mention the octet constrains the state.
+  # Both arms keep the byte constraint they already had. A call the
+  # known boolean forms do not match is opened once, when it passes the
+  # octet through, so a named test of that octet is still a byte test.
+  # Four opens is the limit; a cycle keeps the byte-by-byte loop.
+  defp classify(tm, oct, funs), do: classify_at(tm, oct, funs, 0)
+
+  defp classify_at({:let, x, _lay, _g, val, body}, oct, funs, depth) do
+    if x == oct, do: :unknown, else: classify_at(subst_term(body, x, val), oct, funs, depth)
+  end
+
+  defp classify_at(tm, oct, funs, depth) do
+    if uses?(tm, oct), do: classify_byte(tm, oct, funs, depth), else: :state
+  end
+
+  defp classify_byte({:call, f, args}, oct, funs, depth) do
+    case Map.get(funs, f) do
+      %{} = fun ->
+        case classify_fun(fun, args, oct, funs, depth) do
+          :unknown -> unfold_test(fun, args, oct, funs, depth)
+          other -> other
+        end
+
+      _ ->
+        :unknown
+    end
+  end
+
+  defp classify_byte({:wrd, :u8, :eq, args}, oct, _funs, _depth) do
+    case lit_pair(args, oct) do
+      {:ok, k} -> {:wbool_eq, k}
+      :no -> :unknown
+    end
+  end
+
+  defp classify_byte({:match, {:wrd, :u8, :eq, args}, arms}, oct, _funs, _depth) do
+    if u8eq_arms?(arms) do
+      case lit_pair(args, oct) do
+        {:ok, k} -> {:bool_eq, k}
+        :no -> :unknown
+      end
+    else
+      :unknown
+    end
+  end
+
+  defp classify_byte(
+         {:match, first,
+          [
+            {:arm, "true", [], {:con, "Bool", "false", []}},
+            {:arm, "false", [], {:con, "Bool", "true", []}}
+          ]},
+         oct,
+         funs,
+         depth
+       ) do
+    classify_not(first, oct, funs, depth)
+  end
+
+  defp classify_byte(
+         {:match, first,
+          [
+            {:arm, "true", [], second},
+            {:arm, "false", [], {:con, "Bool", "false", []}}
+          ]},
+         oct,
+         funs,
+         depth
+       ) do
+    classify_and(first, second, oct, funs, depth)
+  end
+
+  defp classify_byte(
+         {:match, first,
+          [
+            {:arm, "true", [], {:con, "Bool", "true", []}},
+            {:arm, "false", [], second}
+          ]},
+         oct,
+         funs,
+         depth
+       ) do
+    classify_or(first, second, oct, funs, depth)
+  end
+
+  defp classify_byte(_, _, _, _), do: :unknown
+
+  # Only a callee that takes the octet as exactly one argument, and
+  # does not mention it in any other argument, is a test of that octet.
+  defp unfold_test(_fun, _args, _oct, _funs, depth) when depth >= 4, do: :unknown
+
+  defp unfold_test(fun, args, oct, funs, depth) do
+    case octet_param(fun.params, args, oct) do
+      {:ok, pname} -> classify_at(fun.body, pname, funs, depth + 1)
+      :no -> :unknown
+    end
+  end
+
+  defp octet_param(params, args, oct) do
+    pairs = Enum.zip(params, args)
+    named = for {p, {:var, ^oct}} <- pairs, do: IR.param_name(p)
+    others = for {_p, arg} <- pairs, arg != {:var, oct}, do: arg
+
+    if length(named) == 1 and not Enum.any?(others, &uses?(&1, oct)) do
+      {:ok, hd(named)}
+    else
+      :no
+    end
+  end
+
+  defp classify_fun(fun, args, oct, funs, depth) do
+    cond do
+      u8eq_fun?(fun) ->
+        case lit_pair(args, oct) do
+          {:ok, k} -> {:bool_eq, k}
+          :no -> :unknown
+        end
+
+      and_fun?(fun) and length(args) == 2 ->
+        classify_and(Enum.at(args, 0), Enum.at(args, 1), oct, funs, depth)
+
+      or_fun?(fun) and length(args) == 2 ->
+        classify_or(Enum.at(args, 0), Enum.at(args, 1), oct, funs, depth)
+
+      not_fun?(fun) and length(args) == 1 ->
+        classify_not(hd(args), oct, funs, depth)
+
+      true ->
+        :unknown
+    end
+  end
+
+  defp classify_and(a, b, oct, funs, depth) do
+    case {classify_at(a, oct, funs, depth), classify_at(b, oct, funs, depth)} do
+      {:state, {:bool_eq, k}} -> {:and_byte, k}
+      {{:bool_eq, k}, :state} -> {:and_byte, k}
+      {:state, {:wbool_eq, k}} -> {:and_byte, k}
+      {{:wbool_eq, k}, :state} -> {:and_byte, k}
+      {:state, :state} -> :state
+      _ -> :unknown
+    end
+  end
+
+  defp classify_or(a, b, oct, funs, depth) do
+    case {classify_at(a, oct, funs, depth), classify_at(b, oct, funs, depth)} do
+      {:state, :state} ->
+        :state
+
+      {{:bool_eq, k}, {:bool_eq, m}} ->
+        {:byte_in, MapSet.new([k, m])}
+
+      {{:bool_eq, k}, {:byte_in, ks}} ->
+        {:byte_in, MapSet.put(ks, k)}
+
+      {{:byte_in, ks}, {:bool_eq, k}} ->
+        {:byte_in, MapSet.put(ks, k)}
+
+      {{:byte_in, ks}, {:byte_in, ms}} ->
+        {:byte_in, MapSet.union(ks, ms)}
+
+      _ ->
+        :unknown
+    end
+  end
+
+  defp classify_not(a, oct, funs, depth) do
+    case classify_at(a, oct, funs, depth) do
+      {:bool_eq, k} -> {:bool_neq, k}
+      {:wbool_eq, k} -> {:bool_neq, k}
+      :state -> :state
+      _ -> :unknown
+    end
+  end
+
+  defp u8eq_fun?(%{
+         params: params,
+         body: {:match, {:wrd, :u8, :eq, [{:var, a}, {:var, b}]}, arms}
+       }) do
+    names = Enum.map(params, &IR.param_name/1)
+    length(names) == 2 and MapSet.new(names) == MapSet.new([a, b]) and u8eq_arms?(arms)
+  end
+
+  defp u8eq_fun?(_), do: false
+
+  defp u8eq_arms?([
+         {:arm, "wtrue", [], {:con, "Bool", "true", []}},
+         {:arm, "wfalse", [], {:con, "Bool", "false", []}}
+       ]),
+       do: true
+
+  defp u8eq_arms?(_), do: false
+
+  defp and_fun?(%{
+         params: [p, q],
+         body:
+           {:match, {:var, a},
+            [
+              {:arm, "true", [], {:var, b}},
+              {:arm, "false", [], {:con, "Bool", "false", []}}
+            ]}
+       }) do
+    IR.param_name(p) == a and IR.param_name(q) == b
+  end
+
+  defp and_fun?(_), do: false
+
+  defp or_fun?(%{
+         params: [p, q],
+         body:
+           {:match, {:var, a},
+            [
+              {:arm, "true", [], {:con, "Bool", "true", []}},
+              {:arm, "false", [], {:var, b}}
+            ]}
+       }) do
+    IR.param_name(p) == a and IR.param_name(q) == b
+  end
+
+  defp or_fun?(_), do: false
+
+  defp not_fun?(%{
+         params: [p],
+         body:
+           {:match, {:var, a},
+            [
+              {:arm, "true", [], {:con, "Bool", "false", []}},
+              {:arm, "false", [], {:con, "Bool", "true", []}}
+            ]}
+       }) do
+    IR.param_name(p) == a
+  end
+
+  defp not_fun?(_), do: false
+
+  defp lit_pair([a, b], oct) do
+    cond do
+      a == {:var, oct} -> u8_lit(b)
+      b == {:var, oct} -> u8_lit(a)
+      true -> :no
+    end
+  end
+
+  defp lit_pair(_, _), do: :no
+
+  defp u8_lit({:wrd, :u8, {:lit, :u8, k}, []}) when is_integer(k) and k >= 0 and k <= 255,
+    do: {:ok, k}
+
+  defp u8_lit(_), do: :no
 
   # `f`'s in-place twin on the address of the accumulator, which is the
   # argument in the place of `f`'s `inout` parameter.

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.22.50
+
+The C backend writes a tail match where its value goes. A match or a let in tail position no longer fills a zeroed temporary that each enclosing match copies up. In a run that returns anything but a string, each arm returns. In a fold step the arm assigns the accumulator. In a run that updates its argument in place the arm assigns through the pointer, and an arm that leaves the argument unchanged assigns nothing. A nested match writes into the outer match's result. A match in any other position keeps its own temporary. `sliceUntil` and `sliceAfter` find the octet with `memchr`. The emitted functions, their names, parameters, and results are unchanged.
+
+On the muro-http request step (`step.muro`, Phase 1b of the IR plan), a keep-alive GET drops from 11,784 to 8,843 instructions per request on x86-64 at `-O2`. The hand-written C step is about 5,950. The per-octet scan loop keeps its state in registers instead of copying the state struct at each match level.
+
+A byte fold whose step returns the accumulator unchanged outside a set of two or three constants jumps to the next such octet. `muro__find2` and `muro__find3` compare sixteen octets with SSE2 and stop on the first hit. The scalar tail is that same scan, and it is the whole function where SSE2 is absent. On this machine that pass takes the same GET from 8,852 to 8,656 (reps 8,665.4 at load 0.65 and 8,646.8 at load 0.28).
+
+A fold of `U64` whose step is the border automaton of one octet string scans for that string. The low three bits are the matched length and the bits above them are the index. A hit packs the accept state with the end of the match. A miss runs the automaton on the unmatched suffix, so the packed state is the one the byte loop returns. A scalar run with no loop that a byte loop reaches, and whose body is no wider than the name step, is `always_inline`. A wider run stays a call. A match on an enum of two constructors, with an arm for each and no binders, is an `if` on the first tag. The `else` is the second constructor. A wider enum stays a `switch`.
+
+Together those three passes take the same GET from 8,656 to 7,987 instructions per request (reps 7,981.2 at load 0.86, 7,995.9 at load 0.79, and 7,984.5 at load 1.36; 200,000 requests, errors 0). The hand-written C step on this machine is about 5,965. Split headers (`--split-headers=200`) drop from 19,221 to 18,089. A late-body POST (`--split-body=200`) drops from 12,597 to 12,135. Those two were one rep each, and the load rose while they ran.
+
+### Tests
+
+- `test/muro_emit_c_enum_test.exs`, `test/muro_unboxed_test.exs`, `test/muro_word_match_test.exs`: an arm returns or assigns the accumulator, with no `muro__t_` temporary.
+- `test/muro_emit_c_test.exs`: a byte fold skips to a short set of hot octets, and a `U64` fold that is the border automaton of `\r\n\r\n` or `\n\n` returns the packed state of that scan. A counting fold does neither.
+- `test/muro_emit_c_enum_test.exs`: a match on `Bool` is an `if` on the first tag. A three-constructor enum stays a `switch`.
+- `test/fixtures/native-main` (`bytes`, `fnv_slice`, `half_ok`), `test/fixtures/c-session` (`computed`, `field-bindings`, `field-choice`, `pair-bindings`, `value-protocols`), and `test/fixtures/emit-examples.digest`: the C images.
+
+### Manual
+
+- Emit, Shared calls: where a tail match writes its value, and `memchr` in `sliceUntil` and `sliceAfter`. A byte fold jumps to a short set of hot octets. A `U64` fold that is a string automaton scans for that string. A scalar run a byte loop reaches is `always_inline` when it is no wider than the name step. A match on an enum of two constructors is an `if`.
+
+### Package
+
+- Version 0.22.50.
+
 ## 0.22.49
 
 The live C# xUnit check skips when the SDK list is empty, when the probe fails (a non-zero exit, or a missing binary), or when it does not finish. The check runs when `dotnet --list-sdks` exits 0 and lists an SDK.

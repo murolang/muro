@@ -35,15 +35,21 @@ __attribute__((unused)) static muro__opt_u8 muro__slice_get(muro__slice s, uint6
 }
 
 __attribute__((unused)) static muro__slice muro__slice_until(muro__slice s, uint8_t b) {
-  size_t i;
-  for (i = 0; i < s.n; i++) if (s.p[i] == b) return (muro__slice){s.p, i};
-  return s;
+  const uint8_t *q;
+  if (s.n == 0) return s;
+  q = memchr(s.p, b, s.n);
+  if (q == 0) return s;
+  return (muro__slice){s.p, (size_t)(q - s.p)};
 }
 
 __attribute__((unused)) static muro__slice muro__slice_after(muro__slice s, uint8_t b) {
+  const uint8_t *q;
   size_t i;
-  for (i = 0; i < s.n; i++) if (s.p[i] == b) return (muro__slice){s.p + i + 1, s.n - i - 1};
-  return muro__slice_empty();
+  if (s.n == 0) return muro__slice_empty();
+  q = memchr(s.p, b, s.n);
+  if (q == 0) return muro__slice_empty();
+  i = (size_t)(q - s.p);
+  return (muro__slice){s.p + i + 1, s.n - i - 1};
 }
 static muro__nat *muro__nat_new(uint8_t muro__field_tag, muro__nat *muro__n) {
   muro__nat *muro__p = muro__ALLOC(sizeof *muro__p);

@@ -79,8 +79,10 @@ defmodule Muro.WordMatchTest do
     assert head =~ "muro__opt_u8"
     assert head =~ ".tag"
     assert head =~ ".val"
-    assert view =~ "muro__slice muro__t_0 = {0};"
-    assert drop =~ "muro__slice muro__t_0 = {0};"
+    assert view =~ "return s;"
+    refute view =~ "muro__t_0"
+    assert drop =~ "return muro__slice_sub("
+    refute drop =~ "muro__t_0"
     assert drop =~ "muro__slice_sub"
     refute one =~ "muro__f_1"
 

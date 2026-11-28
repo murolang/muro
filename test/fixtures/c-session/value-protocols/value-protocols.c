@@ -31,20 +31,19 @@ __attribute__((unused)) static Bool true_k(void) { return muro__tag_Bool_true_k;
 
 __attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_k; }
 Bool late(Frame f) {
-  Bool muro__t_0 = 0;
   {
   Frame muro__s_0 = f;
   switch (muro__s_0) {
   case 0: {
-  muro__t_0 = muro__tag_Bool_true_k;
+  return muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_0 = muro__tag_Bool_true_k;
+  return muro__tag_Bool_true_k;
   break;
   }
   case 2: {
-  muro__t_0 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -53,7 +52,6 @@ Bool late(Frame f) {
   }
   }
   }
-  return muro__t_0;
 }
 
 Frame aszdbytes(void) {
