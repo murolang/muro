@@ -6125,7 +6125,17 @@ defmodule Muro.Parser do
 
   defp has_prefix?(s, kw), do: String.starts_with?(s, kw)
 
-  defp after_kw(s, kw), do: String.slice(s, String.length(kw)..-1//1)
+  # A range ending at -1 counts graphemes in the remainder, once per token.
+  defp after_kw(s, kw) do
+    b = byte_size(kw)
+    bs = byte_size(s)
+
+    if bs >= b do
+      binary_part(s, b, bs - b)
+    else
+      ""
+    end
+  end
 
   defp kw(s, w) do
     s = skip(s)
