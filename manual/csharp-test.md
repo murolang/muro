@@ -2,7 +2,7 @@
 title: C# tests
 slug: csharp-test
 order: 30
-summary: A book's closed equations become one C# xUnit file. Each fact compares the two normal forms, or calls a type named with --impl. A skip is a skipped fact and is recorded.
+summary: A book's closed equations become one C# xUnit file. Each fact compares the two normal forms, or calls the file stem or a type named with --impl. A skip is a skipped fact and is recorded.
 ---
 
 # C# tests
@@ -60,7 +60,7 @@ The test class is the file stem, folded, with `Tests` appended, then `@` when th
 
 ## The implementation
 
-With no `--impl`, each fact that reduces on both sides compares the two normal forms. A param equation, or a side that does not reduce to a value, is a call of the file stem. `rounding.muro` calls `global::rounding.round`. `class.muro` calls `global::@class`. `2nd.muro` calls `global::muro_2nd`. `Values.muro` calls `global::Values`, so the call is not the nested helper `MuroValues`. A name that already contains a `.`, such as `--impl Host.Rounding`, is written as it is. There is no C# image beside the file.
+With no `--impl`, each fact that reduces on both sides compares the two normal forms. A param equation, or a side that does not reduce to a value, is a call of the file stem. `rounding.muro` calls `global::rounding.round`. `class.muro` calls `global::@class`. `2nd.muro` calls `global::muro_2nd`. `Values.muro` calls `global::Values`. `MuroValues.muro` calls `global::MuroValues`, so the call is not the nested helper of the same name. A name that already contains a `.`, such as `--impl Host.Rounding`, is written as it is. There is no C# image beside the file.
 
 `--impl` and `impl:` name a C# type. Each segment is an identifier that is not a keyword, or `@` plus an identifier. `Host.Rounding` and `@class` are accepted. `class`, `int`, `1bad`, `.Rounding`, and `Rounding.` are refused: `impl must be a C# type name`. The type is baked into the file. There is no environment override. The left-hand side is a call of that type, and the right-hand side is the normal form.
 

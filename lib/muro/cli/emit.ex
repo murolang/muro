@@ -51,7 +51,7 @@ defmodule Muro.CLI.Emit do
         value: "MODULE",
         default: "the file stem",
         doc:
-          "With --backend pytest, the Python module the tests import. Each segment is an identifier and not a keyword. Absent, the module is the file stem. MURO_IMPL_<STEM> overrides it when the tests run, and that does not change the file. With --backend rust-test, a Rust path the tests call. Each segment is an identifier, a path keyword (crate, self, super, Self), or r# plus an identifier. Absent, the tests call the emitted <stem>.rs beside the test file. The Rust path is fixed in the file. With --backend csharp-test, a C# type the tests call. Each segment is an identifier that is not a keyword, or @ plus an identifier. Absent, each fact compares the two normal forms, and a call names the file stem. The type is fixed in the file. Other backends refuse the flag."
+          "With --backend pytest, the Python module the tests import. Each segment is an identifier and not a keyword. Absent, the module is the file stem. MURO_IMPL_<STEM> overrides it when the tests run, and that does not change the file. With --backend rust-test, a Rust path the tests call. Each segment is an identifier, a path keyword (crate, self, super, Self), or r# plus an identifier. Absent, the tests call the emitted <stem>.rs beside the test file. The Rust path is fixed in the file. With --backend csharp-test, a C# type the tests call. Each segment is an identifier that is not a keyword, or @ plus an identifier. Absent, a fact that reduces on both sides compares the two normal forms, and a param or a side that does not reduce is a call of the file stem. The type is fixed in the file. Other backends refuse the flag."
       },
       %{
         name: :prefix,

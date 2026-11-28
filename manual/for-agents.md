@@ -418,7 +418,7 @@ Docs: [Emit](https://muro-lang.dev/docs/emit), [MBI images](https://muro-lang.de
 - `exunit` — one ExUnit module for the book's closed equations, on stdout.
 - `pytest` — one pytest module for those same equations, on stdout.
 - `rust-test` — one Rust test file for those same equations, on stdout.
-- `csharp-test` — one C# xUnit file for those same equations, on stdout. With no `--impl`, each fact compares the two normal forms.
+- `csharp-test` — one C# xUnit file for those same equations, on stdout. With no `--impl`, a fact that reduces on both sides compares the two normal forms, and a param or a side that does not reduce is a call of the file stem.
 
 `--imports` also collects the closed equations of the files this book imports directly. It is valid only with `exunit`, `pytest`, `rust-test`, or `csharp-test`. `--impl` names the host module those tests call, and is valid only with `pytest`, `rust-test`, or `csharp-test`. `--node NAME` writes one call for each `cross`, registered on that node, and is valid only with the elixir backend.
 

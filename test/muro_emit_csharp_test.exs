@@ -520,6 +520,39 @@ defmodule Muro.EmitCSharpSuiteTest do
     refute baked =~ ", Values.zero()"
   end
 
+  test "a stem or --impl named MuroValues is written global:: so it is not the helper class" do
+    {dir, path} = book("MuroValues.muro", @values_host)
+
+    assert {:ok, %{source: source, tests: 2, skips: []}} =
+             Muro.emit_csharp_test(path, root: dir, book: "MuroValues.muro")
+
+    assert source =~ "public static class MuroValues"
+    assert source =~ "public class MuroValuesTests"
+
+    assert source =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::MuroValues.p());"
+
+    assert source =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), MuroValues.MuroNat(\"0\"));"
+
+    refute source =~ ", MuroValues.p()"
+
+    assert {:ok, %{source: baked, tests: 2, skips: []}} =
+             Muro.emit_csharp_test(path, root: dir, book: "MuroValues.muro", impl: "MuroValues")
+
+    assert baked =~ "Each fact calls MuroValues."
+    assert baked =~ "public static class MuroValues"
+
+    assert baked =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::MuroValues.p());"
+
+    assert baked =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::MuroValues.zero());"
+
+    refute baked =~ ", MuroValues.p()"
+    refute baked =~ ", MuroValues.zero()"
+  end
+
   test "mix muro.gen writes a C# file and --check sees drift" do
     dir = tmp_dir()
 
@@ -606,6 +639,7 @@ defmodule Muro.EmitCSharpSuiteTest do
     shapes = write_book(dir, "shapes.muro", @shapes)
     idents = write_book(dir, "idents.muro", @idents)
     values = write_book(dir, "Values.muro", @values_host)
+    muro_values = write_book(dir, "MuroValues.muro", @values_host)
 
     assert {:ok, %{source: rounding, tests: round_n, skips: round_skips}} =
              Muro.emit_csharp_test(path, root: dir, book: "rounding.muro")
@@ -618,6 +652,9 @@ defmodule Muro.EmitCSharpSuiteTest do
 
     assert {:ok, %{source: values_src, tests: values_n, skips: []}} =
              Muro.emit_csharp_test(values, root: dir, book: "Values.muro")
+
+    assert {:ok, %{source: muro_values_src, tests: muro_values_n, skips: []}} =
+             Muro.emit_csharp_test(muro_values, root: dir, book: "MuroValues.muro")
 
     proj = Path.join(dir, "proj")
 
@@ -633,9 +670,18 @@ defmodule Muro.EmitCSharpSuiteTest do
     File.write!(Path.join(proj, "Shapes.cs"), shapes_src)
     File.write!(Path.join(proj, "Idents.cs"), idents_src)
     File.write!(Path.join(proj, "ValuesBook.cs"), values_src)
+    File.write!(Path.join(proj, "MuroValuesBook.cs"), muro_values_src)
 
     File.write!(Path.join(proj, "ValuesHost.cs"), """
     public static class Values
+    {
+        public static System.Numerics.BigInteger p() =>
+            System.Numerics.BigInteger.Zero;
+    }
+    """)
+
+    File.write!(Path.join(proj, "MuroValuesHost.cs"), """
+    public static class MuroValues
     {
         public static System.Numerics.BigInteger p() =>
             System.Numerics.BigInteger.Zero;
@@ -650,7 +696,7 @@ defmodule Muro.EmitCSharpSuiteTest do
     {test_out, test_code} = dotnet(["test", proj, "--no-build", "--nologo"])
     assert test_code == 0, test_out
 
-    passed = round_n + shapes_n + idents_n + values_n
+    passed = round_n + shapes_n + idents_n + values_n + muro_values_n
     skipped = length(round_skips)
 
     assert test_out =~ ~r/Failed:\s+0,\s+Passed:\s+#{passed},\s+Skipped:\s+#{skipped}/

@@ -49,9 +49,11 @@ defmodule Mix.Tasks.Muro.Emit do
   test file. `--node` with this backend is refused.
 
   `--backend csharp-test` prints one C# xUnit file for those same
-  equations. With no `--impl`, each fact compares the two normal forms.
-  `--impl` names a C# type and the left-hand side is a call of that
-  type. The type is fixed when the file is written. Skipped equations
+  equations. With no `--impl`, a fact that reduces on both sides
+  compares the two normal forms, and a param or a side that does not
+  reduce is a call of the file stem. `--impl` names a C# type and the
+  left-hand side is a call of that type. The type is fixed when the
+  file is written. Skipped equations
   are listed on standard error, then a line `N tests, M skipped`.
   Standard output is only the test file. `--node` with this backend is
   refused.

@@ -25,7 +25,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Closed equations as tests](https://muro-lang.dev/docs/exunit): A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.
 - [Pytest](https://muro-lang.dev/docs/pytest): A book's closed equations become one pytest module. The tests call a Python module the host names. A skip is a marked test and is recorded.
 - [Rust tests](https://muro-lang.dev/docs/rust-test): A book's closed equations become one Rust test file. The tests call the emitted Rust. A skip is an ignored test and is recorded.
-- [C# tests](https://muro-lang.dev/docs/csharp-test): A book's closed equations become one C# xUnit file. Each fact compares the two normal forms, or calls a type named with --impl. A skip is a skipped fact and is recorded.
+- [C# tests](https://muro-lang.dev/docs/csharp-test): A book's closed equations become one C# xUnit file. Each fact compares the two normal forms, or calls the file stem or a type named with --impl. A skip is a skipped fact and is recorded.
 - [Mutation](https://muro-lang.dev/docs/mutate): `mix muro.mutate` reports which evidence fails when a `run` definition changes.
 - [Visual explorer](https://muro-lang.dev/docs/explorer): `muro_visor` draws a checked book. `muro ui path.muro` prints how to install it. The compiler does not start the explorer.
 - [Committed modules](https://muro-lang.dev/docs/gen): A manifest names each book, module, and target. `mix muro.gen` writes the module. `mix muro.gen --check` fails when the file and the book disagree.
