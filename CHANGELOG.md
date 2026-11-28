@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.53
+
+The Elixir backend emits a byte fold as `:binary.match` when the same tests the C backend uses can prove it. A `U64` fold whose step is the border automaton of one octet string, with the matched length in the low three bits and the index above them, scans for that string. A hit packs the accept state with the end of the match. A miss runs the automaton on the unmatched suffix. A fold whose step returns the accumulator unchanged outside one, two, or three octets searches for those octets and runs the step only there. When the fold's stop test says the rest of the slice leaves the accumulator unchanged, the search returns. A fold that fails either test stays the closure that walks one octet at a time, including a string step gated on one index. The C image is unchanged.
+
+On the muro-http request book, `crlfFold` of a 16 KiB body drops from 567,609 reductions to 11, and `scan` stops at the blank line (2,084 reductions, against 2,057 for a short GET). One `stepFact` of a keep-alive GET drops from 15,507 reductions and 90 µs to 7,044 and 46 µs. A POST with a 16 KiB body drops from 1,673,072 reductions and 8,735 µs to 17,976 and 92 µs, against 13,930 and 75 µs for an empty body. A GET with 30 extra headers drops from 184,403 reductions and 906 µs to 41,586 and 214 µs. Feeding a 6,642-byte header in 64-byte pieces drops from about 25.5M reductions and 130 ms to 2,473,100 and 15.5 ms. The piece-wise walk is still quadratic: the book does not store a scan cursor, so each chunk runs `scan` from the first byte.
+
+### Tests
+
+- `test/muro_emit_fold_fast_test.exs`: the `\r\n\r\n` automaton matches a byte-loop oracle, including overlaps, and a 16 KiB miss stays under 1,000 reductions. A count of line feeds skips to that octet. An absorbing count of line feeds stops. A string step gated on one index stays a byte loop.
+
+### Manual
+
+- Emit: an Elixir byte fold is `:binary.match` when it is a string scan or a search for one, two, or three octets, and the closure otherwise.
+
+### Package
+
+- Version 0.22.53.
+
 ## 0.22.50
 
 The C backend writes a tail match where its value goes. A match or a let in tail position no longer fills a zeroed temporary that each enclosing match copies up. In a run that returns anything but a string, each arm returns. In a fold step the arm assigns the accumulator. In a run that updates its argument in place the arm assigns through the pointer, and an arm that leaves the argument unchanged assigns nothing. A nested match writes into the outer match's result. A match in any other position keeps its own temporary. `sliceUntil` and `sliceAfter` find the octet with `memchr`. The emitted functions, their names, parameters, and results are unchanged.

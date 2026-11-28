@@ -115,7 +115,7 @@ A C# test entry may omit the module. The target ends with `.cs`. `impl:` is a C#
 
 ```elixir
 [
-  muro: "0.22.50",
+  muro: "0.22.53",
   modules: [
     {"priv/muro/rounding.muro", "test/rounding_test.cs",
      [kind: :csharp_test, impl: "Host.Rounding"]}

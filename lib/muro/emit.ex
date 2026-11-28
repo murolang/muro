@@ -7,6 +7,12 @@ defmodule Muro.Emit do
   unfold body is `{head, next_seed}`. `uncons` is two replayable views
   (`Enum.take/2` + `Stream.drop/2`); affinity was already checked.
 
+  A byte fold `Muro.Emit.FoldFast` can prove is a string scan, or a
+  search for one, two or three bytes, is emitted as `:binary.match`.
+  When that fold's stop test says later bytes leave the accumulator
+  unchanged, the search returns there. Any other fold stays the
+  closure that walks one byte at a time.
+
   A `repr` is emitted as `decode_<type>/1`, `decode_<type>/2`, and
   `encode_<type>/2` by `Muro.Repr`, from the same analysis the checker
   used. Decode returns `{:ok, value, table}`. Encode takes that table.
@@ -140,6 +146,7 @@ defmodule Muro.Emit do
   def emit_private_runs(book, wanted) when is_list(book) and is_list(wanted) do
     reset_produce()
     names = elixir_names(book)
+    plans = Muro.Emit.FoldFast.plans(book, names)
     want = MapSet.new(wanted)
 
     runs =
@@ -149,7 +156,7 @@ defmodule Muro.Emit do
 
     funs =
       runs
-      |> Enum.map(&emit_def(Map.put(&1, :export, false), book, names))
+      |> Enum.map(&emit_def(Map.put(&1, :export, false), book, names, plans))
       |> Enum.join("\n\n")
 
     except =
@@ -251,7 +258,8 @@ defmodule Muro.Emit do
     book = Muro.Grade.erase_book(book)
     runs = run_defs(book)
     names = elixir_names(book)
-    funs = runs |> Enum.map(&emit_def(&1, book, names)) |> Enum.join("\n\n")
+    plans = Muro.Emit.FoldFast.plans(book, names)
+    funs = runs |> Enum.map(&emit_def(&1, book, names, plans)) |> Enum.join("\n\n")
 
     except =
       case kernel_clashes(runs, names) do
@@ -277,10 +285,10 @@ defmodule Muro.Emit do
     end
   end
 
-  defp emit_def(%{name: name} = d, book, names) do
+  defp emit_def(%{name: name} = d, book, names, plans) do
     case Muro.Emit.NatPrim.body(d) do
       {:ok, params, src} -> host_def(d, Map.fetch!(names, name), params, src)
-      :error -> checked_def(d, book, names)
+      :error -> checked_def(d, book, names, plans)
     end
   end
 
@@ -292,7 +300,7 @@ defmodule Muro.Emit do
     "#{kw} #{fun}(#{Enum.join(params, ", ")}) when #{guard} do\n#{indent(src, 2)}\nend"
   end
 
-  defp checked_def(%{name: name, type: ty, body: body} = d, book, names) do
+  defp checked_def(%{name: name, type: ty, body: body} = d, book, names, plans) do
     {:ok, ty_db} = Ast.to_db(ty)
     {:ok, body_db} = Ast.to_db(body)
     {erased, arity} = telescope(ty_db, 0, [])
@@ -305,7 +313,24 @@ defmodule Muro.Emit do
         |> Enum.reject(&(&1 in erased))
         |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
 
-      expr = emit_db(inner, arity, book, names)
+      # FoldFast writes its body at column 0. The ordinary emitter already
+      # indents continuation lines for the `\n  ` prefix below, so only the
+      # fast body is shifted. Shifting every body moves the 0.21.0 goldens.
+      expr =
+        case Map.get(plans, name) do
+          nil ->
+            emit_db(inner, arity, book, names)
+
+          plan ->
+            case Muro.Emit.FoldFast.render(plan, args, names) do
+              src when is_binary(src) ->
+                src |> String.trim_trailing("\n") |> String.replace("\n", "\n  ")
+
+              _ ->
+                emit_db(inner, arity, book, names)
+            end
+        end
+
       kw = if Map.get(d, :export, true), do: "def", else: "defp"
       fun = Map.fetch!(names, name)
 
