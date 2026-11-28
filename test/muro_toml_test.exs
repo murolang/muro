@@ -430,6 +430,7 @@ defmodule Muro.TomlTest do
     write_book(dir, "priv/muro/half.muro")
     write_book(dir, "priv/muro/third.muro")
     write_book(dir, "priv/muro/fourth.muro")
+    write_book(dir, "priv/muro/fifth.muro")
 
     assert {:ok, manifest} =
              load(dir, """
@@ -460,9 +461,15 @@ defmodule Muro.TomlTest do
              target = "tests/fourth.rs"
              backend = "rust-test"
              impl = "crate::fourth"
+
+             [[modules]]
+             book = "priv/muro/fifth.muro"
+             target = "tests/fifth.cs"
+             backend = "csharp-test"
+             impl = "Host.Rounding"
              """)
 
-    assert [rounding, half, third, fourth] = manifest.modules
+    assert [rounding, half, third, fourth, fifth] = manifest.modules
     assert rounding.kind == :exunit
     assert rounding.module == MyApp.Muro.RoundingTest
     assert rounding.impl == MyApp.Muro.Rounding
@@ -471,6 +478,8 @@ defmodule Muro.TomlTest do
     assert third.impl == "tests._third_impl"
     assert fourth.kind == :rust_test
     assert fourth.impl == "crate::fourth"
+    assert fifth.kind == :csharp_test
+    assert fifth.impl == "Host.Rounding"
 
     # A top-level backend is the kind the impl is read for.
     assert {:ok, defaulted} =

@@ -7,7 +7,7 @@ summary: A book's closed equations become one ExUnit module. The tests call an i
 
 # Closed equations as tests
 
-In brief: `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the closed equations in that file. `mix muro.gen` writes the same module when an entry sets `kind: :exunit`. Each test is named `"<file> <def-name>"`. The file and line are in the assertion message. The suite calls an implementation module the host selects. It does not call the emitted module unless that module is the implementation. A file of `param`s is a suite. `--imports` also collects the equations of the files this book imports directly. The same equations are a pytest module and a Rust test file. The pages are [Pytest](pytest.md) and [Rust tests](rust-test.md).
+In brief: `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the closed equations in that file. `mix muro.gen` writes the same module when an entry sets `kind: :exunit`. Each test is named `"<file> <def-name>"`. The file and line are in the assertion message. The suite calls an implementation module the host selects. It does not call the emitted module unless that module is the implementation. A file of `param`s is a suite. `--imports` also collects the equations of the files this book imports directly. The same equations are a pytest module, a Rust test file, and a C# xUnit file. The pages are [Pytest](pytest.md), [Rust tests](rust-test.md), and [C# tests](csharp-test.md).
 
 ## What is collected
 
@@ -181,7 +181,7 @@ A wrong answer fails the test whose name is `priv/muro/rounding.muro round-ok`. 
 
 ## Param libraries
 
-A library states what every implementation supplies, and its closed equations are the suite those implementations run. `mix muro.emit kit.muro --backend exunit` checks the file with the params as assumptions and prints the module. `mix muro.check kit.muro`, and `mix muro.emit kit.muro` with no backend, still refuse it: `param decide is supplied by a file that imports this one`. The same message is what a `kind: :elixir` manifest entry reports. The loader option is `params: :open`. Only `Muro.emit_exunit/3`, `Muro.emit_pytest/2`, `Muro.emit_rust_test/2`, `mix muro.emit --backend exunit`, `mix muro.emit --backend pytest`, `mix muro.emit --backend rust-test`, and a `kind: :exunit`, `kind: :pytest`, or `kind: :rust_test` entry pass it.
+A library states what every implementation supplies, and its closed equations are the suite those implementations run. `mix muro.emit kit.muro --backend exunit` checks the file with the params as assumptions and prints the module. `mix muro.check kit.muro`, and `mix muro.emit kit.muro` with no backend, still refuse it: `param decide is supplied by a file that imports this one`. The same message is what a `kind: :elixir` manifest entry reports. The loader option is `params: :open`. Only `Muro.emit_exunit/3`, `Muro.emit_pytest/2`, `Muro.emit_rust_test/2`, `Muro.emit_csharp_test/2`, `mix muro.emit --backend exunit`, `mix muro.emit --backend pytest`, `mix muro.emit --backend rust-test`, `mix muro.emit --backend csharp-test`, and a `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, or `kind: :csharp_test` entry pass it.
 
 ```muro
 data Key : Type where
@@ -305,7 +305,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 ]
 ```
 
-`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--backend pytest` and `--backend rust-test` collect it too. `--imports` with `--backend elixir`, or with `c`, `rust`, `zig`, `asm`, `otp`, `fsm`, or `--node`, is an error: `--imports is only valid with --backend exunit, --backend pytest, or --backend rust-test`. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit, kind: :pytest, or kind: :rust_test`). A non-boolean is `imports: must be a boolean`.
+`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--backend pytest`, `--backend rust-test`, and `--backend csharp-test` collect it too. `--imports` with `--backend elixir`, or with `c`, `rust`, `zig`, `asm`, `otp`, `fsm`, or `--node`, is an error: `--imports is only valid with --backend exunit, --backend pytest, --backend rust-test, or --backend csharp-test`. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit, kind: :pytest, kind: :rust_test, or kind: :csharp_test`). A non-boolean is `imports: must be a boolean`.
 
 A `pkg:` import is a direct import like any other. The test is named with the file under the project root, `muro_deps/shared/wire.muro wire-ok`, not with the `pkg:` spelling. A `std:` import is named with its id, `std:bool.muro not-not`, and that id is not expanded to a path.
 

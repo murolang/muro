@@ -445,6 +445,7 @@ defmodule Muro.Init do
   defp example_paths(:exunit), do: {"test/rounding_test.exs", "MyApp.Billing.RoundingTest"}
   defp example_paths(:pytest), do: {"test/rounding_test.py", nil}
   defp example_paths(:rust_test), do: {"test/rounding_test.rs", nil}
+  defp example_paths(:csharp_test), do: {"test/rounding_test.cs", nil}
 
   defp example_paths(:fsm),
     do: {"lib/my_app/billing/rounding_fsm.ex", "MyApp.Billing.RoundingFsm"}

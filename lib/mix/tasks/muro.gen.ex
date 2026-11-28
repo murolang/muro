@@ -17,28 +17,31 @@ defmodule Mix.Tasks.Muro.Gen do
   Muro version. A mismatch is an error and names both versions.
   `fuel:` is optional. `modules:` lists `{book, module, target}` or
   `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
-  set `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`,
+  set `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`,
+  `kind: :csharp_test`, `kind: :fsm`,
   `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :otp`,
   `kind: :js`, or `kind: :mbi`.
   For `:exunit`, `impl: An.Adapter` and `imports: true`. For `:pytest`,
   `impl:` is a Python module name. For `:rust_test`, `impl:` is a Rust
-  path. A `:c`, `:rust`, `:zig`, `:asm`, `:otp`, `:js`, `:mbi`,
-  `:pytest`, or `:rust_test` entry may omit the module
+  path. For `:csharp_test`, `impl:` is a C# type name. A `:c`, `:rust`,
+  `:zig`, `:asm`, `:otp`, `:js`, `:mbi`,
+  `:pytest`, `:rust_test`, or `:csharp_test` entry may omit the module
   (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
   beside the `.c`. `:js` also writes the `.d.ts` beside the `.mjs`.
   An `:otp` target ends with `.ex` and is formatted the same way as
   an Elixir target. An `:mbi` target ends with `.mbi` and is written
   without a gen header. Formatting is left alone for `:c`, `:rust`,
-  `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`. A pytest
-  target ends with `.py`. A Rust test target ends with `.rs`.
+  `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi`. A pytest
+  target ends with `.py`. A Rust test target ends with `.rs`. A C# test
+  target ends with `.cs`.
   `imports:` is
   a boolean, default `false`, and is valid for `:exunit`, `:pytest`,
-  and `:rust_test`. `imports: true` also collects the closed equations
+  `:rust_test`, and `:csharp_test`. `imports: true` also collects the closed equations
   of the files that book imports directly. An ExUnit target is usually
   `test/<name>_test.exs`. After the `written` or `unchanged` line,
   one `skipped <target>: …` line is printed per equation the suite
   cannot express. `--check` does not print those lines. A
-  `kind: :exunit`, `kind: :pytest`, or `kind: :rust_test` entry checks
+  `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, or `kind: :csharp_test` entry checks
   a library of unsupplied `param`s. A `kind: :elixir` entry still
   refuses it.
 

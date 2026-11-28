@@ -78,6 +78,13 @@ defmodule Muro.CliTest do
       "rust-test"
     ])
 
+    assert_same(fn -> Mix.Tasks.Muro.Emit.run([half, "--backend", "csharp-test"]) end, [
+      "emit",
+      half,
+      "--backend",
+      "csharp-test"
+    ])
+
     assert_same(fn -> Mix.Tasks.Muro.Emit.run([half, "--backend", "nope"]) end, [
       "emit",
       half,

@@ -78,6 +78,10 @@ pages:
     slug: rust-test
     title: Rust tests
     summary: A book's closed equations become one Rust test file. The tests call the emitted Rust. A skip is an ignored test and is recorded.
+  - file: csharp-test.md
+    slug: csharp-test
+    title: C# tests
+    summary: A book's closed equations become one C# xUnit file. Each fact compares the two normal forms, or calls the file stem or a type named with --impl. A skip is a skipped fact and is recorded.
   - file: gen.md
     slug: gen
     title: Committed modules

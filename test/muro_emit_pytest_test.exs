@@ -216,11 +216,12 @@ defmodule Muro.EmitPytestTest do
     assert {:raise, "", "--impl must be a Python module name, got: \"class\""} =
              Muro.CLI.Emit.run([path, "--backend", "pytest", "--impl", "class"])
 
-    assert {:raise, "", "--impl is only valid with --backend pytest or --backend rust-test"} =
+    assert {:raise, "",
+            "--impl is only valid with --backend pytest, --backend rust-test, or --backend csharp-test"} =
              Muro.CLI.Emit.run([path, "--backend", "exunit", "--impl", "rounding"])
 
     assert_raise Mix.Error,
-                 ~r/--impl is only valid with --backend pytest or --backend rust-test/,
+                 ~r/--impl is only valid with --backend pytest, --backend rust-test, or --backend csharp-test/,
                  fn ->
                    Mix.Tasks.Muro.Emit.run([path, "--impl", "rounding"])
                  end
