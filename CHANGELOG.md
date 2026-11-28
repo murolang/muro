@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.49
+
+The live C# xUnit check skips when the SDK list is empty, when the probe fails (a non-zero exit, or a missing binary), or when it does not finish. The check runs when `dotnet --list-sdks` exits 0 and lists an SDK.
+
+### Tests
+
+- `test/muro_emit_csharp_test.exs`: the live `dotnet test` fact is skipped when `dotnet --list-sdks` does not exit 0 with an SDK line, including an empty list, a failing probe, or a probe that does not finish.
+
+### Package
+
+- Version 0.22.49.
+
 ## 0.22.48
 
 `after_kw/2` drops a keyword by byte size. It used `String.slice(s, String.length(kw)..-1//1)`. A range that ends at `-1` counts graphemes in the remainder, once per token, so a large book is quadratic. `corpus elaborations and Share images check` in `Muro.IRCheckTest` could exceed ExUnit's 60-second timeout. The remainder after the keyword is the same. That test now allows 180s, because a parallel `mix test` can still exceed 60s while loading the corpus.
