@@ -7,11 +7,19 @@ defmodule Muro.Emit.CSharpTest do
   with `Skip` set, and it is also returned in `skips`. Nothing is
   dropped.
 
-  With no `impl:`, a fact compares the two normal forms. The file
-  compiles in a project that references xUnit and nothing else. There
-  is no C# image beside it. `impl:` names a type and the left-hand
-  side is a call of that type. The path is fixed when the file is
-  written. There is no environment override.
+  With no `impl:`, a fact that reduces on both sides compares the two
+  normal forms, and that file compiles in a project that references
+  xUnit and nothing else. A param equation, or a side that does not
+  reduce to a value, still names a host type (the file stem, unless
+  `impl:` names one). There is no C# image beside the file. `impl:`
+  names a type and the left-hand side is a call of that type. A
+  simple type name is written `global::T`, so it is not a nested
+  helper. The path is fixed when the file is written. There is no
+  environment override.
+
+  The value helpers live in a nested `public static class MuroValues`.
+  The name is reserved, so a constructor or a test method that would
+  take it is rewritten.
 
   `print_value/2` is the one place a value becomes a C# expression.
 
@@ -62,8 +70,9 @@ defmodule Muro.Emit.CSharpTest do
   @used_key :muro_csharp_used
 
   # Reserved keywords, plus contextual keywords that are not identifiers
-  # in a type or member position (`record`, `var`, `file`, `required`).
-  # `@` in front of any of them is that identifier.
+  # in a type or member position (`record`, `var`, `file`, `required`,
+  # `field`, `extension`, `allows`). `@` in front of any of them is that
+  # identifier.
   @keywords MapSet.new(~w(
     abstract as base bool break byte case catch char checked class const
     continue decimal default delegate do double else enum event explicit
@@ -72,10 +81,11 @@ defmodule Muro.Emit.CSharpTest do
     override params private protected public readonly ref return sbyte
     sealed short sizeof stackalloc static string struct switch this throw
     true try typeof uint ulong unchecked unsafe ushort using virtual void
-    volatile while add alias and args async await by descending dynamic
-    equals file from get global group init into join let managed nameof
-    nint not notnull nuint on or orderby partial record remove required
-    scoped select set unmanaged value var when where with yield
+    volatile while add alias allows and args async await by descending
+    dynamic equals extension field file from get global group init into
+    join let managed nameof nint not notnull nuint on or orderby partial
+    record remove required scoped select set unmanaged value var when
+    where with yield
   ))
 
   # Instance methods that hide `object` under `-warnaserror`, or that
@@ -86,12 +96,14 @@ defmodule Muro.Emit.CSharpTest do
   ))
 
   # Nested in the test class. A constructor or a test method that
-  # folds to one of these takes the next free spelling.
+  # folds to one of these takes the next free spelling. The helper
+  # class is `MuroValues`, not `Values`, so an impl or stem named
+  # `Values` is not the helper class.
   @helper_types MapSet.new(~w(
-    Unit MuroBytes MuroAtom MuroNone MuroSome MuroWBool MuroNat Values
+    Unit MuroBytes MuroAtom MuroNone MuroSome MuroWBool MuroNat MuroValues
   ))
 
-  @reserved_methods MapSet.new(["MURO_BOOK", "Values"])
+  @reserved_methods MapSet.new(["MURO_BOOK", "MuroValues"])
 
   @doc """
   `{:ok, %{source: source, skips: skips, tests: n}}` or
@@ -454,7 +466,7 @@ defmodule Muro.Emit.CSharpTest do
       body = Enum.join(rows, "\n")
 
       """
-      public static class Values
+      public static class MuroValues
       {
       #{indent(body, 4)}
       }
@@ -540,10 +552,20 @@ defmodule Muro.Emit.CSharpTest do
   end
 
   # The right-hand side is the expected value. `Assert.Equal` takes
-  # that argument first. A call names the implementation type.
-  defp side({:call, fun, []}, impl), do: "#{impl}.#{fun}()"
-  defp side({:call, fun, args}, impl), do: "#{impl}.#{fun}(#{Enum.join(args, ", ")})"
+  # that argument first. A call names the implementation type. A
+  # simple (non-namespaced) name is written `global::T`, so a stem
+  # or `--impl` of `Values` is not the nested helper `MuroValues`,
+  # and a name that matches a nested type is looked up globally.
+  defp side({:call, fun, []}, impl), do: "#{qualify_impl(impl)}.#{fun}()"
+
+  defp side({:call, fun, args}, impl),
+    do: "#{qualify_impl(impl)}.#{fun}(#{Enum.join(args, ", ")})"
+
   defp side({:value, source}, _impl), do: source
+
+  defp qualify_impl(impl) do
+    if String.contains?(impl, "."), do: impl, else: "global::" <> impl
+  end
 
   defp one_line(text) do
     text |> to_string() |> String.replace(~r/[\r\n]/, " ")
@@ -645,7 +667,7 @@ defmodule Muro.Emit.CSharpTest do
 
   defp typed(:one, _book, _gloss) do
     note(:unit)
-    {:ok, "new Values.Unit()", "Values.Unit"}
+    {:ok, "new MuroValues.Unit()", "MuroValues.Unit"}
   end
 
   defp typed({:pair, a, b}, book, gloss) do
@@ -672,14 +694,14 @@ defmodule Muro.Emit.CSharpTest do
 
   defp typed({:word, :none, []}, _book, _gloss) do
     note(:none)
-    {:ok, "new Values.MuroNone()", "Values.MuroNone"}
+    {:ok, "new MuroValues.MuroNone()", "MuroValues.MuroNone"}
   end
 
   defp typed({:word, :some, [payload]}, book, gloss) do
     case typed(peel(payload), book, gloss) do
       {:ok, src, ty} ->
         note(:some)
-        {:ok, "new Values.MuroSome<#{ty}>(#{src})", "Values.MuroSome<#{ty}>"}
+        {:ok, "new MuroValues.MuroSome<#{ty}>(#{src})", "MuroValues.MuroSome<#{ty}>"}
 
       {:error, _} = err ->
         err
@@ -697,7 +719,7 @@ defmodule Muro.Emit.CSharpTest do
 
   defp typed({:atom, name}, _book, _gloss) when is_binary(name) do
     note(:atom)
-    {:ok, "new Values.MuroAtom(#{cs_str(name)})", "Values.MuroAtom"}
+    {:ok, "new MuroValues.MuroAtom(#{cs_str(name)})", "MuroValues.MuroAtom"}
   end
 
   defp typed({:lam, _, _, _, _}, _book, _gloss), do: {:error, :function}
@@ -737,13 +759,13 @@ defmodule Muro.Emit.CSharpTest do
 
   defp nat_src(n) when is_integer(n) and n >= 0 do
     note(:nat)
-    {:ok, "Values.MuroNat(#{cs_str(Integer.to_string(n))})", "BigInteger"}
+    {:ok, "MuroValues.MuroNat(#{cs_str(Integer.to_string(n))})", "BigInteger"}
   end
 
   defp wbool_src(value) when is_boolean(value) do
     note(:wbool)
     lit = if value, do: "true", else: "false"
-    {:ok, "new Values.MuroWBool(#{lit})", "Values.MuroWBool"}
+    {:ok, "new MuroValues.MuroWBool(#{lit})", "MuroValues.MuroWBool"}
   end
 
   defp word_src(k, n) do
@@ -792,13 +814,13 @@ defmodule Muro.Emit.CSharpTest do
   end
 
   defp ctor_src(name, [], []) do
-    {:ok, "new Values.#{name}()", "Values.#{name}"}
+    {:ok, "new MuroValues.#{name}()", "MuroValues.#{name}"}
   end
 
   defp ctor_src(name, srcs, tys) do
     args = Enum.join(tys, ", ")
     fields = Enum.join(srcs, ", ")
-    {:ok, "new Values.#{name}<#{args}>(#{fields})", "Values.#{name}<#{args}>"}
+    {:ok, "new MuroValues.#{name}<#{args}>(#{fields})", "MuroValues.#{name}<#{args}>"}
   end
 
   defp live_args(info, args) do
@@ -862,7 +884,7 @@ defmodule Muro.Emit.CSharpTest do
   defp bytes_literal(bin) do
     note(:bytes)
     hex = Base.encode16(bin, case: :lower)
-    {:ok, "new Values.MuroBytes(#{cs_str(hex)})", "Values.MuroBytes"}
+    {:ok, "new MuroValues.MuroBytes(#{cs_str(hex)})", "MuroValues.MuroBytes"}
   end
 
   defp flatten_text({:slit, bin}) when is_binary(bin) do

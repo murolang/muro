@@ -368,7 +368,7 @@ The tests call an implementation the host names. [Closed equations as tests](exu
 
 ## C# tests
 
-`--backend csharp-test` prints one C# xUnit file for those same equations, the same text as `Muro.emit_csharp_test/2`. With no `--impl`, each fact compares the two normal forms, so the file needs only xUnit. `--impl TYPE` names a C# type and the left-hand side is a call of that type. The type is fixed when the file is written. A skip is a `[Fact]` with `Skip` set. Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the file. `--node` with this backend is refused. `mix muro.gen` writes the file when an entry sets `kind: :csharp_test`.
+`--backend csharp-test` prints one C# xUnit file for those same equations, the same text as `Muro.emit_csharp_test/2`. With no `--impl`, a fact that reduces on both sides compares the two normal forms, and that file needs only xUnit. A param equation, or a side that does not reduce to a value, still names a host type. `--impl TYPE` names a C# type and the left-hand side is a call of that type. A simple type name is written `global::T`. The type is fixed when the file is written. A skip is a `[Fact]` with `Skip` set. Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the file. `--node` with this backend is refused. `mix muro.gen` writes the file when an entry sets `kind: :csharp_test`.
 
 [C# tests](csharp-test.md) is the value encoding, the identifier fold, and how the implementation is chosen.
 

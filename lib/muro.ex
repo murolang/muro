@@ -147,8 +147,11 @@ defmodule Muro do
   @doc """
   Emit the closed equations of `path` as a C# xUnit file.
 
-  With no `impl:`, each fact compares the two normal forms, so the
-  file names no host type. `impl:` names a C# type and the left-hand
+  With no `impl:`, a fact that reduces on both sides compares the two
+  normal forms, and that file names no host type. A param equation,
+  or a side that does not reduce to a value, still names a host type
+  (the file stem, unless `impl:` names one). A simple type name is
+  written `global::T`. `impl:` names a C# type and the left-hand
   side is a call of that type. `opts` also accepts `fuel:`, `root:`,
   `book:`, and `imports:`.
 

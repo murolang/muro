@@ -7,7 +7,7 @@ summary: A book's closed equations become one C# xUnit file. Each fact compares 
 
 # C# tests
 
-In brief: `mix muro.emit path.muro --backend csharp-test` prints one C# xUnit file for the closed equations in that file. The equations are the ones [Closed equations as tests](exunit.md) collects, in the same order, including `--imports`. `mix muro.gen` writes the same file when an entry sets `kind: :csharp_test`. Each equation is one `[Fact]`. A skip is a `[Fact]` with `Skip` set, and it is also returned in the skip list. The count of facts plus the count of skips is the count of candidates. With no `--impl`, a fact compares the two normal forms, so the file compiles in a project that references xUnit and nothing else. `--impl` names a C# type and the left-hand side is a call of that type. A file of `param`s is a suite. The same book prints the same file.
+In brief: `mix muro.emit path.muro --backend csharp-test` prints one C# xUnit file for the closed equations in that file. The equations are the ones [Closed equations as tests](exunit.md) collects, in the same order, including `--imports`. `mix muro.gen` writes the same file when an entry sets `kind: :csharp_test`. Each equation is one `[Fact]`. A skip is a `[Fact]` with `Skip` set, and it is also returned in the skip list. The count of facts plus the count of skips is the count of candidates. With no `--impl`, a fact that reduces on both sides compares the two normal forms, and that file compiles in a project that references xUnit and nothing else. A param equation, or a side that does not reduce to a value, still names a host type (the file stem, unless `--impl` names one). `--impl` names a C# type and the left-hand side is a call of that type. A file of `param`s is a suite. The same book prints the same file.
 
 ## The test
 
@@ -17,7 +17,7 @@ One fact per equation, in book order. The method name is the evidence definition
 [Xunit.Fact(DisplayName = "rounding.muro:9 round-ok")]
 public void round_ok()
 {
-    Xunit.Assert.Equal(Values.MuroNat("1"), Values.MuroNat("1"));
+    Xunit.Assert.Equal(MuroValues.MuroNat("1"), MuroValues.MuroNat("1"));
 }
 ```
 
@@ -50,17 +50,17 @@ A source name becomes a test method in five steps.
 2. An empty result, or one that starts with a digit, gains the prefix `muro_`.
 3. Claim that name, in book order, over every candidate, tests and skips together. A second claim of the same base is the base plus `_` and a decimal starting at 2. `round-ok` and `round_ok` are `round_ok` and `round_ok_2`.
 4. A method that hides `object` gains a trailing `_`. The names are `Equals`, `GetHashCode`, `GetType`, `ToString`, `Finalize`, and `MemberwiseClone`. `@` is the same identifier, and xUnit refuses the first four as test names, so the suffix is a different name. `Equals` is `Equals_`.
-5. A keyword, reserved or contextual, is written with `@`. `class` is `@class`. `record` is `@record`.
+5. A keyword, reserved or contextual, is written with `@`. `class` is `@class`. `record` is `@record`. `field`, `extension`, and `allows` are `@field`, `@extension`, and `@allows`.
 
-The claim happens before `@` is added, and the finished identifier is recorded. `Equals` finishes as `Equals_`, so an evidence named `Equals_` is `Equals__2`. `class` finishes as `@class`, which is a different identifier from `class_`, so an evidence named `class_` stays `class_`. `MURO_BOOK` and `Values` are reserved on the test class. An evidence named `Values` is `Values_2`. An evidence named `MURO_BOOK` is `MURO_BOOK_2`.
+The claim happens before `@` is added, and the finished identifier is recorded. `Equals` finishes as `Equals_`, so an evidence named `Equals_` is `Equals__2`. `class` finishes as `@class`, which is a different identifier from `class_`, so an evidence named `class_` stays `class_`. `MURO_BOOK` and `MuroValues` are reserved on the test class. An evidence named `MuroValues` is `MuroValues_2`. An evidence named `MURO_BOOK` is `MURO_BOOK_2`. An evidence named `Values` stays `Values`.
 
-A constructor type is claimed the same way, against the helper names `Unit`, `MuroBytes`, `MuroAtom`, `MuroNone`, `MuroSome`, `MuroWBool`, `MuroNat`, and `Values`. A keyword is `@`. A name that is only lowercase ASCII letters gains a trailing `_`, because `dotnet build -warnaserror` rejects that type name (CS8981). `red` is `red_`. `record` is `@record`. A constructor named `Values` is `Values_2`, so it is not the enclosing class. A method keeps a lowercase spelling: the host call `round` stays `round`, and CS8981 names types.
+A constructor type is claimed the same way, against the helper names `Unit`, `MuroBytes`, `MuroAtom`, `MuroNone`, `MuroSome`, `MuroWBool`, `MuroNat`, and `MuroValues`. A keyword is `@`. A name that is only lowercase ASCII letters gains a trailing `_`, because `dotnet build -warnaserror` rejects that type name (CS8981). `red` is `red_`. `record` is `@record`. `field` is `@field`. A constructor named `MuroValues` is `MuroValues_2`, so it is not the helper class. A constructor named `Values` stays `Values`. A method keeps a lowercase spelling: the host call `round` stays `round`, and CS8981 names types.
 
 The test class is the file stem, folded, with `Tests` appended, then `@` when that whole name is a keyword. `rounding.muro` is `roundingTests`. `word-kind.muro` is `word_kindTests`. `class.muro` is `classTests`. `2nd.muro` is `muro_2ndTests`.
 
 ## The implementation
 
-With no `--impl`, each fact compares the two normal forms. A side that does not reduce to a value is a call of the file stem. `rounding.muro` calls `rounding.round`. `class.muro` calls `@class`. `2nd.muro` calls `muro_2nd`. There is no C# image beside the file.
+With no `--impl`, each fact that reduces on both sides compares the two normal forms. A param equation, or a side that does not reduce to a value, is a call of the file stem. `rounding.muro` calls `global::rounding.round`. `class.muro` calls `global::@class`. `2nd.muro` calls `global::muro_2nd`. `Values.muro` calls `global::Values`, so the call is not the nested helper `MuroValues`. A name that already contains a `.`, such as `--impl Host.Rounding`, is written as it is. There is no C# image beside the file.
 
 `--impl` and `impl:` name a C# type. Each segment is an identifier that is not a keyword, or `@` plus an identifier. `Host.Rounding` and `@class` are accepted. `class`, `int`, `1bad`, `.Rounding`, and `Rounding.` are refused: `impl must be a C# type name`. The type is baked into the file. There is no environment override. The left-hand side is a call of that type, and the right-hand side is the normal form.
 
@@ -70,32 +70,32 @@ The class defines `MURO_BOOK`, the book sha256, the same hash an ExUnit suite st
 
 ## Values
 
-Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000), the same normalization the ExUnit suite uses. `Muro.Emit.CSharpTest.print_value/2` is the one printer. The helpers live in `public static class Values`, nested in the test class, and a helper is written only when a fact uses it.
+Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000), the same normalization the ExUnit suite uses. `Muro.Emit.CSharpTest.print_value/2` is the one printer. The helpers live in `public static class MuroValues`, nested in the test class, and a helper is written only when a fact uses it.
 
 | Muro value | C# |
 | --- | --- |
-| `Nat`, including `0` and `suc` | `Values.MuroNat("n")`, a `System.Numerics.BigInteger` |
+| `Nat`, including `0` and `suc` | `MuroValues.MuroNat("n")`, a `System.Numerics.BigInteger` |
 | `U8` | `(byte)n` |
 | `U32` | `nu` |
 | `U64` | `nUL` |
 | `I64` | a signed `long`, or `long.MinValue` |
-| `WBool` | `new Values.MuroWBool(true)` or `new Values.MuroWBool(false)` |
-| `wnone` | `new Values.MuroNone()` |
-| `wsome` | `new Values.MuroSome<T>(...)` |
-| constructor | `new Values.red_()` or `new Values.box_<BigInteger>(...)` |
+| `WBool` | `new MuroValues.MuroWBool(true)` or `new MuroValues.MuroWBool(false)` |
+| `wnone` | `new MuroValues.MuroNone()` |
+| `wsome` | `new MuroValues.MuroSome<T>(...)` |
+| constructor | `new MuroValues.red_()` or `new MuroValues.box_<BigInteger>(...)` |
 | pair | `(a, b)`, a `ValueTuple` |
-| `tt` | `new Values.Unit()` |
-| atom | `new Values.MuroAtom("name")` |
+| `tt` | `new MuroValues.Unit()` |
+| atom | `new MuroValues.MuroAtom("name")` |
 | string literal | a C# string |
-| bytes literal | `new Values.MuroBytes("hex")` |
+| bytes literal | `new MuroValues.MuroBytes("hex")` |
 
-`Nat` is unbounded. A fixed-width integer would wrap, so the digits are a `BigInteger`. `MuroNat` parses them with `NumberStyles.None` and `CultureInfo.InvariantCulture`. A `Nat` of any size is a fact. `18446744073709551616` is `Values.MuroNat("18446744073709551616")`.
+`Nat` is unbounded. A fixed-width integer would wrap, so the digits are a `BigInteger`. `MuroNat` parses them with `NumberStyles.None` and `CultureInfo.InvariantCulture`. A `Nat` of any size is a fact. `18446744073709551616` is `MuroValues.MuroNat("18446744073709551616")`.
 
 `U8`, `U32`, `U64`, and `I64` are the residue of that width. `I64` is the signed residue. `subi (toI64 0) (toI64 1)` is `-1L`. The signed minimum is `long.MinValue`, because the decimal spelling of that value does not fit in a `long` literal. A word equation that ExUnit skips as a machine term is a fact here when the normal form is a literal.
 
 `WBool` is a record holding a `bool`. `Assert.Equal` on two raw `bool`s is the xUnit diagnostic xUnit2004, which `dotnet build -warnaserror` rejects. The record compares by its field.
 
-A constructor is a `readonly record struct`. Equality is synthesized and structural, which is what `Assert.Equal` uses. A record that holds a `byte[]`, a `List<T>`, or an `ImmutableArray<T>` compares those fields by reference, so two equal payloads do not compare equal. Bytes are a record of a lowercase hex `string`. `b"ab"` is `new Values.MuroBytes("6162")`. An atom is a record of its name, so an atom does not equal a string of the same characters. A pair is a `ValueTuple`, and a pair of records compares structurally. `tt` is an empty `readonly record struct`, not `null`.
+A constructor is a `readonly record struct`. Equality is synthesized and structural, which is what `Assert.Equal` uses. A record that holds a `byte[]`, a `List<T>`, or an `ImmutableArray<T>` compares those fields by reference, so two equal payloads do not compare equal. Bytes are a record of a lowercase hex `string`. `b"ab"` is `new MuroValues.MuroBytes("6162")`. An atom is a record of its name, so an atom does not equal a string of the same characters. A pair is a `ValueTuple`, and a pair of records compares structurally. `tt` is an empty `readonly record struct`, not `null`.
 
 An erased field is not a field of the record. A constructor applied to fewer fields than it declares is a function. A constructor name declared twice is not given a record, and a value of that name is a skip (`is not closed`).
 
@@ -105,7 +105,7 @@ A function, a stream, an open name, `F32`, `Tensor`, and a word operation that d
 
 ## Param libraries
 
-`Muro.emit_csharp_test/2`, `mix muro.emit --backend csharp-test`, and a `kind: :csharp_test` entry check a library of unsupplied `param`s as assumptions (`params: :open`). `mix muro.check`, and every backend other than `exunit`, `pytest`, `rust-test`, and `csharp-test`, still refuse the file. A `run` param at the head of a side is a call of the entry file's type, `lib.p()` for `lib.muro`. An `evidence` param is not a call and not a candidate.
+`Muro.emit_csharp_test/2`, `mix muro.emit --backend csharp-test`, and a `kind: :csharp_test` entry check a library of unsupplied `param`s as assumptions (`params: :open`). `mix muro.check`, and every backend other than `exunit`, `pytest`, `rust-test`, and `csharp-test`, still refuse the file. A `run` param at the head of a side is a call of the entry file's type, `global::lib.p()` for `lib.muro`. An `evidence` param is not a call and not a candidate.
 
 `--imports` collects the same files the ExUnit flag collects. Every call in that file names the entry file's type. It is an error with any backend other than `exunit`, `pytest`, `rust-test`, and `csharp-test`: `--imports is only valid with --backend exunit, --backend pytest, --backend rust-test, or --backend csharp-test`.
 

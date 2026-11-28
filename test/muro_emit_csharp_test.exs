@@ -100,6 +100,7 @@ defmodule Muro.EmitCSharpSuiteTest do
     MuroBytes : Wrap
     MuroNat : Wrap
     Values : Wrap
+    MuroValues : Wrap
   def mark : run Wrap := record
   def mark-ok : evidence {mark ≡ record : Wrap} := refl
   def bare : run Wrap := MuroBytes
@@ -108,6 +109,8 @@ defmodule Muro.EmitCSharpSuiteTest do
   def natc-ok : evidence {natc ≡ MuroNat : Wrap} := refl
   def boxv : run Wrap := Values
   def boxv-ok : evidence {boxv ≡ Values : Wrap} := refl
+  def nestv : run Wrap := MuroValues
+  def nestv-ok : evidence {nestv ≡ MuroValues : Wrap} := refl
   def tag : run Atom := :red
   def tag-ok : evidence {tag ≡ :red : Atom} := refl
   """
@@ -139,11 +142,17 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert CSharpTest.ident("class_") == "class_"
     assert CSharpTest.ident("Equals") == "Equals_"
     assert CSharpTest.ident("record") == "@record"
+    assert CSharpTest.ident("field") == "@field"
+    assert CSharpTest.ident("extension") == "@extension"
+    assert CSharpTest.ident("allows") == "@allows"
     assert CSharpTest.ident("2nd") == "muro_2nd"
     assert CSharpTest.ident("GetHashCode") == "GetHashCode_"
     assert CSharpTest.ident("red") == "red"
     assert CSharpTest.type_ident("Equals") == "Equals"
     assert CSharpTest.type_ident("record") == "@record"
+    assert CSharpTest.type_ident("field") == "@field"
+    assert CSharpTest.type_ident("extension") == "@extension"
+    assert CSharpTest.type_ident("allows") == "@allows"
     assert CSharpTest.type_ident("class") == "@class"
     assert CSharpTest.type_ident("red") == "red_"
     assert CSharpTest.class_name("rounding.muro") == "roundingTests"
@@ -165,16 +174,16 @@ defmodule Muro.EmitCSharpSuiteTest do
   end
 
   test "print_value renders the host literals" do
-    assert CSharpTest.print_value(:ze, []) == {:ok, "Values.MuroNat(\"0\")"}
-    assert CSharpTest.print_value({:nat, 2}, []) == {:ok, "Values.MuroNat(\"2\")"}
+    assert CSharpTest.print_value(:ze, []) == {:ok, "MuroValues.MuroNat(\"0\")"}
+    assert CSharpTest.print_value({:nat, 2}, []) == {:ok, "MuroValues.MuroNat(\"2\")"}
 
     assert CSharpTest.print_value({:nat, 18_446_744_073_709_551_616}, []) ==
-             {:ok, "Values.MuroNat(\"18446744073709551616\")"}
+             {:ok, "MuroValues.MuroNat(\"18446744073709551616\")"}
 
-    assert CSharpTest.print_value(:one, []) == {:ok, "new Values.Unit()"}
+    assert CSharpTest.print_value(:one, []) == {:ok, "new MuroValues.Unit()"}
 
     assert CSharpTest.print_value({:pair, {:nat, 1}, {:nat, 2}}, []) ==
-             {:ok, "(Values.MuroNat(\"1\"), Values.MuroNat(\"2\"))"}
+             {:ok, "(MuroValues.MuroNat(\"1\"), MuroValues.MuroNat(\"2\"))"}
 
     assert CSharpTest.print_value({:word, {:lit, :u8, 5}, []}, []) == {:ok, "(byte)5"}
     assert CSharpTest.print_value({:word, {:lit, :u8, 255}, []}, []) == {:ok, "(byte)255"}
@@ -190,23 +199,27 @@ defmodule Muro.EmitCSharpSuiteTest do
              {:ok, "long.MinValue"}
 
     assert CSharpTest.print_value({:word, true, []}, []) ==
-             {:ok, "new Values.MuroWBool(true)"}
+             {:ok, "new MuroValues.MuroWBool(true)"}
 
     assert CSharpTest.print_value({:word, false, []}, []) ==
-             {:ok, "new Values.MuroWBool(false)"}
+             {:ok, "new MuroValues.MuroWBool(false)"}
 
-    assert CSharpTest.print_value({:word, :none, []}, []) == {:ok, "new Values.MuroNone()"}
+    assert CSharpTest.print_value({:word, :none, []}, []) == {:ok, "new MuroValues.MuroNone()"}
 
     assert CSharpTest.print_value({:word, :some, [{:word, {:lit, :u8, 5}, []}]}, []) ==
-             {:ok, "new Values.MuroSome<byte>((byte)5)"}
+             {:ok, "new MuroValues.MuroSome<byte>((byte)5)"}
 
     assert CSharpTest.print_value({:slit, "hi"}, []) == {:ok, "\"hi\""}
     assert CSharpTest.print_value({:slit, "a\"b"}, []) == {:ok, "\"a\\\"b\""}
-    assert CSharpTest.print_value({:blit, "ab"}, []) == {:ok, "new Values.MuroBytes(\"6162\")"}
-    assert CSharpTest.print_value({:blit, <<255>>}, []) == {:ok, "new Values.MuroBytes(\"ff\")"}
+
+    assert CSharpTest.print_value({:blit, "ab"}, []) ==
+             {:ok, "new MuroValues.MuroBytes(\"6162\")"}
+
+    assert CSharpTest.print_value({:blit, <<255>>}, []) ==
+             {:ok, "new MuroValues.MuroBytes(\"ff\")"}
 
     assert CSharpTest.print_value({:atom, "red"}, []) ==
-             {:ok, "new Values.MuroAtom(\"red\")"}
+             {:ok, "new MuroValues.MuroAtom(\"red\")"}
 
     assert CSharpTest.print_value({:lam, :affine, :nat, "n", :ze}, []) == {:error, :function}
     assert CSharpTest.print_value({:unf, :ze, :ze}, []) == {:error, :stream}
@@ -264,35 +277,38 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert source =~ "public readonly record struct cons_<T0, T1>(T0 F0, T1 F1);"
 
     assert source =~
-             "Xunit.Assert.Equal(Values.MuroNat(\"1\"), Values.MuroNat(\"1\"));"
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"1\"), MuroValues.MuroNat(\"1\"));"
 
     assert source =~
-             "Xunit.Assert.Equal(Values.MuroNat(\"2\"), Values.MuroNat(\"2\"));"
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"2\"), MuroValues.MuroNat(\"2\"));"
 
-    assert source =~ "Xunit.Assert.Equal(new Values.Unit(), new Values.Unit());"
-    assert source =~ "Xunit.Assert.Equal(new Values.red_(), new Values.red_());"
-
-    assert source =~
-             "Xunit.Assert.Equal(new Values.box_<BigInteger>(Values.MuroNat(\"2\")), new Values.box_<BigInteger>(Values.MuroNat(\"2\")));"
+    assert source =~ "Xunit.Assert.Equal(new MuroValues.Unit(), new MuroValues.Unit());"
+    assert source =~ "Xunit.Assert.Equal(new MuroValues.red_(), new MuroValues.red_());"
 
     assert source =~
-             "Xunit.Assert.Equal((Values.MuroNat(\"1\"), Values.MuroNat(\"2\")), (Values.MuroNat(\"1\"), Values.MuroNat(\"2\")));"
+             "Xunit.Assert.Equal(new MuroValues.box_<BigInteger>(MuroValues.MuroNat(\"2\")), new MuroValues.box_<BigInteger>(MuroValues.MuroNat(\"2\")));"
+
+    assert source =~
+             "Xunit.Assert.Equal((MuroValues.MuroNat(\"1\"), MuroValues.MuroNat(\"2\")), (MuroValues.MuroNat(\"1\"), MuroValues.MuroNat(\"2\")));"
 
     assert source =~ "Xunit.Assert.Equal((byte)5, (byte)5);"
     assert source =~ "Xunit.Assert.Equal(-1L, -1L);"
-    assert source =~ "Xunit.Assert.Equal(new Values.MuroWBool(true), new Values.MuroWBool(true));"
-    assert source =~ "Xunit.Assert.Equal(new Values.MuroNone(), new Values.MuroNone());"
 
     assert source =~
-             "Xunit.Assert.Equal(new Values.MuroSome<byte>((byte)5), new Values.MuroSome<byte>((byte)5));"
+             "Xunit.Assert.Equal(new MuroValues.MuroWBool(true), new MuroValues.MuroWBool(true));"
+
+    assert source =~ "Xunit.Assert.Equal(new MuroValues.MuroNone(), new MuroValues.MuroNone());"
+
+    assert source =~
+             "Xunit.Assert.Equal(new MuroValues.MuroSome<byte>((byte)5), new MuroValues.MuroSome<byte>((byte)5));"
 
     assert source =~ "Xunit.Assert.Equal(\"hi\", \"hi\");"
 
     assert source =~
-             "Xunit.Assert.Equal(new Values.MuroBytes(\"6162\"), new Values.MuroBytes(\"6162\"));"
+             "Xunit.Assert.Equal(new MuroValues.MuroBytes(\"6162\"), new MuroValues.MuroBytes(\"6162\"));"
 
     assert source =~
-             "Xunit.Assert.Equal(new Values.cons_<BigInteger, Values.nil_>(Values.MuroNat(\"1\"), new Values.nil_()), new Values.cons_<BigInteger, Values.nil_>(Values.MuroNat(\"1\"), new Values.nil_()));"
+             "Xunit.Assert.Equal(new MuroValues.cons_<BigInteger, MuroValues.nil_>(MuroValues.MuroNat(\"1\"), new MuroValues.nil_()), new MuroValues.cons_<BigInteger, MuroValues.nil_>(MuroValues.MuroNat(\"1\"), new MuroValues.nil_()));"
 
     refute source =~ "keep("
 
@@ -334,11 +350,11 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert source =~ "Each fact calls Host.Rounding."
 
     assert source =~
-             "Xunit.Assert.Equal(Values.MuroNat(\"1\"), Host.Rounding.round(Values.MuroNat(\"1\")));"
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"1\"), Host.Rounding.round(MuroValues.MuroNat(\"1\")));"
 
-    assert source =~ "Xunit.Assert.Equal(new Values.Unit(), Host.Rounding.unit());"
-    assert source =~ "Xunit.Assert.Equal(new Values.Unit(), Host.Rounding.@class());"
-    refute source =~ "Values.MuroNat(\"1\"), Values.MuroNat(\"1\")"
+    assert source =~ "Xunit.Assert.Equal(new MuroValues.Unit(), Host.Rounding.unit());"
+    assert source =~ "Xunit.Assert.Equal(new MuroValues.Unit(), Host.Rounding.@class());"
+    refute source =~ "MuroValues.MuroNat(\"1\"), MuroValues.MuroNat(\"1\")"
 
     assert {:error, "impl must be a C# type name, got: \"class\""} =
              Muro.emit_csharp_test(path, root: dir, book: "rounding.muro", impl: "class")
@@ -359,7 +375,7 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert {:ok, %{tests: 1, skips: [], source: source}} =
              Muro.emit_csharp_test(path, root: dir, book: "lib.muro")
 
-    assert source =~ "Xunit.Assert.Equal(Values.MuroNat(\"0\"), lib.p());"
+    assert source =~ "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::lib.p());"
     assert source =~ "public class libTests"
 
     write_book(dir, "use.muro", """
@@ -380,13 +396,13 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert imported =~ "q-ok"
     assert imported =~ "lib.muro:"
     assert imported =~ "held"
-    assert imported =~ "use.p()"
+    assert imported =~ "global::use.p()"
   end
 
   test "a finished object method does not collide with an evidence of that spelling" do
     {dir, path} = book("idents.muro", @idents)
 
-    assert {:ok, %{source: source, tests: 10, skips: []}} =
+    assert {:ok, %{source: source, tests: 11, skips: []}} =
              Muro.emit_csharp_test(path, root: dir, book: "idents.muro")
 
     assert fact_names(source) == [
@@ -399,24 +415,28 @@ defmodule Muro.EmitCSharpSuiteTest do
              "bare_ok",
              "natc_ok",
              "boxv_ok",
+             "nestv_ok",
              "tag_ok"
            ]
 
-    assert source =~ "new Values.@record()"
-    assert source =~ "new Values.MuroBytes_2()"
-    assert source =~ "new Values.MuroNat_2()"
-    assert source =~ "new Values.Values_2()"
-    assert source =~ "new Values.MuroAtom(\"red\")"
+    assert source =~ "new MuroValues.@record()"
+    assert source =~ "new MuroValues.MuroBytes_2()"
+    assert source =~ "new MuroValues.MuroNat_2()"
+    assert source =~ "new MuroValues.Values()"
+    assert source =~ "new MuroValues.MuroValues_2()"
+    assert source =~ "new MuroValues.MuroAtom(\"red\")"
     assert source =~ "public readonly record struct @record;"
     assert source =~ "public readonly record struct MuroBytes_2;"
     assert source =~ "public readonly record struct MuroNat_2;"
-    assert source =~ "public readonly record struct Values_2;"
+    assert source =~ "public readonly record struct Values;"
+    assert source =~ "public readonly record struct MuroValues_2;"
     refute source =~ "public void Equals()"
     refute source =~ "public void MURO_BOOK()"
+    refute source =~ "public void MuroValues()"
     refute source =~ "public readonly record struct MuroBytes;"
-    refute source =~ "public readonly record struct Values;"
+    refute source =~ "public readonly record struct MuroValues;"
 
-    assert {:ok, %{source: baked, tests: 10}} =
+    assert {:ok, %{source: baked, tests: 11}} =
              Muro.emit_csharp_test(path, root: dir, book: "idents.muro", impl: "Host.Idents")
 
     assert fact_names(baked) == fact_names(source)
@@ -433,16 +453,16 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert source =~ "Xunit.Assert.Equal(5UL, 5UL);"
 
     assert source =~
-             "Xunit.Assert.Equal(Values.MuroNat(\"18446744073709551616\"), Values.MuroNat(\"18446744073709551616\"));"
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"18446744073709551616\"), MuroValues.MuroNat(\"18446744073709551616\"));"
 
     assert source =~ "Xunit.Assert.Equal(long.MinValue, long.MinValue);"
     assert source =~ "Xunit.Assert.Equal(\"a\\\"b\", \"a\\\"b\");"
 
     assert source =~
-             "Xunit.Assert.Equal(new Values.MuroBytes(\"ff\"), new Values.MuroBytes(\"ff\"));"
+             "Xunit.Assert.Equal(new MuroValues.MuroBytes(\"ff\"), new MuroValues.MuroBytes(\"ff\"));"
 
     assert source =~
-             "Xunit.Assert.Equal((Values.MuroNat(\"1\"), new Values.red_()), (Values.MuroNat(\"1\"), new Values.red_()));"
+             "Xunit.Assert.Equal((MuroValues.MuroNat(\"1\"), new MuroValues.red_()), (MuroValues.MuroNat(\"1\"), new MuroValues.red_()));"
   end
 
   test "a book with no equation is a class and no fact" do
@@ -454,8 +474,50 @@ defmodule Muro.EmitCSharpSuiteTest do
     assert source =~ "public class idleTests"
     assert source =~ "public const string MURO_BOOK = "
     refute source =~ "Xunit.Fact"
-    refute source =~ "class Values"
+    refute source =~ "class MuroValues"
     refute source =~ "using "
+  end
+
+  @values_host """
+  param p : run Nat
+  param p-is : evidence {p ≡ 0 : Nat}
+  def held : evidence {p ≡ 0 : Nat} := p-is
+  def zero : run Nat := 0
+  def zero-ok : evidence {zero ≡ 0 : Nat} := refl
+  """
+
+  test "a stem or --impl named Values is not shadowed by the helper class" do
+    {dir, path} = book("Values.muro", @values_host)
+
+    assert {:ok, %{source: source, tests: 2, skips: []}} =
+             Muro.emit_csharp_test(path, root: dir, book: "Values.muro")
+
+    assert source =~ "public static class MuroValues"
+    refute source =~ "public static class Values"
+    assert source =~ "public class ValuesTests"
+
+    assert source =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::Values.p());"
+
+    assert source =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), MuroValues.MuroNat(\"0\"));"
+
+    refute source =~ ", Values.p()"
+
+    assert {:ok, %{source: baked, tests: 2, skips: []}} =
+             Muro.emit_csharp_test(path, root: dir, book: "Values.muro", impl: "Values")
+
+    assert baked =~ "Each fact calls Values."
+    assert baked =~ "public static class MuroValues"
+
+    assert baked =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::Values.p());"
+
+    assert baked =~
+             "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), global::Values.zero());"
+
+    refute baked =~ ", Values.p()"
+    refute baked =~ ", Values.zero()"
   end
 
   test "mix muro.gen writes a C# file and --check sees drift" do
@@ -543,6 +605,7 @@ defmodule Muro.EmitCSharpSuiteTest do
     {dir, path} = book("rounding.muro", @book)
     shapes = write_book(dir, "shapes.muro", @shapes)
     idents = write_book(dir, "idents.muro", @idents)
+    values = write_book(dir, "Values.muro", @values_host)
 
     assert {:ok, %{source: rounding, tests: round_n, skips: round_skips}} =
              Muro.emit_csharp_test(path, root: dir, book: "rounding.muro")
@@ -552,6 +615,9 @@ defmodule Muro.EmitCSharpSuiteTest do
 
     assert {:ok, %{source: idents_src, tests: idents_n, skips: []}} =
              Muro.emit_csharp_test(idents, root: dir, book: "idents.muro")
+
+    assert {:ok, %{source: values_src, tests: values_n, skips: []}} =
+             Muro.emit_csharp_test(values, root: dir, book: "Values.muro")
 
     proj = Path.join(dir, "proj")
 
@@ -566,6 +632,15 @@ defmodule Muro.EmitCSharpSuiteTest do
     File.write!(Path.join(proj, "Rounding.cs"), rounding)
     File.write!(Path.join(proj, "Shapes.cs"), shapes_src)
     File.write!(Path.join(proj, "Idents.cs"), idents_src)
+    File.write!(Path.join(proj, "ValuesBook.cs"), values_src)
+
+    File.write!(Path.join(proj, "ValuesHost.cs"), """
+    public static class Values
+    {
+        public static System.Numerics.BigInteger p() =>
+            System.Numerics.BigInteger.Zero;
+    }
+    """)
 
     {build_out, build_code} = dotnet(["build", proj, "-warnaserror", "--nologo"])
     assert build_code == 0, build_out
@@ -575,7 +650,7 @@ defmodule Muro.EmitCSharpSuiteTest do
     {test_out, test_code} = dotnet(["test", proj, "--no-build", "--nologo"])
     assert test_code == 0, test_out
 
-    passed = round_n + shapes_n + idents_n
+    passed = round_n + shapes_n + idents_n + values_n
     skipped = length(round_skips)
 
     assert test_out =~ ~r/Failed:\s+0,\s+Passed:\s+#{passed},\s+Skipped:\s+#{skipped}/
@@ -583,8 +658,8 @@ defmodule Muro.EmitCSharpSuiteTest do
     broken =
       String.replace(
         rounding,
-        "Xunit.Assert.Equal(Values.MuroNat(\"1\"), Values.MuroNat(\"1\"));",
-        "Xunit.Assert.Equal(Values.MuroNat(\"0\"), Values.MuroNat(\"1\"));",
+        "Xunit.Assert.Equal(MuroValues.MuroNat(\"1\"), MuroValues.MuroNat(\"1\"));",
+        "Xunit.Assert.Equal(MuroValues.MuroNat(\"0\"), MuroValues.MuroNat(\"1\"));",
         global: false
       )
 
