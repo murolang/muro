@@ -1,7 +1,9 @@
-# The image of every example except a keyed family. A family is spec,
-# so emit skips it on every backend but the state machine. The digest is
-# one sha256 per book, of the picture below. keyed-slots.muro,
-# keyed-commands.muro, keyed-release.muro, and keyed-rollback.muro are the family books. The C image of a session
+# The image of every example except a keyed family. A family is spec.
+# The run backends omit it. `--backend fsm` and `--backend go` emit a
+# dispatcher. This digest still excludes the family books: one hash
+# covers every backend, and the other backends skip those files.
+# keyed-slots.muro, keyed-commands.muro, keyed-release.muro, and
+# keyed-rollback.muro are the family books. The C image of a session
 # includes the step.
 #
 # What is compared
@@ -12,7 +14,7 @@
 # (OTP 27.2) and Elixir 1.20.4 (OTP 28.1), and the Elixir job runs it
 # again on Elixir 1.20.4 (OTP 29), over every example
 # except the keyed family. The bytes match for `:elixir`, `:c`, `:rust`,
-# `:zig`, `:asm`, `:js`, `:node`, `:mbi`, and `:exunit`. A change to the
+# `:zig`, `:asm`, `:js`, `:go`, `:node`, `:mbi`, and `:exunit`. A change to the
 # header comment in `Muro.Emit.emit_module/2` changes `:elixir` and fails
 # the digest. `:node` and ExUnit `:source` are these raw bytes too.
 #
@@ -70,6 +72,7 @@ defmodule Muro.EmitExamples do
       zig: attempt(fn -> stem_render(&Muro.Emit.Zig.render/2, book, stem) end),
       asm: attempt(fn -> stem_render(&Muro.Emit.Asm.render/2, book, stem) end),
       js: attempt(fn -> js(book, stem, path) end),
+      go: attempt(fn -> go(book, path) end),
       fsm: attempt(fn -> fsm(book, path) end),
       otp: attempt(fn -> stem_render(&Muro.Emit.Otp.render/2, book, stem) end),
       node: attempt(fn -> node(book, stem) end),
@@ -110,6 +113,9 @@ defmodule Muro.EmitExamples do
 
   defp js({:error, msg}, _stem, _path), do: {:error, msg}
   defp js({:ok, book}, stem, path), do: Muro.Emit.JS.render(book, stem, path: path)
+
+  defp go({:error, msg}, _path), do: {:error, msg}
+  defp go({:ok, book}, path), do: Muro.Emit.Go.render(book, path, [])
 
   defp fsm({:error, msg}, _path), do: {:error, msg}
 

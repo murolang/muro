@@ -21,7 +21,7 @@ If you want to write a program today, start at [Start](start.md), then [Marks](m
 
 If you are an agent (or you are pairing with one), read [For agents](for-agents.md) first. There are two jobs. Do not mix them.
 
-If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`. A design for computable and classical reals is [Reals](reals.md). A linear-time property of a buffered meeting is [Temporal](temporal.md). A global type projected onto each pair of roles is [Choreography](choreography.md).
+If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`. A design for computable and classical reals is [Reals](reals.md). A linear-time property of a buffered meeting is [Temporal](temporal.md). A global type projected onto each pair of roles is [Choreography](choreography.md). The Go image of the sessions, the monitors, and the keyed families is [Go](go.md).
 
 To see a book's meetings, read [Visual explorer](explorer.md). `muro ui path.muro` prints how to open it.
 
