@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.48
+
+`after_kw/2` drops a keyword by byte size. It used `String.slice(s, String.length(kw)..-1//1)`. A range that ends at `-1` counts graphemes in the remainder, once per token, so a large book is quadratic. `corpus elaborations and Share images check` in `Muro.IRCheckTest` could exceed ExUnit's 60-second timeout. The remainder after the keyword is the same. That test now allows 180s, because a parallel `mix test` can still exceed 60s while loading the corpus.
+
+### Tests
+
+- `test/muro_ir_check_test.exs`: `corpus elaborations and Share images check` allows 180s.
+
+### Package
+
+- Version 0.22.48.
+
 ## 0.22.47
 
 `mix muro.emit path.muro --backend csharp-test` prints one C# xUnit file for the book's closed equations, the same equations `--backend exunit`, `--backend pytest`, and `--backend rust-test` collect. `mix muro.gen` writes it when an entry sets `kind: :csharp_test`. Each equation is one `[Fact]`. A skip is a `[Fact]` with `Skip` set, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite. A meeting that marks a party that may fail is refused, as the other suites refuse it.

@@ -725,6 +725,9 @@ defmodule Muro.IRCheckTest do
     assert :ok = Check.check([ok, step], closures: true)
   end
 
+  # Isolated, this test is about 10s. In a parallel mix test it can exceed
+  # 60s while loading the corpus, even after the tokeniser is linear.
+  @tag timeout: 180_000
   test "corpus elaborations and Share images check" do
     {ok, skipped, failures} =
       Enum.reduce(corpus_paths(), {0, 0, []}, fn path, {ok, skipped, failures} ->
