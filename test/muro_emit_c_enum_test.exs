@@ -3,7 +3,7 @@ defmodule Muro.EmitCEnumTest do
 
   import ExUnit.CaptureIO
 
-  test "all-nullary data is an enum by value, and a match switches on the tag" do
+  test "all-nullary data is an enum by value, Bool matches with if, and Color switches" do
     dir = tmp_dir()
     path = Path.join(dir, "flags.muro")
 
@@ -89,7 +89,22 @@ defmodule Muro.EmitCEnumTest do
     refute source =~ "Bool *"
     refute source =~ "switch (muro__s_0->muro__field_tag)"
     refute source =~ "switch (muro__s_0.muro__field_tag)"
-    assert source =~ "switch (muro__s_0)"
+
+    not_body = fun_body(source, "Bool not(")
+    assert not_body =~ "if ("
+    assert not_body =~ "else if ("
+    assert not_body =~ "abort();"
+    refute not_body =~ "switch"
+    true_at = :binary.match(not_body, "== #{true_tag}")
+    false_at = :binary.match(not_body, "== #{false_tag}")
+    assert true_at != :nomatch
+    assert false_at != :nomatch
+    assert elem(true_at, 0) < elem(false_at, 0)
+
+    paint = fun_body(source, "uint64_t paint(")
+    assert paint =~ "switch ("
+    assert paint =~ "default:"
+    refute String.replace(source, paint, "") =~ "switch ("
     # A match in tail position returns from each arm; no temporary.
     assert source =~ "return #{true_tag};"
     assert source =~ "return #{false_tag};"

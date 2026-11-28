@@ -23,8 +23,11 @@ Bool grant(Bool b) {
   Bool muro__s_0 = b;
   if (muro__s_0 == muro__tag_Bool_true_k) {
   return muro__tag_Bool_true_k;
-  } else {
+  } else if (muro__s_0 == muro__tag_Bool_false_k) {
   return muro__tag_Bool_false_k;
+  } else {
+  /* unreachable */
+  abort();
   }
   }
 }

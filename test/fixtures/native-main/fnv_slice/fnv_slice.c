@@ -65,16 +65,24 @@ __attribute__((unused)) static muro__nat *muro__suc(muro__nat *muro__n) { return
 static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
+__attribute__((always_inline, unused)) static inline uint32_t muro__inl_prime(void);
+__attribute__((always_inline, unused)) static inline uint32_t muro__inl_mix(uint32_t h, uint8_t b);
+__attribute__((always_inline, unused)) static inline uint32_t muro__inl_prime(void) {
+  return (uint32_t)UINT64_C(16777619);
+}
+__attribute__((always_inline, unused)) static inline uint32_t muro__inl_mix(uint32_t h, uint8_t b) {
+  return (uint32_t)((uint64_t)((uint32_t)((uint32_t)(h) ^ (uint32_t)((uint32_t)(uint64_t)(b)))) * (uint64_t)(muro__inl_prime()));
+}
 uint32_t offset(void) {
   return (uint32_t)UINT64_C(2166136261);
 }
 
-__attribute__((always_inline)) inline uint32_t prime(void) {
-  return (uint32_t)UINT64_C(16777619);
+uint32_t prime(void) {
+  return muro__inl_prime();
 }
 
-__attribute__((always_inline)) inline uint32_t mix(uint32_t h, uint8_t b) {
-  return (uint32_t)((uint64_t)((uint32_t)((uint32_t)(h) ^ (uint32_t)((uint32_t)(uint64_t)(b)))) * (uint64_t)(prime()));
+uint32_t mix(uint32_t h, uint8_t b) {
+  return muro__inl_mix(h, b);
 }
 
 uint32_t hash(muro__slice s) {
@@ -84,7 +92,7 @@ uint32_t hash(muro__slice s) {
     uint8_t muro__s_2 = muro__s_1.p[0];
     muro__slice muro__s_3 = (muro__slice){muro__s_1.p + 1, muro__s_1.n - 1};
     (void)muro__s_3;
-    muro__s_0 = mix(muro__s_0, muro__s_2);
+    muro__s_0 = muro__inl_mix(muro__s_0, muro__s_2);
     muro__s_1 = muro__s_3;
   }
   return muro__s_0;

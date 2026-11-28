@@ -39,8 +39,11 @@ Bool mark(Item f) {
   Item muro__s_0 = f;
   if (muro__s_0 == muro__tag_Item_self) {
   return muro__tag_Bool_true_k;
-  } else {
+  } else if (muro__s_0 == muro__tag_Item_other) {
   return muro__tag_Bool_false_k;
+  } else {
+  /* unreachable */
+  abort();
   }
   }
 }
@@ -50,8 +53,11 @@ Maybe *effective(Item f) {
   Item muro__s_0 = f;
   if (muro__s_0 == muro__tag_Item_self) {
   return just((void *)(uintptr_t)(muro__tag_Bool_true_k));
-  } else {
+  } else if (muro__s_0 == muro__tag_Item_other) {
   return nothing();
+  } else {
+  /* unreachable */
+  abort();
   }
   }
 }
