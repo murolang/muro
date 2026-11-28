@@ -1345,10 +1345,11 @@ defmodule Muro.Family.Step do
     end)
   end
 
-  # A row of this key that is not a live open or held row, or whose
-  # index or id is not a non-negative integer, is the dispatcher's
-  # `:bad`. Another key is not scanned. A row that is not a row at all
-  # is a bad step state.
+  # A same-key row that is not open, held, or retained resolved, or
+  # whose index or id is not a non-negative integer, is the
+  # dispatcher's `:bad`. A retained resolved row continues, the way
+  # `scan_key` and the marked dispatcher walk it. Another key is not
+  # scanned. A row that is not a row at all is a bad step state.
   defp explain_held(state, rows, row, rules) do
     if wait_row?(row) do
       case hold_of(rules, row.kind) do
