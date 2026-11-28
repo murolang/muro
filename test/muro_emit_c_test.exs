@@ -1110,6 +1110,19 @@ defmodule Muro.EmitCTest do
     |> Enum.uniq()
   end
 
+  # Force every SSE2 guard off and compile that image. `#if 0` selects
+  # the scalar tail of find2 and find3 and the #else of the needle
+  # scan. A compiler that does not accept -mno-sse2 can still build it.
+  defp link_scalar!(dir, stem, main) do
+    path = Path.join(dir, "#{stem}.c")
+    text = File.read!(path)
+    forced = String.replace(text, "#if defined(__SSE2__)", "#if 0")
+    assert forced != text
+    refute forced =~ "#if defined(__SSE2__)"
+    File.write!(Path.join(dir, "#{stem}-scalar.c"), forced)
+    link_run!(dir, "#{stem}-scalar", main)
+  end
+
   defp link_run!(dir, stem, main, extra \\ []) do
     File.write!(Path.join(dir, "main.c"), main)
     cc!(dir, "#{stem}.c", "#{stem}.o", extra)
@@ -1263,8 +1276,9 @@ defmodule Muro.EmitCTest do
     """
 
     assert link_run!(dir, "hot", hot_main) == "0 0 1 2 2 2 2 0 3\n"
-    # The scalar tail of muro__find2 and muro__find3, with SSE2 off.
-    assert link_run!(dir, "hot", hot_main, ~w(-mno-sse2)) == "0 0 1 2 2 2 2 0 3\n"
+    # The scalar tail of muro__find2 and muro__find3. The guard is
+    # rewritten so a compiler that rejects -mno-sse2 still builds it.
+    assert link_scalar!(dir, "hot", hot_main) == "0 0 1 2 2 2 2 0 3\n"
   end
 
   test "a U64 fold that is a string automaton scans for that string" do
@@ -1404,8 +1418,8 @@ defmodule Muro.EmitCTest do
 
     crlf_oracle = "0 24 9 18 27 36 52 44 356 60 36 276 268 0 9 18 26 18\n"
     assert link_run!(dir, "crlf", crlf_main) == crlf_oracle
-    # The scalar #else of the needle scan, with SSE2 off.
-    assert link_run!(dir, "crlf", crlf_main, ~w(-mno-sse2)) == crlf_oracle
+    # The scalar #else of the needle scan. Same rewrite as the hot test.
+    assert link_scalar!(dir, "crlf", crlf_main) == crlf_oracle
   end
 
   # The border table of "\n\n" holds at index 5 and nowhere else. A

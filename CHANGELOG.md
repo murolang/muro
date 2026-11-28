@@ -12,7 +12,7 @@ On the muro-http request step, a keep-alive GET is 7,966.5, 7,977.2, and 8,010.5
 
 ### Tests
 
-- `test/muro_emit_c_test.exs`: a fold gated on `endIx == 5` stays a byte loop and agrees with the book, including 16 for `"\n\n"`. The hot-octet and string scans are compiled again with `-mno-sse2` and print the same oracle.
+- `test/muro_emit_c_test.exs`: a fold gated on `endIx == 5` stays a byte loop and agrees with the book, including 16 for `"\n\n"`. The hot-octet and string scans are compiled again with every `#if defined(__SSE2__)` rewritten to `#if 0`, and they print the same oracle.
 - `test/muro_emit_c_enum_test.exs`: `Bool` `not` is an `if` on `true` and an `else if` on `false`. The only `switch` is the three-constructor `Color`.
 - `test/fixtures/c-session` (`computed`, `field-bindings`, `pair-bindings`), `test/fixtures/native-main` (`fnv_slice`), and `test/fixtures/emit-examples.digest`: the C images.
 
