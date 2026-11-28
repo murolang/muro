@@ -7,10 +7,13 @@ defmodule Muro.EmitCSharpSuiteTest do
 
   # Resolved when this file is compiled. MURO_DOTNET names the executable
   # when it is set. Otherwise this is ~/.dotnet/dotnet, then dotnet on PATH.
-  # The live test is skipped when none of those is a file, or when
-  # `dotnet --list-sdks` does not print an SDK, including in CI. A
-  # hanging or failing list is a skip too. The workflow files are not
-  # the place that installs the SDK.
+  # The live test is skipped when none of those is a file, when
+  # `dotnet --list-sdks` does not exit 0 with an SDK line on stdout,
+  # or when the probe fails or does not finish, including in CI. The
+  # list is read from stdout only; a line that starts with a digit is
+  # an SDK entry. GNU `timeout` is used when it is on PATH so a hung
+  # probe is reaped. Task.shutdown alone can leave that OS process.
+  # The workflow files are not the place that installs the SDK.
   @dotnet (
             env = System.get_env("MURO_DOTNET")
             home = Path.expand("~/.dotnet/dotnet")
@@ -32,22 +35,50 @@ defmodule Muro.EmitCSharpSuiteTest do
 
   @have_dotnet_sdk (case @dotnet do
                       exe when is_binary(exe) ->
-                        task =
-                          Task.async(fn ->
-                            System.cmd(exe, ["--list-sdks"],
-                              stderr_to_stdout: true,
-                              env: [
-                                {"DOTNET_CLI_TELEMETRY_OPTOUT", "1"},
-                                {"DOTNET_NOLOGO", "1"},
-                                {"DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1"}
-                              ]
-                            )
-                          end)
+                        env = [
+                          {"DOTNET_CLI_TELEMETRY_OPTOUT", "1"},
+                          {"DOTNET_NOLOGO", "1"},
+                          {"DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1"}
+                        ]
 
                         try do
+                          {cmd, args} =
+                            case System.find_executable("timeout") do
+                              bin when is_binary(bin) ->
+                                case System.cmd(bin, ["--version"], stderr_to_stdout: true) do
+                                  {out, 0} ->
+                                    if String.contains?(out, "GNU coreutils") do
+                                      {bin, ["--kill-after=1", "5", exe, "--list-sdks"]}
+                                    else
+                                      {exe, ["--list-sdks"]}
+                                    end
+
+                                  _ ->
+                                    {exe, ["--list-sdks"]}
+                                end
+
+                              _ ->
+                                {exe, ["--list-sdks"]}
+                            end
+
+                          task =
+                            Task.async(fn ->
+                              System.cmd(cmd, args, env: env)
+                            end)
+
                           case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
-                            {:ok, {out, 0}} -> String.trim(out) != ""
-                            _ -> false
+                            {:ok, {out, 0}} ->
+                              out
+                              |> String.split("\n", trim: true)
+                              |> Enum.any?(fn line ->
+                                case String.trim_leading(line) do
+                                  <<c, _::binary>> when c in ?0..?9 -> true
+                                  _ -> false
+                                end
+                              end)
+
+                            _ ->
+                              false
                           end
                         rescue
                           _ -> false

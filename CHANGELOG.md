@@ -2,11 +2,11 @@
 
 ## 0.22.49
 
-The live C# xUnit check skips when `dotnet --list-sdks` does not print an SDK, including when the `dotnet` program is present, exits 0, or does not finish. The check still runs when an SDK is printed.
+The live C# xUnit check skips when the SDK list is empty, when the probe fails (a non-zero exit, or a missing binary), or when it does not finish. The check runs when `dotnet --list-sdks` exits 0 and lists an SDK.
 
 ### Tests
 
-- `test/muro_emit_csharp_test.exs`: the live `dotnet test` fact is skipped unless `dotnet --list-sdks` prints an SDK.
+- `test/muro_emit_csharp_test.exs`: the live `dotnet test` fact is skipped when `dotnet --list-sdks` does not exit 0 with an SDK line, including an empty list, a failing probe, or a probe that does not finish.
 
 ### Package
 
