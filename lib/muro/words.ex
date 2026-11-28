@@ -41,11 +41,11 @@ defmodule Muro.Words do
   @types ~w(Atom String Bytes Slice Type Nat I64 U8 U32 U64 WBool Opt F32 Tensor Unit Empty Stream Always Bit Vec run spec evidence internal)
   @nu ["ν", "nu"]
   # Keywords of `contract name :`, of `relies` after a temporal formula,
-  # and of the family mark `may redeliver`. The parser reserves them only
-  # in those forms. `init` stays an identifier: it is a common constructor.
-  # `in` is already a term word (`let in`). `order` is a keyword only in
-  # `in order`.
-  @contract ~w(idempotent redeliver relies skip dense dedupe order)
+  # and of the family marks `may redeliver` and `may revert`. The parser
+  # reserves them only in those forms. `init` stays an identifier: it is a
+  # common constructor. `in` is already a term word (`let in`). `order` is
+  # a keyword only in `in order`.
+  @contract ~w(idempotent redeliver revert relies skip dense dedupe order)
 
   @extra_decl ["temporal", "repr", "family", "contract"]
 

@@ -87,10 +87,34 @@ defmodule Muro.Family.Step do
   resolved at least once for that key. One resolution is enough. The fact
   stays after that row leaves. `withdraw` does not record it. `drop_key/2`
   deletes that key's facts when the state has a `:kinds` field, and it
-  does not add the field. `skip/3` and `skip_below/2` do not clear facts.
+  does not add the field. `skip/3` does not clear facts. `skip_below/2`
+  does not clear facts unless `may revert` prunes the last resolved row
+  of that key and kind.
   `empty/0` has no `:kinds` field. `waiting_on/3` names the kinds and ids
   still blocking a held id. The generated child spells that query
   `waiting_on/2`, because the child closes over its rules.
+
+  `may revert` is the rules entry `{{:mark, :revert}, true}`. It is not
+  a kind. Without it, `resolve` removes the row and `revert/3` is
+  `{:error, {:unmarked, :revert}}` before it reads the state. With it,
+  `resolve` of an open row keeps that row at phase `:resolved` and does
+  not record a departure. `revert/3` puts the row back to `:open` and
+  keeps `born` and `opened_at`, so the hold is not decided again. The
+  tick advances. A same-key row that is open or resolved blocks that
+  revert when its rule was held behind the target: a later creation
+  index for `earlier` and for `any`, or a named rule whose `while` or
+  `until` lists the target kind. The refusal is `{:error, {:held_by, ids}}`,
+  ids sorted by creation index then id. A held row does not block, and
+  a revert does not open or hold any other row. When no resolved row of
+  that key and kind remains, the kind leaves `:kinds`. `withdraw` of a
+  held row still removes it. The id stays in `:withdrawn` until
+  `drop_key` of its key or `skip_below` covers its index, and `revert`
+  of it is `{:error, {:withdrawn, id}}`. After that prune it is
+  `{:error, {:unknown, id}}`, the same as a resolved row `drop_key` or
+  `skip_below` removed. `drop_key` still refuses an open or held row.
+  Resolved rows of that key are removed with the departed record and
+  the facts. `skip_below` removes resolved rows at or below the new
+  floor and drops a fact that no remaining resolved row supports.
 
   The meeting graph, one retry then give-up, `fail stop`, and the
   program that writes the dispatcher are not this module. `NamedHold` in
@@ -126,10 +150,13 @@ defmodule Muro.Family.Step do
 
   @doc """
   Agda `earlierBlocked?`. True when a live row of `key` has a creation
-  index strictly below `index`. A resolved instance is not in `rows`.
+  index strictly below `index`. A row at phase `:resolved` does not
+  count. A family that does not keep resolved rows has none in `rows`.
   """
   def blocked?(rows, key, index) do
-    Enum.any?(rows, fn row -> row.key == key and row.index < index end)
+    Enum.any?(rows, fn row ->
+      row.key == key and row.index < index and row.phase != :resolved
+    end)
   end
 
   @doc """
@@ -264,7 +291,11 @@ defmodule Muro.Family.Step do
           {:ok, departed} ->
             # `|` cannot add `floor` when the key is missing. A missing
             # floor is -1, and this call stores the new one.
-            {:ok, state |> Map.put(:departed, departed) |> Map.put(:floor, index)}
+            state = state |> Map.put(:departed, departed) |> Map.put(:floor, index)
+
+            with {:ok, state} <- prune_withdrawn_floor(state, index) do
+              {:ok, prune_resolved_floor(state, index)}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -313,15 +344,12 @@ defmodule Muro.Family.Step do
   def drop_key(state, key) when is_map(state) do
     with {:ok, _floor} <- take_floor(state),
          rows when is_list(rows) <- Map.get(state, :rows) do
-      if Enum.any?(rows, fn
-           %{key: ^key} -> true
-           _ -> false
-         end) do
+      if live_key?(rows, key) do
         {:error, {:live, key}}
       else
-        case clear_key(state, key) do
-          {:ok, state} -> {:ok, state}
-          {:error, reason} -> {:error, reason}
+        with {:ok, state} <- clear_key(state, key),
+             {:ok, state} <- drop_withdrawn_key(state, key) do
+          {:ok, drop_resolved_key(state, key)}
         end
       end
     else
@@ -347,8 +375,14 @@ defmodule Muro.Family.Step do
         %{phase: :held} ->
           {:error, {:held, id}}
 
+        %{phase: :resolved} ->
+          {:error, {:resolved, id}}
+
         %{phase: :open, key: key} ->
           release(state, id, key, rules, true)
+
+        _ ->
+          {:error, {:state, state}}
       end
     end
   end
@@ -367,11 +401,17 @@ defmodule Muro.Family.Step do
         %{phase: :open} ->
           {:error, {:opened, id}}
 
+        %{phase: :resolved} ->
+          {:error, {:resolved, id}}
+
         %{phase: :held, key: key} ->
           release(state, id, key, rules, false)
 
         nil ->
           if left?(state, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
+
+        _ ->
+          {:error, {:state, state}}
       end
     end
   end
@@ -402,6 +442,9 @@ defmodule Muro.Family.Step do
         %{phase: :open} ->
           {:error, {:opened, id}}
 
+        %{phase: :resolved} ->
+          {:error, {:unknown, id}}
+
         %{phase: :held} = row ->
           explain_held(state, rows, row, rules)
 
@@ -430,15 +473,60 @@ defmodule Muro.Family.Step do
     case find(state.rows, id) do
       nil -> {:error, {:unknown, id}}
       %{phase: :held} -> {:error, {:held, id}}
+      %{phase: :resolved} -> {:error, {:resolved, id}}
       %{phase: :open} -> {:ok, [], state}
+      _ -> {:error, {:state, state}}
+    end
+  end
+
+  @doc """
+  Put a resolved row back to `:open`.
+
+  The rules map carries `{{:mark, :revert}, true}` when the family is
+  marked. Without that entry the result is `{:error, {:unmarked, :revert}}`
+  and the state is not read. With it, an open id is `{:error, {:opened, id}}`,
+  a held id is `{:error, {:held, id}}`, and a resolved id that a same-key
+  open or resolved row was held behind is `{:error, {:held_by, ids}}`.
+  Ids are sorted by creation index, then id. A withdrawn id that has not
+  been pruned is `{:error, {:withdrawn, id}}`. An id this step never
+  minted, or one `drop_key` or `skip_below` has pruned, is
+  `{:error, {:unknown, id}}`. A bad state is `{:error, {:state, state}}`.
+  The call does not raise.
+
+  Success keeps `born` and `opened_at` and advances `tick`. No other
+  row changes phase. The kind's fact is removed when no resolved row of
+  that key and kind remains. `:kinds` is not added when the state has
+  no such field.
+  """
+  def revert(_state, _id, rules) when not is_map(rules), do: {:error, {:unmarked, :revert}}
+
+  def revert(state, id, rules) do
+    cond do
+      not revert?(rules) ->
+        {:error, {:unmarked, :revert}}
+
+      not is_map(state) ->
+        {:error, {:state, state}}
+
+      true ->
+        revert_marked(state, id, rules)
     end
   end
 
   @doc "The dispatcher's `live` classification. `:open` is Agda `opened`."
   def live(state, id) do
     case find(state.rows, id) do
-      nil -> {:error, {:unknown, id}}
-      row -> {:ok, row.phase, row.key, row.kind}
+      nil ->
+        {:error, {:unknown, id}}
+
+      %{phase: :resolved} ->
+        {:error, {:resolved, id}}
+
+      %{phase: phase, key: key, kind: kind} when phase in [:open, :held] ->
+        {:ok, phase, key, kind}
+
+      _ ->
+        {:error, {:state, state}}
     end
   end
 
@@ -447,7 +535,9 @@ defmodule Muro.Family.Step do
   creation index strictly below `row`. `nil` when none is live.
   """
   def least_earlier(rows, row) do
-    case Enum.filter(rows, fn other -> other.key == row.key and other.index < row.index end) do
+    case Enum.filter(rows, fn other ->
+           other.key == row.key and other.index < row.index and other.phase != :resolved
+         end) do
       [] -> nil
       earlier -> Enum.min_by(earlier, & &1.index)
     end
@@ -482,7 +572,7 @@ defmodule Muro.Family.Step do
       signal?(rules, opened) and opened.phase == :open and
         Enum.any?(rows, fn earlier ->
           earlier.key == opened.key and earlier.index < opened.index and
-            earlier.born <= opened.opened_at
+            earlier.phase != :resolved and earlier.born <= opened.opened_at
         end)
     end)
   end
@@ -515,7 +605,7 @@ defmodule Muro.Family.Step do
       opened.key != key or opened.kind != kind or opened.phase != :open or
         not Enum.any?(rows, fn earlier ->
           earlier.key == key and earlier.kind == kind and earlier.index < opened.index and
-            earlier.born <= opened.opened_at
+            earlier.phase != :resolved and earlier.born <= opened.opened_at
         end)
     end)
   end
@@ -526,7 +616,9 @@ defmodule Muro.Family.Step do
   def held_blocked?(rows) do
     Enum.all?(rows, fn row ->
       row.phase != :held or
-        Enum.any?(rows, fn earlier -> earlier.key == row.key and earlier.index < row.index end)
+        Enum.any?(rows, fn earlier ->
+          earlier.key == row.key and earlier.index < row.index and earlier.phase != :resolved
+        end)
     end)
   end
 
@@ -556,7 +648,7 @@ defmodule Muro.Family.Step do
 
   @doc """
   Family steps: `arriveTo`, `resolveTo`, `withdrawTo`, `touchTo`,
-  `skip`, `drop_key`, and `skip_below`.
+  `revert`, `skip`, `drop_key`, and `skip_below`.
 
   `{:rerun, id}` succeeds here whenever the row is opened. `check_trace`
   also requires the id's sessions to be at `done`. That extra refusal
@@ -588,6 +680,13 @@ defmodule Muro.Family.Step do
   defp family_act(state, {:withdraw, id}, rules) do
     case withdraw(state, id, rules) do
       {:ok, _released, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp family_act(state, {:revert, id}, rules) do
+    case revert(state, id, rules) do
+      {:ok, state} -> {:ok, state}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -674,12 +773,281 @@ defmodule Muro.Family.Step do
 
   defp release(state, id, key, rules, record?) do
     row = find(state.rows, id)
-    rest = remove(state.rows, id)
+
+    # A marked resolve keeps the row. Every other release removes it and
+    # records the departure. `withdraw` on a marked family also remembers
+    # the id, so a later `revert` can tell it from a pruned row.
+    {base, depart?} =
+      if record? and revert?(rules) do
+        {set_phase(state.rows, id, :resolved), false}
+      else
+        {remove(state.rows, id), true}
+      end
+
     state = if record?, do: note_resolved(state, key, row.kind, rules), else: state
     facts = kind_facts(state, key)
-    {rows, released} = open_all(key, rest, state.tick, rules, facts)
+    {rows, released} = open_all(key, base, state.tick, rules, facts)
     state = %{state | tick: state.tick + 1, rows: rows}
-    {:ok, released, note_departed(state, key, row.index)}
+
+    state =
+      if depart? do
+        state = note_departed(state, key, row.index)
+        if not record? and revert?(rules), do: note_withdrawn(state, row), else: state
+      else
+        state
+      end
+
+    {:ok, released, state}
+  end
+
+  defp revert?(rules), do: Map.get(rules, {:mark, :revert}) == true
+
+  defp revert_marked(state, id, rules) do
+    with {:ok, _floor} <- take_floor(state),
+         rows when is_list(rows) <- Map.get(state, :rows),
+         :ok <- kinds_shape(state) do
+      case safe_find(rows, id) do
+        nil ->
+          revert_missing(state, id)
+
+        %{phase: :open} ->
+          {:error, {:opened, id}}
+
+        %{phase: :held} ->
+          {:error, {:held, id}}
+
+        %{phase: :resolved} = row ->
+          case blockers(rows, row, rules) do
+            :bad ->
+              {:error, {:state, state}}
+
+            [] ->
+              do_revert(state, row)
+
+            ids ->
+              {:error, {:held_by, ids}}
+          end
+
+        _ ->
+          {:error, {:state, state}}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, {:state, state}}
+    end
+  end
+
+  defp kinds_shape(state) do
+    case Map.fetch(state, :kinds) do
+      :error -> :ok
+      {:ok, kinds} when is_map(kinds) -> :ok
+      {:ok, _} -> {:error, {:state, state}}
+    end
+  end
+
+  defp revert_missing(state, id) do
+    cond do
+      not left?(state, id) ->
+        {:error, {:unknown, id}}
+
+      withdrawn?(state, id) ->
+        {:error, {:withdrawn, id}}
+
+      true ->
+        {:error, {:unknown, id}}
+    end
+  end
+
+  defp withdrawn?(state, id) do
+    case Map.get(state, :withdrawn) do
+      %{^id => {_key, index}} when is_integer(index) -> true
+      _ -> false
+    end
+  end
+
+  defp do_revert(%{tick: tick} = state, row) when is_integer(tick) do
+    rows = set_phase(state.rows, row.id, :open)
+    state = %{state | rows: rows, tick: tick + 1}
+    {:ok, drop_fact(state, row.key, row.kind)}
+  end
+
+  defp do_revert(state, _row), do: {:error, {:state, state}}
+
+  defp set_phase(rows, id, phase) do
+    Enum.map(rows, fn
+      %{id: ^id} = row -> %{row | phase: phase}
+      row -> row
+    end)
+  end
+
+  defp note_withdrawn(state, row) do
+    case Map.get(state, :withdrawn, %{}) do
+      withdrawn when is_map(withdrawn) ->
+        Map.put(state, :withdrawn, Map.put(withdrawn, row.id, {row.key, row.index}))
+
+      _ ->
+        Map.put(state, :withdrawn, %{row.id => {row.key, row.index}})
+    end
+  end
+
+  # A later `earlier` or `any` row, or a named row whose `while` or
+  # `until` lists this kind. Held rows are not in the way: they never
+  # ran. `any` has no kind, so the order is the creation index, and the
+  # later row is the one that was held behind.
+  defp blockers(rows, target, rules) do
+    case Enum.reduce_while(rows, [], fn other, acc ->
+           case behind(target, other, rules) do
+             :bad -> {:halt, :bad}
+             :yes -> {:cont, [{other.index, other.id} | acc]}
+             :no -> {:cont, acc}
+           end
+         end) do
+      :bad ->
+        :bad
+
+      hits ->
+        hits |> Enum.sort() |> Enum.map(fn {_index, id} -> id end)
+    end
+  end
+
+  defp behind(target, other, rules) do
+    cond do
+      not row_shape?(other) ->
+        :bad
+
+      other.key != target.key or other.id == target.id ->
+        :no
+
+      other.phase not in [:open, :resolved] ->
+        :no
+
+      true ->
+        case hold_of(rules, other.kind) do
+          {:ok, :never} ->
+            :no
+
+          {:ok, :earlier} ->
+            if other.index > target.index, do: :yes, else: :no
+
+          {:ok, :any} ->
+            if other.index > target.index, do: :yes, else: :no
+
+          {:ok, {:named, %{while: while, until: until}}} ->
+            if target.kind in while or target.kind in until, do: :yes, else: :no
+
+          _ ->
+            :bad
+        end
+    end
+  end
+
+  defp drop_fact(state, key, kind) do
+    case Map.fetch(state, :kinds) do
+      :error ->
+        state
+
+      {:ok, kinds} when is_map(kinds) ->
+        if resolved_kind?(state.rows, key, kind) do
+          state
+        else
+          %{state | kinds: delete_kind(kinds, key, kind)}
+        end
+
+      {:ok, _} ->
+        state
+    end
+  end
+
+  defp resolved_kind?(rows, key, kind) do
+    Enum.any?(rows, fn
+      %{key: ^key, kind: ^kind, phase: :resolved} -> true
+      _ -> false
+    end)
+  end
+
+  defp delete_kind(kinds, key, kind) do
+    case Map.get(kinds, key) do
+      inner when is_map(inner) ->
+        inner = Map.delete(inner, kind)
+        if inner == %{}, do: Map.delete(kinds, key), else: Map.put(kinds, key, inner)
+
+      _ ->
+        Map.delete(kinds, key)
+    end
+  end
+
+  defp live_key?(rows, key) do
+    Enum.any?(rows, fn
+      %{key: ^key, phase: :resolved} -> false
+      %{key: ^key} -> true
+      _ -> false
+    end)
+  end
+
+  defp drop_resolved_key(state, key) do
+    if resolved_key?(state.rows, key) do
+      %{state | rows: Enum.reject(state.rows, &match?(%{key: ^key, phase: :resolved}, &1))}
+    else
+      state
+    end
+  end
+
+  defp resolved_key?(rows, key) do
+    Enum.any?(rows, &match?(%{key: ^key, phase: :resolved}, &1))
+  end
+
+  defp drop_withdrawn_key(state, key) do
+    case Map.fetch(state, :withdrawn) do
+      :error ->
+        {:ok, state}
+
+      {:ok, withdrawn} when is_map(withdrawn) ->
+        kept = Map.reject(withdrawn, fn {_id, pair} -> match?({^key, _}, pair) end)
+        {:ok, put_withdrawn(state, withdrawn, kept)}
+
+      {:ok, _} ->
+        {:error, {:state, state}}
+    end
+  end
+
+  defp prune_resolved_floor(%{rows: rows} = state, floor) when is_list(rows) do
+    {drop, keep} =
+      Enum.split_with(rows, fn
+        %{phase: :resolved, index: ix} when is_integer(ix) and ix <= floor -> true
+        _ -> false
+      end)
+
+    if drop == [] do
+      state
+    else
+      state = %{state | rows: keep}
+      Enum.reduce(drop, state, fn row, state -> drop_fact(state, row.key, row.kind) end)
+    end
+  end
+
+  defp prune_resolved_floor(state, _floor), do: state
+
+  defp prune_withdrawn_floor(state, floor) do
+    case Map.fetch(state, :withdrawn) do
+      :error ->
+        {:ok, state}
+
+      {:ok, withdrawn} when is_map(withdrawn) ->
+        kept =
+          Map.reject(withdrawn, fn
+            {_id, {_key, ix}} when is_integer(ix) and ix <= floor -> true
+            _ -> false
+          end)
+
+        {:ok, put_withdrawn(state, withdrawn, kept)}
+
+      {:ok, _} ->
+        {:error, {:state, state}}
+    end
+  end
+
+  defp put_withdrawn(state, withdrawn, kept) do
+    if map_size(kept) == map_size(withdrawn), do: state, else: %{state | withdrawn: kept}
   end
 
   # Host creation indices. `P` is -1 until a departure folds up to it.
@@ -866,7 +1234,9 @@ defmodule Muro.Family.Step do
   defp held_earlier?(rows, rules) do
     Enum.all?(rows, fn row ->
       row.phase != :held or not signal?(rules, row) or
-        Enum.any?(rows, &(&1.key == row.key and &1.index < row.index))
+        Enum.any?(rows, fn earlier ->
+          earlier.key == row.key and earlier.index < row.index and earlier.phase != :resolved
+        end)
     end)
   end
 
@@ -887,7 +1257,7 @@ defmodule Muro.Family.Step do
     Enum.all?(state.rows, fn row ->
       not named?(rules, row) or
         case row.phase do
-          :open ->
+          phase when phase in [:open, :resolved] ->
             spec = named_spec(rules, row)
             while_known?(state.rows, row, spec) and until_ok?(state, row, spec)
 
@@ -905,7 +1275,8 @@ defmodule Muro.Family.Step do
   defp while_known?(rows, opened, %{while: while}) do
     Enum.all?(while, fn kind ->
       not Enum.any?(rows, fn other ->
-        other.key == opened.key and other.kind == kind and other.born <= opened.opened_at
+        other.key == opened.key and other.kind == kind and other.phase != :resolved and
+          other.born <= opened.opened_at
       end)
     end)
   end
@@ -974,10 +1345,11 @@ defmodule Muro.Family.Step do
     end)
   end
 
-  # A row of this key that is not a live open or held row, or whose
-  # index or id is not a non-negative integer, is the dispatcher's
-  # `:bad`. Another key is not scanned. A row that is not a row at all
-  # is a bad step state.
+  # A same-key row that is not open, held, or retained resolved, or
+  # whose index or id is not a non-negative integer, is the
+  # dispatcher's `:bad`. A retained resolved row continues, the way
+  # `scan_key` and the marked dispatcher walk it. Another key is not
+  # scanned. A row that is not a row at all is a bad step state.
   defp explain_held(state, rows, row, rules) do
     if wait_row?(row) do
       case hold_of(rules, row.kind) do
@@ -1040,22 +1412,28 @@ defmodule Muro.Family.Step do
 
   defp blocks_classic?(_row, _index, _mode), do: false
 
-  defp wait_row?(%{index: ix, id: id, kind: kind, phase: phase})
-       when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and
-              phase in [:open, :held],
-       do: true
+  defp wait_row?(row), do: row_phase?(row, [:open, :held])
 
-  defp wait_row?(_), do: false
+  # A retained resolved row of this key is not a wait hit and is not
+  # `:bad`. The marked dispatcher continues past it the same way.
+  defp scan_row?(row), do: row_phase?(row, [:open, :held, :resolved])
+
+  defp row_phase?(%{index: ix, id: id, kind: kind, phase: phase}, phases)
+       when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind),
+       do: phase in phases
+
+  defp row_phase?(_row, _phases), do: false
 
   # Halt on a row that is not a row, and on a same-key row the
-  # dispatcher would refuse. Another key stays out of the comparison.
+  # dispatcher would refuse. A retained `:resolved` row continues.
+  # Another key stays out of the comparison.
   defp scan_key(rows, key) do
     case Enum.reduce_while(rows, [], fn row, acc ->
            cond do
              not row_shape?(row) ->
                {:halt, :bad}
 
-             row.key == key and not wait_row?(row) ->
+             row.key == key and not scan_row?(row) ->
                {:halt, :bad}
 
              row.key == key ->
@@ -1207,7 +1585,8 @@ defmodule Muro.Family.Step do
       not (opened.phase == :open and any?(rules, opened)) or
         not Enum.any?(rows, fn earlier ->
           earlier.kind == opened.kind and earlier.key == opened.key and
-            earlier.index < opened.index and earlier.born <= opened.opened_at
+            earlier.index < opened.index and earlier.phase != :resolved and
+            earlier.born <= opened.opened_at
         end)
     end)
   end

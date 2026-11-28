@@ -200,12 +200,15 @@ defmodule Muro.ChoreoFamilyTest do
       assert Check.temporal_lines() == ["family slots: slot per key of Event"]
     end
 
-    test "hold rules and may redeliver are refused on a choreography family" do
+    test "hold rules, may redeliver, and may revert are refused on a choreography family" do
       assert {:error, msg} = check(@choreo <> "\nfamily rollout : plan per key\n  t never held\n")
       assert msg =~ "rollout: a family of a choreography has no hold rules"
 
       assert {:error, msg} = check(@choreo <> "\nfamily rollout : plan per key may redeliver\n")
       assert msg =~ "rollout: may redeliver is a mark on a family of a meeting"
+
+      assert {:error, msg} = check(@choreo <> "\nfamily rollout : plan per key may revert\n")
+      assert msg =~ "rollout: may revert is a mark on a family of a meeting"
     end
 
     test "a choreography that does not check skips the family, with the #308 refusals" do

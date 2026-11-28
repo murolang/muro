@@ -28,6 +28,20 @@ defmodule Muro.Family.Graph do
   states. `eventually` and `leads_to` hold only when they hold if that
   step can be taken forever. An unmarked family keeps today's edges.
 
+  A family marked `may revert` keeps a resolved phase on the script and
+  adds a step back to a fresh run of the meeting. The tag is `:revert`.
+  That step is refused while a same-key instance that was held behind
+  this one is open or resolved, including one that gave up. Behind is
+  a later creation index when the rule is `earlier` or `any`, and a
+  named rule whose `while` or `until` lists this kind. `any` names no
+  kind, so the later index is the whole of that guard: the later row
+  blocks the earlier one, and the earlier row does not block the later
+  one. Giving up counts as resolved for that guard and for
+  `some_resolved`. A held instance does not block the revert, and the
+  revert does not change any other phase. `prepare/3` takes `revert: :free` to drop the guard.
+  That option is not a mark. The default follows the mark. An unmarked
+  family has no revert step.
+
   `in order` omits an arrival whose key already has a strictly later
   creation index present. `dense` omits an arrival while a strictly
   earlier creation index of that key is still absent. Either mark is
@@ -74,12 +88,13 @@ defmodule Muro.Family.Graph do
       instances = Keyword.get(opts, :instances) || instances(book, family)
       rules = Map.new(family.rules, &{&1.ctor, &1.hold})
       narrow = Muro.Contract.narrowing(book, family.name)
+      mode = revert_mode(family, opts)
 
       with :ok <- script_gate(instances, narrow) do
         remember(
-          {mg, instances, rules, family.name, Map.get(family, :redeliver, false), narrow.in_order,
-           narrow.dense},
-          fn -> compose(family, mg, instances, rules, narrow) end
+          {mg, instances, rules, family.name, Map.get(family, :redeliver, false), mode,
+           narrow.in_order, narrow.dense},
+          fn -> compose(family, mg, instances, rules, narrow, mode) end
         )
       end
     end
@@ -95,7 +110,21 @@ defmodule Muro.Family.Graph do
   defp gate(_instances, false, _entry), do: :ok
   defp gate(instances, true, entry), do: Muro.Contract.creation(instances, entry)
 
-  defp compose(family, mg, instances, rules, narrow) do
+  # `:mark` follows the family. `:mirror` is the guard even when the
+  # book has no mark. `:free` is the same step with the guard off, so a
+  # test can show the counterexample. Anything else, including `false`,
+  # is today's graph.
+  defp revert_mode(family, opts) do
+    case Keyword.get(opts, :revert, :mark) do
+      :mark -> if Map.get(family, :revert, false), do: :mirror, else: false
+      :mirror -> :mirror
+      :free -> :free
+      false -> false
+      _ -> false
+    end
+  end
+
+  defp compose(family, mg, instances, rules, narrow, mode) do
     {server, task} = roles(mg)
 
     g = %{
@@ -109,6 +138,7 @@ defmodule Muro.Family.Graph do
       task: task,
       init: Meet.init(mg),
       redeliver: Map.get(family, :redeliver, false),
+      revert: mode,
       in_order: narrow.in_order,
       dense: narrow.dense,
       start: Tuple.duplicate(:absent, length(instances))
@@ -612,9 +642,62 @@ defmodule Muro.Family.Graph do
   defp redeliver_edges(%{redeliver: true}, state, steps), do: steps ++ [{:redeliver, state}]
   defp redeliver_edges(_g, _state, steps), do: steps
 
+  # A missing mode, or `false`, is today's list. The revert step is a
+  # second clause so an unmarked search does not build it.
+  defp real_steps(%{revert: mode} = g, state) when mode in [:mirror, :free] do
+    Enum.flat_map(g.instances, fn inst ->
+      instance_steps(g, state, inst) ++ revert_edge(g, state, inst, mode)
+    end)
+  end
+
   defp real_steps(g, state) do
     Enum.flat_map(g.instances, &instance_steps(g, state, &1))
   end
+
+  # Resolved, including a give-up, returns to a fresh run. The mirror
+  # refuses that while a same-key instance held behind this one is open
+  # or resolved. `:free` does not ask.
+  defp revert_edge(g, state, inst, mode) do
+    phase = phase(state, inst.id)
+
+    if resolved?(phase) and revert_ok?(g, state, inst, mode) do
+      [
+        {{:revert, inst.id},
+         put_phase(state, inst.id, {:run, g.init, 0, mask(g, state, inst.id)})}
+      ]
+    else
+      []
+    end
+  end
+
+  defp revert_ok?(_g, _state, _inst, :free), do: true
+
+  defp revert_ok?(g, state, inst, :mirror) do
+    not Enum.any?(g.instances, &mirror_blocks?(g, state, inst, &1))
+  end
+
+  defp mirror_blocks?(g, state, target, other) do
+    other.id != target.id and other.key == target.key and
+      blocking_phase?(phase(state, other.id)) and
+      case g.rules[other.kind] do
+        :never ->
+          false
+
+        :earlier ->
+          other.index > target.index
+
+        :any ->
+          other.index > target.index
+
+        {:named, %{while: while, until: until}} ->
+          target.kind in while or target.kind in until
+
+        _ ->
+          false
+      end
+  end
+
+  defp blocking_phase?(phase), do: resolved?(phase) or running?(phase)
 
   defp instance_steps(g, state, inst) do
     case phase(state, inst.id) do
@@ -930,6 +1013,7 @@ defmodule Muro.Family.Graph do
   defp step_name(g, _src, _dest, {:resolve, id}), do: "#{who(g, id)} resolves"
   defp step_name(g, _src, _dest, {:retry, id}), do: "#{who(g, id)} retries"
   defp step_name(g, _src, _dest, {:give_up, id}), do: "#{who(g, id)} gives up"
+  defp step_name(g, _src, _dest, {:revert, id}), do: "#{who(g, id)} reverts"
   defp step_name(_g, _src, _dest, :stay), do: "the family has finished"
   defp step_name(_g, _src, _dest, :redeliver), do: "a message is redelivered"
 

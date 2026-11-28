@@ -3785,23 +3785,33 @@ defmodule Muro.Emit.Fsm do
   end
 
   defp family_clauses(fams) do
-    Enum.flat_map(fams, fn {_fam, camel} ->
+    Enum.flat_map(fams, fn {fam, camel} ->
+      revert =
+        if Map.get(fam, :revert, false) do
+          ["def revert(state, id)"]
+        else
+          []
+        end
+
       [
         "defmodule #{camel} do",
         "def new",
         "def arrive(state, key, kind, index)",
         "def resolved(state, id)",
         "def withdraw(state, id)",
-        "def waiting_on(state, id)",
-        "def skip(state, key, index)",
-        "def drop_key(state, key)",
-        "def skip_below(state, index)",
-        "def finish(state, id, session_state)",
-        "def finish(state, id, session_state, step)",
-        "def finish(state, id, session_state, outcome)",
-        "def finish(state, id, session_state, step, outcome)",
-        "def check_trace(trace)"
-      ]
+        "def waiting_on(state, id)"
+      ] ++
+        revert ++
+        [
+          "def skip(state, key, index)",
+          "def drop_key(state, key)",
+          "def skip_below(state, index)",
+          "def finish(state, id, session_state)",
+          "def finish(state, id, session_state, step)",
+          "def finish(state, id, session_state, outcome)",
+          "def finish(state, id, session_state, step, outcome)",
+          "def check_trace(trace)"
+        ]
     end)
   end
 
@@ -4786,10 +4796,811 @@ defmodule Muro.Emit.Fsm do
   # `apply_contracts` matches the call text above. Named kinds rewrite
   # those calls afterwards. `until` also records a per-key fact map.
   # A family with no named rule keeps the text `apply_contracts` returns.
+  # `may revert` is a last pass. An unmarked family returns that text
+  # unchanged, including its bytes.
   defp finish_dispatcher(src, family) do
     src = apply_contracts(src, family)
     src = if named_family?(family), do: name_calls(src), else: src
-    if until_family?(family), do: until_fields(src), else: src
+    src = if until_family?(family), do: until_fields(src), else: src
+    if Map.get(family, :revert, false), do: apply_revert(src, family), else: src
+  end
+
+  # Joined lines, not a heredoc: a heredoc would be scanned as a host
+  # helper and `revert` would reserve a run name. The needles are the
+  # text after the dispatcher heredoc has dropped its four spaces, and
+  # after `until` and the contracts have run.
+  defp apply_revert(src, family) do
+    until = until_family?(family)
+
+    src
+    |> replace_once(resolved_old(until), resolved_new(until))
+    |> replace_once(withdraw_tail(), withdraw_tail_new())
+    |> replace_once(drop_old(until), drop_new())
+    |> replace_once(idle_old(), idle_new())
+    |> replace_once(floor_keep(), floor_prune())
+    |> replace_once(open_held(), open_held_resolved())
+    |> replace_once(held_open(), held_open_resolved())
+    |> replace_once(live_arm(), live_arm_resolved())
+    |> replace_once(explain_open(), explain_open_resolved())
+    |> replace_every(occupy_kind(), occupy_kind_resolved())
+    |> replace_if(occupy_live(), occupy_live_resolved())
+    |> replace_once(row_phase(), row_phase_resolved())
+    |> replace_if(earlier_halt(), earlier_halt_resolved())
+    |> replace_if(while_halt(), while_halt_resolved())
+    |> replace_if(scan_halt(), scan_halt_resolved())
+    |> replace_if(any_held(), any_held_resolved())
+    |> replace_once(held_open_row(), held_open_row_resolved())
+    |> replace_if(lower_live_phase(), lower_live_phase_resolved())
+    |> replace_once(walk_tail(), walk_tail_revert())
+    |> replace_once(skip_head(), revert_fun() <> skip_head())
+    |> replace_once(leaked_head(), revert_helpers(family) <> leaked_head())
+    |> replace_once(revert_doc_anchor(), revert_doc())
+  end
+
+  defp resolved_old(true) do
+    Enum.join(
+      [
+        "         {:ok, kind} <- open_row(rows, index, id, st),",
+        "         {:ok, released, rows} <- take_released(Map.delete(rows, index), key, mark_kind(st, key, kind)),",
+        "         {:ok, departed} <- remember_map(st, key, index) do",
+        "      by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)",
+        "      next = %{mark_kind(st, key, kind) | by: by, id: Map.delete(st.id, id), departed: departed}"
+      ],
+      "\n"
+    )
+  end
+
+  defp resolved_old(false) do
+    Enum.join(
+      [
+        "         {:ok, _kind} <- open_row(rows, index, id, st),",
+        "         {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st),",
+        "         {:ok, departed} <- remember_map(st, key, index) do",
+        "      by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)",
+        "      next = %{st | by: by, id: Map.delete(st.id, id), departed: departed}"
+      ],
+      "\n"
+    )
+  end
+
+  defp resolved_new(true) do
+    Enum.join(
+      [
+        "         {:ok, kind} <- open_row(rows, index, id, st),",
+        "         st = mark_kind(st, key, kind),",
+        "         rows = Map.put(rows, index, {id, kind, :resolved}),",
+        "         {:ok, released, rows} <- take_released(rows, key, st) do",
+        "      next = %{st | by: Map.put(st.by, key, rows)}"
+      ],
+      "\n"
+    )
+  end
+
+  defp resolved_new(false) do
+    Enum.join(
+      [
+        "         {:ok, kind} <- open_row(rows, index, id, st),",
+        "         rows = Map.put(rows, index, {id, kind, :resolved}),",
+        "         {:ok, released, rows} <- take_released(rows, key, st) do",
+        "      next = %{st | by: Map.put(st.by, key, rows)}"
+      ],
+      "\n"
+    )
+  end
+
+  defp withdraw_tail do
+    Enum.join(
+      [
+        "      by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)",
+        "      next = %{st | by: by, id: Map.delete(st.id, id), departed: departed}",
+        "      {:ok, released, next}"
+      ],
+      "\n"
+    )
+  end
+
+  defp withdraw_tail_new do
+    Enum.join(
+      [
+        "      by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)",
+        "      case note_withdrawn(%{st | by: by, id: Map.delete(st.id, id), departed: departed}, id, key, index) do",
+        "        {:ok, next} -> {:ok, released, next}",
+        "        {:error, reason} -> {:error, reason}",
+        "      end"
+      ],
+      "\n"
+    )
+  end
+
+  defp drop_old(true) do
+    Enum.join(
+      [
+        "         :ok <- idle(rows, key) do",
+        "      {:ok, %{st | departed: Map.delete(st.departed, key), kinds: Map.delete(st.kinds, key)}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp drop_old(false) do
+    Enum.join(
+      [
+        "         :ok <- idle(rows, key) do",
+        "      {:ok, %{st | departed: Map.delete(st.departed, key)}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp drop_new do
+    Enum.join(
+      [
+        "         :ok <- idle(rows, key, st),",
+        "         {:ok, next} <- forget_key(st, key, rows) do",
+        "      {:ok, next}"
+      ],
+      "\n"
+    )
+  end
+
+  defp idle_old do
+    Enum.join(
+      [
+        "  defp idle(rows, _key) when map_size(rows) == 0, do: :ok",
+        "  defp idle(_rows, key), do: {:error, {:live, key}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp idle_new do
+    Enum.join(
+      [
+        "  defp idle(rows, key, st) do",
+        "    Enum.reduce_while(rows, :ok, fn",
+        "      {_ix, {id, kind, :resolved}}, :ok",
+        "      when is_integer(id) and id >= 0 and is_atom(kind) ->",
+        "        {:cont, :ok}",
+        "",
+        "      {_ix, {_id, _kind, phase}}, :ok when phase in [:open, :held] ->",
+        "        {:halt, {:error, {:live, key}}}",
+        "",
+        "      _, :ok ->",
+        "        {:halt, {:error, {:state, st}}}",
+        "    end)",
+        "  end",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp floor_keep,
+    do: "          {:ok, departed} -> {:ok, %{st | departed: departed, floor: index}}"
+
+  defp floor_prune, do: "          {:ok, departed} -> prune_resolved(st, index, departed)"
+
+  defp open_held do
+    Enum.join(
+      [
+        "      {:ok, {^id, kind, :held}} when is_atom(kind) -> {:error, {:held, id}}",
+        "      _ -> {:error, {:state, st}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp open_held_resolved do
+    Enum.join(
+      [
+        "      {:ok, {^id, kind, :held}} when is_atom(kind) -> {:error, {:held, id}}",
+        "      {:ok, {^id, kind, :resolved}} when is_atom(kind) -> {:error, {:resolved, id}}",
+        "      _ -> {:error, {:state, st}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp held_open do
+    Enum.join(
+      [
+        "              {:ok, {^id, _kind, :open}} -> {:error, {:opened, id}}",
+        "              _ -> {:error, {:state, st}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp held_open_resolved do
+    Enum.join(
+      [
+        "              {:ok, {^id, _kind, :open}} -> {:error, {:opened, id}}",
+        "              {:ok, {^id, _kind, :resolved}} -> {:error, {:resolved, id}}",
+        "              _ -> {:error, {:state, st}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp live_arm do
+    Enum.join(
+      [
+        "              {:ok, {^id, kind, phase}} when is_atom(kind) and phase in [:open, :held] ->",
+        "                {:ok, phase, key, kind}"
+      ],
+      "\n"
+    )
+  end
+
+  defp live_arm_resolved do
+    Enum.join(
+      [
+        "              {:ok, {^id, kind, :resolved}} when is_atom(kind) ->",
+        "                {:error, {:resolved, id}}",
+        "",
+        "              {:ok, {^id, kind, phase}} when is_atom(kind) and phase in [:open, :held] ->",
+        "                {:ok, phase, key, kind}"
+      ],
+      "\n"
+    )
+  end
+
+  # `waiting_on` is built in its own heredoc, then spliced into the
+  # dispatcher. The open clause keeps twelve spaces.
+  defp explain_open do
+    Enum.join(
+      [
+        "            {:ok, {^id, kind, :open}} when is_atom(kind) ->",
+        "              {:error, {:opened, id}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp explain_open_resolved do
+    Enum.join(
+      [
+        "            {:ok, {^id, kind, :open}} when is_atom(kind) ->",
+        "              {:error, {:opened, id}}",
+        "",
+        "            {:ok, {^id, kind, :resolved}} when is_atom(kind) ->",
+        "              {:error, {:unknown, id}}"
+      ],
+      "\n"
+    )
+  end
+
+  defp occupy_kind do
+    "      when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held] ->"
+  end
+
+  defp occupy_kind_resolved do
+    "      when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held, :resolved] ->"
+  end
+
+  defp occupy_live do
+    "      when is_integer(id) and id >= 0 and is_atom(live) and phase in [:open, :held] ->"
+  end
+
+  defp occupy_live_resolved do
+    "      when is_integer(id) and id >= 0 and is_atom(live) and phase in [:open, :held, :resolved] ->"
+  end
+
+  defp row_phase, do: "              phase in [:open, :held],\n       do: true"
+
+  defp row_phase_resolved,
+    do: "              phase in [:open, :held, :resolved],\n       do: true"
+
+  # These scans are joined, then spliced. They keep the indent they
+  # were written with. A resolved row continues. It is not unresolved.
+  defp earlier_halt do
+    Enum.join(
+      [
+        "             phase in [:open, :held] ->",
+        "        if ix < index, do: {:cont, :blocked}, else: {:cont, acc}",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}"
+      ],
+      "\n"
+    )
+  end
+
+  defp earlier_halt_resolved, do: resolved_cont(earlier_halt())
+
+  defp while_halt do
+    Enum.join(
+      [
+        "             phase in [:open, :held] ->",
+        "        if kind in kinds, do: {:cont, :blocked}, else: {:cont, acc}",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}"
+      ],
+      "\n"
+    )
+  end
+
+  defp while_halt_resolved, do: resolved_cont(while_halt())
+
+  defp scan_halt do
+    Enum.join(
+      [
+        "             phase in [:open, :held] ->",
+        "        case keep.(ix, id, kind, phase) do",
+        "          nil -> {:cont, acc}",
+        "          hit -> {:cont, [hit | acc]}",
+        "        end",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}"
+      ],
+      "\n"
+    )
+  end
+
+  defp scan_halt_resolved, do: resolved_cont(scan_halt())
+
+  defp resolved_cont(halt) do
+    String.replace(
+      halt,
+      "\n      _ ->\n        {:halt, :bad}",
+      Enum.join(
+        [
+          "",
+          "      {ix, {id, kind, :resolved}}",
+          "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) ->",
+          "        {:cont, acc}",
+          "",
+          "      _ ->",
+          "        {:halt, :bad}"
+        ],
+        "\n"
+      )
+    )
+  end
+
+  defp any_held do
+    Enum.join(
+      [
+        "      {ix, {id, kind, :held}}",
+        "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) ->",
+        "        {:cont, acc}"
+      ],
+      "\n"
+    )
+  end
+
+  defp any_held_resolved do
+    any_held() <>
+      "\n\n" <>
+      Enum.join(
+        [
+          "      {ix, {id, kind, :resolved}}",
+          "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) ->",
+          "        {:cont, acc}"
+        ],
+        "\n"
+      )
+  end
+
+  defp held_open_row do
+    Enum.join(
+      [
+        "    {_ix, {_id, _kind, :open}}, acc ->",
+        "      {:cont, acc}",
+        "",
+        "    _, _ ->",
+        "      {:halt, :bad}"
+      ],
+      "\n"
+    )
+  end
+
+  defp held_open_row_resolved do
+    Enum.join(
+      [
+        "    {_ix, {_id, _kind, :open}}, acc ->",
+        "      {:cont, acc}",
+        "",
+        "    {_ix, {_id, _kind, :resolved}}, acc ->",
+        "      {:cont, acc}",
+        "",
+        "    _, _ ->",
+        "      {:halt, :bad}"
+      ],
+      "\n"
+    )
+  end
+
+  defp lower_live_phase do
+    "          when is_integer(ix) and ix < index and phase in [:open, :held] ->"
+  end
+
+  defp lower_live_phase_resolved do
+    "          when is_integer(ix) and ix < index and phase in [:open, :held, :resolved] ->"
+  end
+
+  defp walk_tail do
+    "  defp walk(_disp, _seen, [other | _rest], i), do: {:error, {i, {:step, other}}}"
+  end
+
+  defp walk_tail_revert do
+    Enum.join(
+      [
+        "  defp walk(disp, seen, [{:revert, id} | rest], i) do",
+        "    case revert(disp, id) do",
+        "      {:ok, disp} -> walk(disp, drop_id(seen, id), rest, i + 1)",
+        "      {:error, reason} -> {:error, {i, reason}}",
+        "    end",
+        "  end",
+        "",
+        walk_tail()
+      ],
+      "\n"
+    )
+  end
+
+  defp skip_head, do: "  def skip(state, key, index) do"
+  defp leaked_head, do: "  defp leaked(disp, seen) do"
+
+  defp revert_doc_anchor, do: "so the next step starts again."
+
+  defp revert_doc do
+    "so the next step starts again. A family marked `may revert` keeps a resolved row until `drop_key` or `skip_below` prunes it. `revert` puts that row back to `:open` on the same id. The kind's fact is removed when no resolved row of that key and kind remains. A same-key open or resolved row that was held behind it refuses the call with `{:error, {:held_by, ids}}`. `check_trace` accepts `{:revert, id}` and drops that id's session."
+  end
+
+  defp revert_fun do
+    Enum.join(
+      [
+        "  def revert(state, id) do",
+        "    with {:ok, st} <- read(state),",
+        "         {:ok, key, index, kind, phase, rows} <- revert_row(st, id) do",
+        "      case phase do",
+        "        :open ->",
+        "          {:error, {:opened, id}}",
+        "",
+        "        :held ->",
+        "          {:error, {:held, id}}",
+        "",
+        "        :resolved ->",
+        "          case blocking(rows, index, id, kind) do",
+        "            :bad ->",
+        "              {:error, {:state, st}}",
+        "",
+        "            [] ->",
+        "              rows = Map.put(rows, index, {id, kind, :open})",
+        "              st = %{st | by: Map.put(st.by, key, rows)}",
+        "              {:ok, forget_kind(st, key, kind)}",
+        "",
+        "            ids ->",
+        "              {:error, {:held_by, ids}}",
+        "          end",
+        "      end",
+        "    else",
+        "      {:error, reason} -> {:error, reason}",
+        "    end",
+        "  end",
+        "",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp revert_helpers(family) do
+    Enum.join(
+      [
+        revert_row_src(),
+        "",
+        blocking_src(family),
+        "",
+        forget_src(),
+        "",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp revert_row_src do
+    Enum.join(
+      [
+        "  defp revert_row(st, id) do",
+        "    case Map.fetch(st.id, id) do",
+        "      {:ok, {key, index}} when is_integer(index) and index >= 0 ->",
+        "        case Map.fetch(st.by, key) do",
+        "          {:ok, rows} when is_map(rows) ->",
+        "            case Map.fetch(rows, index) do",
+        "              {:ok, {^id, kind, phase}}",
+        "              when is_atom(kind) and phase in [:open, :held, :resolved] ->",
+        "                {:ok, key, index, kind, phase, rows}",
+        "",
+        "              _ ->",
+        "                {:error, {:state, st}}",
+        "            end",
+        "",
+        "          _ ->",
+        "            {:error, {:state, st}}",
+        "        end",
+        "",
+        "      {:ok, _} ->",
+        "        {:error, {:state, st}}",
+        "",
+        "      :error ->",
+        "        if withdrawn_id?(st, id) do",
+        "          {:error, {:withdrawn, id}}",
+        "        else",
+        "          {:error, {:unknown, id}}",
+        "        end",
+        "    end",
+        "  end",
+        "",
+        "  defp withdrawn_id?(st, id) do",
+        "    case Map.get(st, :withdrawn) do",
+        "      %{^id => {_key, index}} when is_integer(index) -> true",
+        "      _ -> false",
+        "    end",
+        "  end"
+      ],
+      "\n"
+    )
+  end
+
+  defp blocking_src(family) do
+    holds = hold_list(family)
+    ranked = Enum.any?(holds, &(&1 in [:earlier, :any]))
+    named = Enum.any?(holds, &match?({:named, _}, &1))
+    ix = if ranked, do: "ix", else: "_ix"
+    index = if ranked, do: "index", else: "_index"
+    kind = if named, do: "kind", else: "_kind"
+
+    arms =
+      holds
+      |> Enum.flat_map(fn
+        :never ->
+          ["      :never -> false"]
+
+        :earlier ->
+          ["      :earlier -> ix > index"]
+
+        :any ->
+          ["      :any -> ix > index"]
+
+        {:named, _} ->
+          ["      {:named, %{while: while, until: until}} -> kind in while or kind in until"]
+
+        _ ->
+          []
+      end)
+      |> Enum.uniq()
+
+    # A family whose holds are only `never` cannot block a revert.
+    # `blocks_revert?` then returns `false` or `:bad`, and a `true` arm
+    # is a warning.
+    verdict =
+      if ranked or named do
+        [
+          "              :bad -> {:halt, :bad}",
+          "              true -> {:cont, [{ix, oid} | acc]}",
+          "              false -> {:cont, acc}"
+        ]
+      else
+        [
+          "              :bad -> {:halt, :bad}",
+          "              false -> {:cont, acc}"
+        ]
+      end
+
+    Enum.join(
+      [
+        "  defp blocking(rows, index, id, kind) do",
+        "    rows",
+        "    |> Enum.reduce_while([], fn",
+        "      {ix, {oid, okind, phase}}, acc",
+        "      when is_integer(ix) and is_integer(oid) and is_atom(okind) and",
+        "             phase in [:open, :held, :resolved] ->",
+        "        cond do",
+        "          oid == id or phase not in [:open, :resolved] ->",
+        "            {:cont, acc}",
+        "",
+        "          true ->",
+        "            case blocks_revert?(ix, index, okind, kind) do",
+        Enum.join(verdict, "\n"),
+        "            end",
+        "        end",
+        "",
+        "      _, _ ->",
+        "        {:halt, :bad}",
+        "    end)",
+        "    |> case do",
+        "      :bad ->",
+        "        :bad",
+        "",
+        "      hits ->",
+        "        hits |> Enum.sort() |> Enum.map(fn {_ix, oid} -> oid end)",
+        "    end",
+        "  end",
+        "",
+        "  # `any` names no kind. A later creation index was held behind an",
+        "  # earlier one. The earlier row does not block the later one.",
+        "  # Only the holds this family returns are clauses. A heredoc would",
+        "  # reserve the name, and a dead clause is a warning.",
+        "  defp blocks_revert?(#{ix}, #{index}, other, #{kind}) do",
+        "    case rule(other) do",
+        Enum.join(arms, "\n"),
+        "      _ -> :bad",
+        "    end",
+        "  end"
+      ],
+      "\n"
+    )
+  end
+
+  defp forget_src do
+    Enum.join(
+      [
+        "  defp forget_kind(st, key, kind) do",
+        "    case Map.fetch(st, :kinds) do",
+        "      {:ok, kinds} when is_map(kinds) ->",
+        "        if resolved_left?(st, key, kind) do",
+        "          st",
+        "        else",
+        "          %{st | kinds: drop_kind(kinds, key, kind)}",
+        "        end",
+        "",
+        "      _ ->",
+        "        st",
+        "    end",
+        "  end",
+        "",
+        "  defp resolved_left?(st, key, kind) do",
+        "    case Map.get(st.by, key) do",
+        "      rows when is_map(rows) ->",
+        "        Enum.any?(rows, fn",
+        "          {_ix, {_id, ^kind, :resolved}} -> true",
+        "          _ -> false",
+        "        end)",
+        "",
+        "      _ ->",
+        "        false",
+        "    end",
+        "  end",
+        "",
+        "  defp drop_kind(kinds, key, kind) do",
+        "    case Map.get(kinds, key) do",
+        "      inner when is_map(inner) ->",
+        "        inner = Map.delete(inner, kind)",
+        "        if inner == %{}, do: Map.delete(kinds, key), else: Map.put(kinds, key, inner)",
+        "",
+        "      _ ->",
+        "        Map.delete(kinds, key)",
+        "    end",
+        "  end",
+        "",
+        "  defp forget_key(st, key, rows) do",
+        "    ids =",
+        "      Enum.reduce(rows, st.id, fn",
+        "        {_ix, {id, _kind, :resolved}}, ids when is_integer(id) -> Map.delete(ids, id)",
+        "        _, ids -> ids",
+        "      end)",
+        "",
+        "    st = %{st | id: ids, by: Map.delete(st.by, key), departed: Map.delete(st.departed, key)}",
+        "",
+        "    with {:ok, st} <- forget_key_kinds(st, key) do",
+        "      forget_key_withdrawn(st, key)",
+        "    end",
+        "  end",
+        "",
+        "  defp forget_key_kinds(st, key) do",
+        "    case Map.fetch(st, :kinds) do",
+        "      :error -> {:ok, st}",
+        "      {:ok, kinds} when is_map(kinds) -> {:ok, %{st | kinds: Map.delete(kinds, key)}}",
+        "      {:ok, _} -> {:error, {:state, st}}",
+        "    end",
+        "  end",
+        "",
+        "  defp forget_key_withdrawn(st, key) do",
+        "    case Map.fetch(st, :withdrawn) do",
+        "      :error ->",
+        "        {:ok, st}",
+        "",
+        "      {:ok, withdrawn} when is_map(withdrawn) ->",
+        "        kept = Map.reject(withdrawn, fn {_id, pair} -> match?({^key, _}, pair) end)",
+        "",
+        "        if map_size(kept) == map_size(withdrawn) do",
+        "          {:ok, st}",
+        "        else",
+        "          {:ok, %{st | withdrawn: kept}}",
+        "        end",
+        "",
+        "      {:ok, _} ->",
+        "        {:error, {:state, st}}",
+        "    end",
+        "  end",
+        "",
+        "  defp note_withdrawn(st, id, key, index) do",
+        "    case Map.get(st, :withdrawn, %{}) do",
+        "      withdrawn when is_map(withdrawn) ->",
+        "        {:ok, Map.put(st, :withdrawn, Map.put(withdrawn, id, {key, index}))}",
+        "",
+        "      _ ->",
+        "        {:error, {:state, st}}",
+        "    end",
+        "  end",
+        "",
+        "  defp prune_resolved(st, floor, departed) do",
+        "    st = %{st | departed: departed, floor: floor}",
+        "",
+        "    case drop_resolved_rows(st, floor) do",
+        "      {:ok, st} -> prune_withdrawn_ids(st, floor)",
+        "      {:error, reason} -> {:error, reason}",
+        "    end",
+        "  end",
+        "",
+        "  defp drop_resolved_rows(st, floor) do",
+        "    Enum.reduce_while(st.by, {:ok, st}, fn",
+        "      {key, rows}, {:ok, st} when is_map(rows) ->",
+        "        {drop, keep} =",
+        "          Enum.split_with(rows, fn",
+        "            {ix, {id, kind, :resolved}}",
+        "            when is_integer(ix) and ix <= floor and is_integer(id) and is_atom(kind) ->",
+        "              true",
+        "",
+        "            _ ->",
+        "              false",
+        "          end)",
+        "",
+        "        if drop == [] do",
+        "          {:cont, {:ok, st}}",
+        "        else",
+        "          ids = Enum.reduce(drop, st.id, fn {_ix, {id, _, _}}, ids -> Map.delete(ids, id) end)",
+        "",
+        "          by =",
+        "            if keep == [] do",
+        "              Map.delete(st.by, key)",
+        "            else",
+        "              Map.put(st.by, key, Map.new(keep))",
+        "            end",
+        "",
+        "          st = %{st | id: ids, by: by}",
+        "",
+        "          st =",
+        "            Enum.reduce(drop, st, fn {_ix, {_id, kind, _}}, st -> forget_kind(st, key, kind) end)",
+        "",
+        "          {:cont, {:ok, st}}",
+        "        end",
+        "",
+        "      _, {:ok, st} ->",
+        "        {:halt, {:error, {:state, st}}}",
+        "    end)",
+        "  end",
+        "",
+        "  defp prune_withdrawn_ids(st, floor) do",
+        "    case Map.fetch(st, :withdrawn) do",
+        "      :error ->",
+        "        {:ok, st}",
+        "",
+        "      {:ok, withdrawn} when is_map(withdrawn) ->",
+        "        kept =",
+        "          Map.reject(withdrawn, fn",
+        "            {_id, {_key, ix}} when is_integer(ix) and ix <= floor -> true",
+        "            _ -> false",
+        "          end)",
+        "",
+        "        if map_size(kept) == map_size(withdrawn) do",
+        "          {:ok, st}",
+        "        else",
+        "          {:ok, %{st | withdrawn: kept}}",
+        "        end",
+        "",
+        "      {:ok, _} ->",
+        "        {:error, {:state, st}}",
+        "    end",
+        "  end"
+      ],
+      "\n"
+    )
   end
 
   defp name_calls(src) do
@@ -4890,6 +5701,16 @@ defmodule Muro.Emit.Fsm do
       _ -> raise "dispatcher is missing a unique #{inspect(old)}"
     end
   end
+
+  defp replace_every(src, old, new) do
+    if String.contains?(src, old) do
+      String.replace(src, old, new)
+    else
+      raise "dispatcher is missing #{inspect(old)}"
+    end
+  end
+
+  defp replace_if(src, old, new), do: String.replace(src, old, new)
 
   defp fresh_call(:none), do: ":ok <- fresh(rows, key, index, st),"
   defp fresh_call(_mode), do: ":ok <- fresh(rows, key, index, st, kind),"
