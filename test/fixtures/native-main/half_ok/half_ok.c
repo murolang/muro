@@ -16,17 +16,16 @@ static muro__unit muro__tt_obj = {0};
 
 __attribute__((unused)) static muro__unit *muro__tt(void) { return &muro__tt_obj; }
 muro__nat *plus(muro__nat *n, muro__nat *m) {
-  muro__nat *muro__t_0 = 0;
   {
   muro__nat *muro__s_0 = n;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
-  muro__t_0 = m;
+  return m;
   break;
   }
   case 1: {
   muro__nat *np = muro__s_0->muro__field_suc;
-  muro__t_0 = muro__suc(plus(np, m));
+  return muro__suc(plus(np, m));
   break;
   }
   default: {
@@ -35,31 +34,28 @@ muro__nat *plus(muro__nat *n, muro__nat *m) {
   }
   }
   }
-  return muro__t_0;
 }
 
 muro__nat *half(muro__nat *n) {
-  muro__nat *muro__t_0 = 0;
   {
   muro__nat *muro__s_0 = n;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
-  muro__t_0 = muro__zero();
+  return muro__zero();
   break;
   }
   case 1: {
   muro__nat *n1 = muro__s_0->muro__field_suc;
-  muro__nat *muro__t_1 = 0;
   {
   muro__nat *muro__s_1 = n1;
   switch (muro__s_1->muro__field_tag) {
   case 0: {
-  muro__t_1 = muro__zero();
+  return muro__zero();
   break;
   }
   case 1: {
   muro__nat *p = muro__s_1->muro__field_suc;
-  muro__t_1 = muro__suc(half(p));
+  return muro__suc(half(p));
   break;
   }
   default: {
@@ -68,7 +64,6 @@ muro__nat *half(muro__nat *n) {
   }
   }
   }
-  muro__t_0 = muro__t_1;
   break;
   }
   default: {
@@ -77,5 +72,4 @@ muro__nat *half(muro__nat *n) {
   }
   }
   }
-  return muro__t_0;
 }

@@ -90,8 +90,10 @@ defmodule Muro.EmitCEnumTest do
     refute source =~ "switch (muro__s_0->muro__field_tag)"
     refute source =~ "switch (muro__s_0.muro__field_tag)"
     assert source =~ "switch (muro__s_0)"
-    assert source =~ "muro__t_0 = #{true_tag};"
-    assert source =~ "muro__t_0 = #{false_tag};"
+    # A match in tail position returns from each arm; no temporary.
+    assert source =~ "return #{true_tag};"
+    assert source =~ "return #{false_tag};"
+    refute source =~ "muro__t_0"
     # Comparisons and matches do not allocate a Bool.
     for fun <- ["Bool not(", "Bool u64eq(", "Bool and(", "Bool nest(", "uint64_t paint("] do
       body = slice_after(source, fun)

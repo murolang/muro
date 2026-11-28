@@ -462,7 +462,12 @@ defmodule Muro.Emit.C do
 
     env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
 
-    st = fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+    # A match in tail position returns from each arm (`:return`), so no
+    # temporary holds the result. A string result is converted by
+    # `as_ret/3` after the match, so it keeps the temporary.
+    st =
+      fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+      |> Map.put(:dest, if(fun.ret == :string, do: nil, else: :return))
 
     with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
       expr = as_ret(expr, lay, fun.ret)
@@ -474,6 +479,9 @@ defmodule Muro.Emit.C do
 
       body =
         cond do
+          expr == :return ->
+            [discards, indent(pre, 2)] |> Enum.reject(&(&1 == "")) |> Enum.join("\n")
+
           discards != "" and pre != "" ->
             discards <> "\n" <> indent(pre, 2) <> "\n  return #{expr};"
 
@@ -494,6 +502,7 @@ defmodule Muro.Emit.C do
   defp fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope) do
     %{
       t: 0,
+      dest: nil,
       s: 0,
       steps: [],
       envs: [],
@@ -537,7 +546,12 @@ defmodule Muro.Emit.C do
 
     {_, ptr, _} = Enum.find(bound, fn {n, _c, _lay} -> n == target end)
     ret = ctype(fun.ret, book, prefix)
-    st = fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+
+    # A match in tail position stores its arms' values through `p`
+    # directly, and an arm whose value is `(*p)` stores nothing.
+    st =
+      fun_state(names, book, by_name, step_map, nm, prefix, io, file_scope, scope)
+      |> Map.put(:dest, "(*#{ptr})")
 
     with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, ret) do
       expr = as_ret(expr, lay, fun.ret)
@@ -575,7 +589,53 @@ defmodule Muro.Emit.C do
   defp telescope({:pi, q, a, x, b}, acc), do: telescope(b, [{q, a, x} | acc])
   defp telescope(ret, acc), do: {Enum.reverse(acc), ret}
 
-  defp emit_ir({:var, name}, env, st, expect) do
+  # A term in tail position of a match arm, or of a `let` body there,
+  # writes the arm's value straight into the enclosing match's temporary
+  # (`st.dest`) instead of into a fresh temporary that each level copies
+  # up. Any other term is emitted with no destination, and the arm
+  # assigns its value. The one store on a path is the last statement of
+  # its innermost arm.
+  defp emit_ir(tm, env, st, expect) do
+    case Map.get(st, :dest) do
+      nil ->
+        emit_ir0(tm, env, st, expect)
+
+      d ->
+        if dest_form?(tm) do
+          emit_ir0(tm, env, st, expect)
+        else
+          with {:ok, {pre, ex, lay, st}} <- emit_ir0(tm, env, %{st | dest: nil}, expect) do
+            {:ok, {pre, ex, lay, %{st | dest: d}}}
+          end
+        end
+    end
+  end
+
+  defp dest_form?({:match, _, _}), do: true
+  defp dest_form?({:let, _, lay, _, _, body}) when lay != :erased and body != :abort, do: true
+  defp dest_form?(_), do: false
+
+  # A match's temporary: the destination it inherits, or a fresh one.
+  # Its arms are emitted with that temporary as their destination.
+  defp slot(st) do
+    case Map.get(st, :dest) do
+      nil ->
+        {t, st} = newt(st)
+        {t, true, Map.put(st, :dest, t)}
+
+      d ->
+        {d, false, st}
+    end
+  end
+
+  defp slot_init(true, expect, tname, st), do: init_temp(expect, tname, st)
+  defp slot_init(false, _expect, _tname, _st), do: ""
+
+  defp assign(tname, ex) when tname == ex, do: ""
+  defp assign(:return, ex), do: "return #{ex};"
+  defp assign(tname, ex), do: "#{tname} = #{ex};"
+
+  defp emit_ir0({:var, name}, env, st, expect) do
     case lookup(env, name) do
       {c, lay} ->
         {:ok, {"", adapt(c, lay, expect, st), adapted_lay(lay, expect, st), st}}
@@ -585,31 +645,31 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(:ze, _env, st, _expect), do: {:ok, {"", "#{g("zero")}()", :nat, st}}
-  defp emit_ir(:tt, _env, st, _expect), do: {:ok, {"", "#{g("tt")}()", :unit, st}}
+  defp emit_ir0(:ze, _env, st, _expect), do: {:ok, {"", "#{g("zero")}()", :nat, st}}
+  defp emit_ir0(:tt, _env, st, _expect), do: {:ok, {"", "#{g("tt")}()", :unit, st}}
 
-  defp emit_ir({:nat, n}, env, st, expect) when is_integer(n) and n >= 0 do
+  defp emit_ir0({:nat, n}, env, st, expect) when is_integer(n) and n >= 0 do
     emit_ir(nat_spine(n), env, st, expect)
   end
 
-  defp emit_ir({:su, u}, env, st, _expect) do
+  defp emit_ir0({:su, u}, env, st, _expect) do
     with {:ok, {pre, ex, _lay, st}} <- emit_ir(u, env, st, nat_ptr()) do
       {:ok, {pre, "#{g("suc")}(#{ex})", :nat, st}}
     end
   end
 
-  defp emit_ir({:call, name, args}, env, st, _expect) do
+  defp emit_ir0({:call, name, args}, env, st, _expect) do
     with {:ok, {pres, exprs, st}} <- emit_args(args, live_ctypes(st, name), env, st) do
       {:ok,
        {squash(pres), "#{ename(st, name)}(#{Enum.join(exprs, ", ")})", call_lay(st, name), st}}
     end
   end
 
-  defp emit_ir({:con, "Atom", name, []}, _env, st, _expect) do
+  defp emit_ir0({:con, "Atom", name, []}, _env, st, _expect) do
     {:ok, {"", atom_c(name, st.nm), {:data, "Atom"}, st}}
   end
 
-  defp emit_ir({:con, dname, cname, args}, env, st, _expect) do
+  defp emit_ir0({:con, dname, cname, args}, env, st, _expect) do
     with {:ok, {pres, exprs, st}} <- emit_args(args, con_ctypes(st, cname), env, st) do
       fun = Map.fetch!(st.nm.ctors, {dname, cname})
       expr = enum_ctor_expr(dname, cname, fun, exprs, st)
@@ -620,7 +680,7 @@ defmodule Muro.Emit.C do
   # An erased constructor field, marked `:erased`. `0`, and the payload
   # is ignored. A zero passed under a spec alias is bound at the
   # argument's layout, so this clause does not see it.
-  defp emit_ir({:let, name, :erased, _g, _val, body}, env, st, expect) do
+  defp emit_ir0({:let, name, :erased, _g, _val, body}, env, st, expect) do
     {c, scope} = Name.bind(spell(name), st.scope)
     st = %{st | scope: scope}
 
@@ -631,18 +691,19 @@ defmodule Muro.Emit.C do
   end
 
   # `matchEmpty`. The scrutinee is bound only so the expression is evaluated.
-  defp emit_ir({:let, _name, _lay, _g, val, :abort}, env, st, _expect) do
+  defp emit_ir0({:let, _name, _lay, _g, val, :abort}, env, st, _expect) do
     with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, "void *") do
       stmt = squash([pre, "(void)(#{ex});", "/* unreachable */", "abort();"])
       {:ok, {stmt, "0", :opaque, st}}
     end
   end
 
-  defp emit_ir({:let, name, lay, _g, val, body}, env, st, expect) do
+  defp emit_ir0({:let, name, lay, _g, val, body}, env, st, expect) do
     ty = ctype(lay, st.book, st.prefix)
+    d = Map.get(st, :dest)
 
-    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, ty) do
-      {local, st} = news(st)
+    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, Map.put(st, :dest, nil), ty) do
+      {local, st} = news(Map.put(st, :dest, d))
 
       with {:ok, {pre2, ex2, blay, st}} <-
              emit_ir(body, [{name, local, lay} | env], st, expect) do
@@ -653,7 +714,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:pair, a, b}, env, st, _expect) do
+  defp emit_ir0({:pair, a, b}, env, st, _expect) do
     with {:ok, {pre, ea, la, st}} <- emit_ir(a, env, st, "void *"),
          {:ok, {pre2, eb, lb, st}} <- emit_ir(b, env, st, "void *") do
       if Rep.value_lay?(st.book, la) or Rep.value_lay?(st.book, lb) do
@@ -667,7 +728,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:letp, a, b, e, body}, env, st, expect) do
+  defp emit_ir0({:letp, a, b, e, body}, env, st, expect) do
     with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, pair_ptr()) do
       {sname, st} = news(st)
       {ca, scope} = Name.bind(spell(a), st.scope)
@@ -697,7 +758,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:uncons, e}, env, st, _expect) do
+  defp emit_ir0({:uncons, e}, env, st, _expect) do
     with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, stream_ptr()) do
       {sname, st} = news(st)
       {pname, st} = news(st)
@@ -718,7 +779,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:stream, seed, caps, step_name}, env, st, _expect) do
+  defp emit_ir0({:stream, seed, caps, step_name}, env, st, _expect) do
     with {:ok, step} <- fetch_step(st, step_name),
          {:ok, {seed_p, cap_ps}} <- ok_split(step.params, caps),
          {:ok, {pre, seed_ex, seed_lay, st}} <-
@@ -748,21 +809,24 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:match, scrut, arms} = tm, env, st, expect) do
+  defp emit_ir0({:match, scrut, arms} = tm, env, st, expect) do
     kind = match_kind(lay_of(scrut, env, st), arms, st.book)
     rlay = lay_of(tm, env, st)
     # A word operation emits its operand as `void *`. The arms still
     # name a word, so the temporary uses that layout.
     expect = match_expect(expect, rlay, st.book, st.prefix)
 
+    d = Map.get(st, :dest)
+
     with {:ok, {pre, ex, _lay, st}} <-
-           emit_ir(scrut, env, st, scrut_ty(kind, st.book, st.prefix)),
-         {:ok, {stmt, name, st}} <- emit_switch(kind, pre, ex, arms, env, st, expect) do
-      {:ok, {stmt, name, rlay, st}}
+           emit_ir(scrut, env, Map.put(st, :dest, nil), scrut_ty(kind, st.book, st.prefix)),
+         {:ok, {stmt, name, st}} <-
+           emit_switch(kind, pre, ex, arms, env, Map.put(st, :dest, d), expect) do
+      {:ok, {stmt, name, rlay, Map.put(st, :dest, d)}}
     end
   end
 
-  defp emit_ir({:wrd, k, op, args}, env, st, expect) do
+  defp emit_ir0({:wrd, k, op, args}, env, st, expect) do
     with {:ok, {pres, exprs, st}} <- emit_word_args(args, env, st) do
       case word_c(k, op, exprs, st, expect) do
         {:ok, {more, expr, lay, st}} ->
@@ -774,11 +838,11 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(:abort, _env, st, _expect) do
+  defp emit_ir0(:abort, _env, st, _expect) do
     {:ok, {squash(["/* unreachable */", "abort();"]), "0", :opaque, st}}
   end
 
-  defp emit_ir({:byt, bin}, _env, st, _expect) when is_binary(bin) do
+  defp emit_ir0({:byt, bin}, _env, st, _expect) when is_binary(bin) do
     if bin == "" do
       {:ok, {"", "#{g("slice_empty")}()", :slice, st}}
     else
@@ -790,27 +854,27 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:bcat, a, b}, env, st, _expect) do
+  defp emit_ir0({:bcat, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, _, st}} <- emit_ir(a, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, slice_ty()) do
       {:ok, {squash([pa, pb]), "#{g("bytes_cat")}(#{ea}, #{eb})", :slice, st}}
     end
   end
 
-  defp emit_ir({:blen, a}, env, st, _expect) do
+  defp emit_ir0({:blen, a}, env, st, _expect) do
     with {:ok, {pre, ex, _, st}} <- emit_ir(a, env, st, slice_ty()) do
       {:ok, {pre, "(uint64_t)((#{ex}).n)", :u64, st}}
     end
   end
 
-  defp emit_ir({:beq, a, b}, env, st, _expect) do
+  defp emit_ir0({:beq, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, _, st}} <- emit_ir(a, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, slice_ty()) do
       {:ok, {squash([pa, pb]), "#{g("slice_eq")}(#{ea}, #{eb})", :wbool, st}}
     end
   end
 
-  defp emit_ir({:bsub, s, off, len}, env, st, _expect) do
+  defp emit_ir0({:bsub, s, off, len}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {po, eo, _, st}} <- emit_ir(off, env, st, "uint64_t "),
          {:ok, {pn, en, _, st}} <- emit_ir(len, env, st, "uint64_t ") do
@@ -818,34 +882,34 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:bget, s, i}, env, st, _expect) do
+  defp emit_ir0({:bget, s, i}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {pi, ei, _, st}} <- emit_ir(i, env, st, "uint64_t ") do
       {:ok, {squash([ps, pi]), "#{g("slice_get")}(#{es}, #{ei})", {:opt, :u8}, st}}
     end
   end
 
-  defp emit_ir({:btil, s, b}, env, st, _expect) do
+  defp emit_ir0({:btil, s, b}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, "uint8_t ") do
       {:ok, {squash([ps, pb]), "#{g("slice_until")}(#{es}, #{eb})", :slice, st}}
     end
   end
 
-  defp emit_ir({:baft, s, b}, env, st, _expect) do
+  defp emit_ir0({:baft, s, b}, env, st, _expect) do
     with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
          {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, "uint8_t ") do
       {:ok, {squash([ps, pb]), "#{g("slice_after")}(#{es}, #{eb})", :slice, st}}
     end
   end
 
-  defp emit_ir({:sbytes, s}, env, st, _expect) do
+  defp emit_ir0({:sbytes, s}, env, st, _expect) do
     with {:ok, {pre, ex, lay, st}} <- emit_ir(s, env, st, str_ty()) do
       {:ok, {pre, "#{g("str_bytes")}(#{as_str(ex, lay)})", :slice, st}}
     end
   end
 
-  defp emit_ir({:bunc, s}, env, st, _expect) do
+  defp emit_ir0({:bunc, s}, env, st, _expect) do
     nothing = Map.get(st.nm.ctors, {"Maybe", "nothing"})
     just = Map.get(st.nm.ctors, {"Maybe", "just"})
 
@@ -884,7 +948,7 @@ defmodule Muro.Emit.C do
   # that returns the accumulator unchanged assigns nothing. A body that
   # ends in `{:inout, f, args}` calls `f`'s in-place twin on the
   # accumulator's address. The body sees only the loop's binders.
-  defp emit_ir({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
+  defp emit_ir0({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
     {on, _, _} = octet
     {rn, _, _} = rest
     {an, alay, _} = acc
@@ -936,13 +1000,13 @@ defmodule Muro.Emit.C do
 
   # In expression position (a match arm of a loop body) the in-place
   # call is a comma expression whose value is the updated accumulator.
-  defp emit_ir({:inout, name, args}, env, st, _expect) do
+  defp emit_ir0({:inout, name, args}, env, st, _expect) do
     with {:ok, {pre, call, acc_c, st}} <- io_call(name, args, env, st) do
       {:ok, {pre, "(#{call}, #{acc_c})", call_lay(st, name), st}}
     end
   end
 
-  defp emit_ir({:bfold, step, caps, z, s}, env, st, _expect) do
+  defp emit_ir0({:bfold, step, caps, z, s}, env, st, _expect) do
     with {:ok, st} <- ensure_fold_step(step, st),
          {:ok, {cpre, cexs, st}} <- emit_cap_list(caps, env, st),
          {:ok, {pz, ez, lay, st}} <-
@@ -973,7 +1037,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:str, bin}, _env, st, _expect) when is_binary(bin) do
+  defp emit_ir0({:str, bin}, _env, st, _expect) when is_binary(bin) do
     if bin == "" do
       {:ok, {"", "#{g("str_empty")}()", :string, st}}
     else
@@ -985,7 +1049,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:scat, a, b}, env, st, _expect) do
+  defp emit_ir0({:scat, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, la, st}} <- emit_ir(a, env, st, str_ty()),
          {:ok, {pb, eb, lb, st}} <- emit_ir(b, env, st, str_ty()) do
       {:ok,
@@ -993,13 +1057,13 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:slen, a}, env, st, _expect) do
+  defp emit_ir0({:slen, a}, env, st, _expect) do
     with {:ok, {pre, ex, lay, st}} <- emit_ir(a, env, st, str_ty()) do
       {:ok, {pre, "#{g("str_len")}(#{as_str(ex, lay)})", :nat, st}}
     end
   end
 
-  defp emit_ir({:seq, a, b}, env, st, _expect) do
+  defp emit_ir0({:seq, a, b}, env, st, _expect) do
     with {:ok, {pa, ea, la, st}} <- emit_ir(a, env, st, str_ty()),
          {:ok, {pb, eb, lb, st}} <- emit_ir(b, env, st, str_ty()) do
       {:ok,
@@ -1007,7 +1071,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
+  defp emit_ir0(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
 
   # A nullary constructor of an enum-scalar type is the enumerator.
   # The function is still emitted for a host that calls it.
@@ -1186,7 +1250,7 @@ defmodule Muro.Emit.C do
 
   defp emit_switch(:nat, pre, ex, [{:arm, "zero", [], z}, {:arm, "suc", [y], s}], env, st, expect) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
     st = %{st | scope: st.base_scope}
 
     with {:ok, {zpre, zex, _lay, st}} <- emit_ir(z, env, st, expect) do
@@ -1198,19 +1262,19 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            init_temp(expect, tname, st),
+            slot_init(fresh, expect, tname, st),
             "{",
             "#{nat_ptr()}#{sname} = #{ex};",
             "switch (#{sname}->#{g("field_tag")}) {",
             "case 0: {",
             zpre,
-            "#{tname} = #{zex};",
+            assign(tname, zex),
             "break;",
             "}",
             "case 1: {",
             "#{nat_ptr()}#{yname} = #{sname}->#{g("field_suc")};",
             spre,
-            "#{tname} = #{sex};",
+            assign(tname, sex),
             "break;",
             "}",
             "default: {",
@@ -1228,13 +1292,13 @@ defmodule Muro.Emit.C do
 
   defp emit_switch(:atom, pre, ex, arms, env, st, expect) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
 
     with {:ok, {cases, st}} <- emit_atom_arms(arms, tname, env, st, expect) do
       stmt =
         squash([
           pre,
-          init_temp(expect, tname, st),
+          slot_init(fresh, expect, tname, st),
           "{",
           "#{atom_ty()}#{sname} = #{ex};",
           "switch (#{sname}) {",
@@ -1257,7 +1321,7 @@ defmodule Muro.Emit.C do
 
       data ->
         {sname, st} = news(st)
-        {tname, st} = newt(st)
+        {tname, fresh, st} = slot(st)
         {ptr, switch_on, arrow} = data_scrut(data, dname, sname, st)
 
         with {:ok, {cases, st}} <-
@@ -1265,7 +1329,7 @@ defmodule Muro.Emit.C do
           stmt =
             squash([
               pre,
-              init_temp(expect, tname, st),
+              slot_init(fresh, expect, tname, st),
               "{",
               "#{ptr}#{sname} = #{ex};",
               "switch (#{switch_on}) {",
@@ -1294,7 +1358,7 @@ defmodule Muro.Emit.C do
          expect
        ) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
     st = %{st | scope: st.base_scope}
 
     with {:ok, {tpre, tex, _lay, st}} <- emit_ir(t, env, st, expect) do
@@ -1304,15 +1368,15 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            init_temp(expect, tname, st),
+            slot_init(fresh, expect, tname, st),
             "{",
             "#{ctype(:wbool, st.book, st.prefix)}#{sname} = #{ex};",
             "if (#{sname}) {",
             tpre,
-            "#{tname} = #{tex};",
+            assign(tname, tex),
             "} else {",
             fpre,
-            "#{tname} = #{fex};",
+            assign(tname, fex),
             "}",
             "}"
           ])
@@ -1333,7 +1397,7 @@ defmodule Muro.Emit.C do
          expect
        ) do
     {sname, st} = news(st)
-    {tname, st} = newt(st)
+    {tname, fresh, st} = slot(st)
     st = %{st | scope: st.base_scope}
 
     with {:ok, {npre, nex, _lay, st}} <- emit_ir(n, env, st, expect) do
@@ -1353,16 +1417,16 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            init_temp(expect, tname, st),
+            slot_init(fresh, expect, tname, st),
             "{",
             "#{ctype({:opt, pay}, st.book, st.prefix)}#{sname} = #{ex};",
             "if (#{sname}.tag) {",
             bind,
             spre,
-            "#{tname} = #{sex};",
+            assign(tname, sex),
             "} else {",
             npre,
-            "#{tname} = #{nex};",
+            assign(tname, nex),
             "}",
             "}"
           ])
@@ -1395,7 +1459,7 @@ defmodule Muro.Emit.C do
           squash([
             "case #{atom_c(name, st.nm)}: {",
             pre,
-            "#{tname} = #{ex};",
+            assign(tname, ex),
             "break;",
             "}"
           ])
@@ -1454,7 +1518,7 @@ defmodule Muro.Emit.C do
             "case #{tag}: {",
             Enum.join(decls, "\n"),
             pre,
-            "#{tname} = #{ex};",
+            assign(tname, ex),
             "break;",
             "}"
           ])
@@ -2773,15 +2837,21 @@ defmodule Muro.Emit.C do
     }
 
     __attribute__((unused)) static #{sl} #{til}(#{sl} s, uint8_t b) {
-      size_t i;
-      for (i = 0; i < s.n; i++) if (s.p[i] == b) return (#{sl}){s.p, i};
-      return s;
+      const uint8_t *q;
+      if (s.n == 0) return s;
+      q = memchr(s.p, b, s.n);
+      if (q == 0) return s;
+      return (#{sl}){s.p, (size_t)(q - s.p)};
     }
 
     __attribute__((unused)) static #{sl} #{aft}(#{sl} s, uint8_t b) {
+      const uint8_t *q;
       size_t i;
-      for (i = 0; i < s.n; i++) if (s.p[i] == b) return (#{sl}){s.p + i + 1, s.n - i - 1};
-      return #{emp}();
+      if (s.n == 0) return #{emp}();
+      q = memchr(s.p, b, s.n);
+      if (q == 0) return #{emp}();
+      i = (size_t)(q - s.p);
+      return (#{sl}){s.p + i + 1, s.n - i - 1};
     }
     """
     |> String.trim()
@@ -2925,8 +2995,10 @@ defmodule Muro.Emit.C do
   end
 
   defp loop_body(body, _an, acc, env, cty, st) do
-    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, cty) do
-      {:ok, {pre, "#{acc} = #{ex};", st}}
+    d = Map.get(st, :dest)
+
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, Map.put(st, :dest, acc), cty) do
+      {:ok, {pre, assign(acc, ex), Map.put(st, :dest, d)}}
     end
   end
 

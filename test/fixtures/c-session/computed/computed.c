@@ -35,16 +35,15 @@ __attribute__((unused)) static Maybe *just(void *muro__f_0) {
   return muro__p;
 }
 Bool mark(Item f) {
-  Bool muro__t_0 = 0;
   {
   Item muro__s_0 = f;
   switch (muro__s_0) {
   case 0: {
-  muro__t_0 = muro__tag_Bool_true_k;
+  return muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_0 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -53,20 +52,18 @@ Bool mark(Item f) {
   }
   }
   }
-  return muro__t_0;
 }
 
 Maybe *effective(Item f) {
-  Maybe *muro__t_0 = 0;
   {
   Item muro__s_0 = f;
   switch (muro__s_0) {
   case 0: {
-  muro__t_0 = just((void *)(uintptr_t)(muro__tag_Bool_true_k));
+  return just((void *)(uintptr_t)(muro__tag_Bool_true_k));
   break;
   }
   case 1: {
-  muro__t_0 = nothing();
+  return nothing();
   break;
   }
   default: {
@@ -75,7 +72,6 @@ Maybe *effective(Item f) {
   }
   }
   }
-  return muro__t_0;
 }
 
 muro__nat *kept(void) {

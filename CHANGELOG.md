@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.22.50
+
+The C backend writes a tail match where its value goes. A match or a let in tail position no longer fills a zeroed temporary that each enclosing match copies up. In a run that returns anything but a string, each arm returns. In a fold step the arm assigns the accumulator. In a run that updates its argument in place the arm assigns through the pointer, and an arm that leaves the argument unchanged assigns nothing. A nested match writes into the outer match's result. A match in any other position keeps its own temporary. `sliceUntil` and `sliceAfter` find the octet with `memchr`. The emitted functions, their names, parameters, and results are unchanged.
+
+On the muro-http request step (`step.muro`, Phase 1b of the IR plan), a keep-alive GET drops from 11,784 to 8,843 instructions per request on x86-64 at `-O2`. The hand-written C step is about 5,950. The per-octet scan loop keeps its state in registers instead of copying the state struct at each match level.
+
+### Tests
+
+- `test/muro_emit_c_enum_test.exs`, `test/muro_unboxed_test.exs`, `test/muro_word_match_test.exs`: an arm returns or assigns the accumulator, with no `muro__t_` temporary.
+- `test/fixtures/native-main` (`bytes`, `fnv_slice`, `half_ok`), `test/fixtures/c-session` (`computed`, `field-bindings`, `field-choice`, `pair-bindings`, `value-protocols`), and `test/fixtures/emit-examples.digest`: the C images.
+
+### Manual
+
+- Emit, Shared calls: where a tail match writes its value, and `memchr` in `sliceUntil` and `sliceAfter`.
+
+### Package
+
+- Version 0.22.50.
+
 ## 0.22.48
 
 `after_kw/2` drops a keyword by byte size. It used `String.slice(s, String.length(kw)..-1//1)`. A range that ends at `-1` counts graphemes in the remainder, once per token, so a large book is quadratic. `corpus elaborations and Share images check` in `Muro.IRCheckTest` could exceed ExUnit's 60-second timeout. The remainder after the keyword is the same. That test now allows 180s, because a parallel `mix test` can still exceed 60s while loading the corpus.

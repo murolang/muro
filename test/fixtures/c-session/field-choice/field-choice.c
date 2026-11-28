@@ -55,17 +55,16 @@ __attribute__((unused)) static Wrap *wrap(Hdr *muro__f_0) {
   return muro__p;
 }
 Bool late(Maybe *m) {
-  Bool muro__t_0 = 0;
   {
   Maybe *muro__s_0 = m;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
-  muro__t_0 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   case 1: {
   void *b = muro__s_0->muro__as.just.muro__f_0;
-  muro__t_0 = (Bool)(uintptr_t)(b);
+  return (Bool)(uintptr_t)(b);
   break;
   }
   default: {
@@ -74,30 +73,27 @@ Bool late(Maybe *m) {
   }
   }
   }
-  return muro__t_0;
 }
 
 Bool latezdhdr(Hdr *h) {
-  Bool muro__t_0 = 0;
   {
   Hdr *muro__s_0 = h;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
   Frame f = muro__s_0->muro__as.hdr.muro__f_0;
-  Bool muro__t_1 = 0;
   {
   Frame muro__s_1 = f;
   switch (muro__s_1) {
   case 0: {
-  muro__t_1 = muro__tag_Bool_true_k;
+  return muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_1 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   case 2: {
-  muro__t_1 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -106,7 +102,6 @@ Bool latezdhdr(Hdr *h) {
   }
   }
   }
-  muro__t_0 = muro__t_1;
   break;
   }
   default: {
@@ -115,36 +110,32 @@ Bool latezdhdr(Hdr *h) {
   }
   }
   }
-  return muro__t_0;
 }
 
 Bool latezdwrap(Wrap *w) {
-  Bool muro__t_0 = 0;
   {
   Wrap *muro__s_0 = w;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
   Hdr *h = muro__s_0->muro__as.wrap.muro__f_0;
-  Bool muro__t_1 = 0;
   {
   Hdr *muro__s_1 = h;
   switch (muro__s_1->muro__field_tag) {
   case 0: {
   Frame f = muro__s_1->muro__as.hdr.muro__f_0;
-  Bool muro__t_2 = 0;
   {
   Frame muro__s_2 = f;
   switch (muro__s_2) {
   case 0: {
-  muro__t_2 = muro__tag_Bool_true_k;
+  return muro__tag_Bool_true_k;
   break;
   }
   case 1: {
-  muro__t_2 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   case 2: {
-  muro__t_2 = muro__tag_Bool_false_k;
+  return muro__tag_Bool_false_k;
   break;
   }
   default: {
@@ -153,7 +144,6 @@ Bool latezdwrap(Wrap *w) {
   }
   }
   }
-  muro__t_1 = muro__t_2;
   break;
   }
   default: {
@@ -162,7 +152,6 @@ Bool latezdwrap(Wrap *w) {
   }
   }
   }
-  muro__t_0 = muro__t_1;
   break;
   }
   default: {
@@ -171,7 +160,6 @@ Bool latezdwrap(Wrap *w) {
   }
   }
   }
-  return muro__t_0;
 }
 #ifndef muro__DROP
 #define muro__DROP(p) free(p)

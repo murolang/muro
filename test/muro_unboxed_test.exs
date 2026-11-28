@@ -75,7 +75,9 @@ defmodule Muro.UnboxedTest do
     refute scan =~ "muro__ALLOC"
     assert acc =~ "return (Acc){"
     assert cell =~ "muro__ALLOC"
-    assert scan =~ ~r/Acc (muro__s_\d+) = acc\(.*while \(muro__s_\d+\.n > 0\).*\1 = muro__t_\d+;/s
+    # Each arm of the body writes the accumulator itself (no temporary).
+    assert scan =~ ~r/Acc (muro__s_\d+) = acc\(.*while \(muro__s_\d+\.n > 0\).*\1 = acc\(/s
+    refute scan =~ "muro__t_"
 
     File.write!(Path.join(dir, "main.c"), c_main())
     assert gcc!(dir, "main.c", "main") == :ok

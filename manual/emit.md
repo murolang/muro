@@ -119,6 +119,8 @@ C, Rust, and Zig print a run after one pass over its image, `Muro.IR.Share`. Eve
 
 A C fold stops early when its step leaves the accumulator alone from some state on. When the step is, or calls a run that is, `match acc | c fields => match g | k => acc | ...` and `g` reads only those fields, the loop tests `g` before each octet and leaves when it takes `k`. Every later step would return that same accumulator, so the result is the same. A step of any other shape walks every octet, as before.
 
+On C, a match or a let in tail position writes its value where the enclosing term wants it. In a run that returns anything but a string, each arm returns. In a fold step the arm assigns the accumulator, and in a run that updates its argument in place the arm assigns through the pointer, and an arm that returns the argument unchanged assigns nothing. A nested match writes into the outer match's result and has no temporary of its own. A match in any other position, such as a scrutinee, a binding's value, or a call argument, still has its own temporary. `sliceUntil` and `sliceAfter` find the octet with `memchr`.
+
 ## A Nat run is a NIF
 
 An exported run whose live arguments and result are `Nat` is a NIF entry. When the working directory is the loaded Mix project, `--backend c` writes `<stem>_nif.h`, `<stem>_nif.c`, `<stem>.mk`, and `<stem>.ex` beside the C, and `elixir_make` runs that makefile. The library is `priv/<stem>.so`. The module is the camelized stem (`half_ok.muro` is `HalfOk`). `HalfOk.half(4)` is the integer `2`, and `HalfOk.plus(2, 3)` is `5`. Outside that directory, and in the self-contained executable, the same command writes the `.h` and the `.c` only.
