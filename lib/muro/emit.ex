@@ -7,6 +7,12 @@ defmodule Muro.Emit do
   unfold body is `{head, next_seed}`. `uncons` is two replayable views
   (`Enum.take/2` + `Stream.drop/2`); affinity was already checked.
 
+  A byte fold `Muro.Emit.FoldFast` can prove is a string scan, or a
+  search for one, two or three bytes, is emitted as `:binary.match`.
+  When that fold's stop test says later bytes leave the accumulator
+  unchanged, the search returns there. Any other fold stays the
+  closure that walks one byte at a time.
+
   A `repr` is emitted as `decode_<type>/1`, `decode_<type>/2`, and
   `encode_<type>/2` by `Muro.Repr`, from the same analysis the checker
   used. Decode returns `{:ok, value, table}`. Encode takes that table.
@@ -140,6 +146,7 @@ defmodule Muro.Emit do
   def emit_private_runs(book, wanted) when is_list(book) and is_list(wanted) do
     reset_produce()
     names = elixir_names(book)
+    plans = Muro.Emit.FoldFast.plans(book, names)
     want = MapSet.new(wanted)
 
     runs =
@@ -149,7 +156,7 @@ defmodule Muro.Emit do
 
     funs =
       runs
-      |> Enum.map(&emit_def(Map.put(&1, :export, false), book, names))
+      |> Enum.map(&emit_def(Map.put(&1, :export, false), book, names, plans))
       |> Enum.join("\n\n")
 
     except =
@@ -251,7 +258,8 @@ defmodule Muro.Emit do
     book = Muro.Grade.erase_book(book)
     runs = run_defs(book)
     names = elixir_names(book)
-    funs = runs |> Enum.map(&emit_def(&1, book, names)) |> Enum.join("\n\n")
+    plans = Muro.Emit.FoldFast.plans(book, names)
+    funs = runs |> Enum.map(&emit_def(&1, book, names, plans)) |> Enum.join("\n\n")
 
     except =
       case kernel_clashes(runs, names) do
@@ -277,10 +285,10 @@ defmodule Muro.Emit do
     end
   end
 
-  defp emit_def(%{name: name} = d, book, names) do
+  defp emit_def(%{name: name} = d, book, names, plans) do
     case Muro.Emit.NatPrim.body(d) do
       {:ok, params, src} -> host_def(d, Map.fetch!(names, name), params, src)
-      :error -> checked_def(d, book, names)
+      :error -> checked_def(d, book, names, plans)
     end
   end
 
@@ -292,7 +300,7 @@ defmodule Muro.Emit do
     "#{kw} #{fun}(#{Enum.join(params, ", ")}) when #{guard} do\n#{indent(src, 2)}\nend"
   end
 
-  defp checked_def(%{name: name, type: ty, body: body} = d, book, names) do
+  defp checked_def(%{name: name, type: ty, body: body} = d, book, names, plans) do
     {:ok, ty_db} = Ast.to_db(ty)
     {:ok, body_db} = Ast.to_db(body)
     {erased, arity} = telescope(ty_db, 0, [])
@@ -305,7 +313,24 @@ defmodule Muro.Emit do
         |> Enum.reject(&(&1 in erased))
         |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
 
-      expr = emit_db(inner, arity, book, names)
+      # FoldFast writes its body at column 0. The ordinary emitter already
+      # indents continuation lines for the `\n  ` prefix below, so only the
+      # fast body is shifted. Shifting every body moves the 0.21.0 goldens.
+      expr =
+        case Map.get(plans, name) do
+          nil ->
+            emit_db(inner, arity, book, names)
+
+          plan ->
+            case Muro.Emit.FoldFast.render(plan, args, names) do
+              src when is_binary(src) ->
+                src |> String.trim_trailing("\n") |> String.replace("\n", "\n  ")
+
+              _ ->
+                emit_db(inner, arity, book, names)
+            end
+        end
+
       kw = if Map.get(d, :export, true), do: "def", else: "defp"
       fun = Map.fetch!(names, name)
 
@@ -1457,7 +1482,13 @@ defmodule Muro.Emit do
   end
 
   defp emit_word({:of, k}, [t], d, book, names) do
-    "Muro.Word.of(#{inspect(k)}, #{emit_db(t, d, book, names)})"
+    src = emit_db(t, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      unsigned_box(k, src)
+    else
+      "Muro.Word.of(#{inspect(k)}, #{src})"
+    end
   end
 
   # A residue is a non-negative integer, so it is already that Nat.
@@ -1474,7 +1505,15 @@ defmodule Muro.Emit do
   end
 
   defp emit_word(:not, [x], d, book, names) do
-    "Muro.Word.bnot(#{inspect(need_kind(x, book))}, #{emit_db(x, d, book, names)})"
+    k = need_kind(x, book)
+    src = emit_db(x, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      m = unsigned_mask(k)
+      "Bitwise.bxor(Bitwise.band((#{src}), #{m}), #{m})"
+    else
+      "Muro.Word.bnot(#{inspect(k)}, #{src})"
+    end
   end
 
   defp emit_word(op, [x, y], d, book, names) when op in [:eq, :lt, :le] do
@@ -1497,7 +1536,13 @@ defmodule Muro.Emit do
   end
 
   defp emit_word({:cast, k}, [x], d, book, names) do
-    "Muro.Word.cast(#{inspect(k)}, #{emit_db(x, d, book, names)})"
+    src = emit_db(x, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      unsigned_box(k, src)
+    else
+      "Muro.Word.cast(#{inspect(k)}, #{src})"
+    end
   end
 
   defp emit_word(:some, [x], d, book, names) do
@@ -1506,8 +1551,69 @@ defmodule Muro.Emit do
 
   defp emit_word(_op, _args, _d, _book, _names), do: "raise \"erased term\""
 
+  # An unsigned residue is the low bits of the integer, including a
+  # negative one (two's complement). `Bitwise.band` compiles to the
+  # `band` bif, so a per-byte word op is not a `Muro.Word` call.
+  # Signed words stay on `Muro.Word`.
   defp word_bin(fun, x, y, d, book, names) do
-    "Muro.Word.#{fun}(#{inspect(operand_kind(x, y, book))}, #{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)})"
+    k = operand_kind(x, y, book)
+    xs = emit_db(x, d, book, names)
+    ys = emit_db(y, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      unsigned_word(fun, k, xs, ys)
+    else
+      "Muro.Word.#{fun}(#{inspect(k)}, #{xs}, #{ys})"
+    end
+  end
+
+  defp unsigned_mask(k), do: Muro.Word.modulus(k) - 1
+
+  defp unsigned_box(k, src), do: "Bitwise.band((#{src}), #{unsigned_mask(k)})"
+
+  defp unsigned_word("add", k, x, y), do: unsigned_box(k, "(#{x}) + (#{y})")
+  defp unsigned_word("sub", k, x, y), do: unsigned_box(k, "(#{x}) - (#{y})")
+  defp unsigned_word("mul", k, x, y), do: unsigned_box(k, "(#{x}) * (#{y})")
+
+  defp unsigned_word("band", k, x, y) do
+    "Bitwise.band(Bitwise.band((#{x}), #{unsigned_mask(k)}), (#{y}))"
+  end
+
+  defp unsigned_word(fun, k, x, y) when fun in ["bor", "bxor"] do
+    m = unsigned_mask(k)
+    op = if fun == "bor", do: "bor", else: "bxor"
+    "Bitwise.#{op}(Bitwise.band((#{x}), #{m}), Bitwise.band((#{y}), #{m}))"
+  end
+
+  defp unsigned_word("eq?", k, x, y) do
+    m = unsigned_mask(k)
+    "Bitwise.band((#{x}), #{m}) == Bitwise.band((#{y}), #{m})"
+  end
+
+  defp unsigned_word("lt?", k, x, y) do
+    m = unsigned_mask(k)
+    "Bitwise.band((#{x}), #{m}) < Bitwise.band((#{y}), #{m})"
+  end
+
+  defp unsigned_word("le?", k, x, y) do
+    m = unsigned_mask(k)
+    "Bitwise.band((#{x}), #{m}) <= Bitwise.band((#{y}), #{m})"
+  end
+
+  defp unsigned_word("divide", k, x, y) do
+    m = unsigned_mask(k)
+
+    "(case Bitwise.band((#{y}), #{m}) do\n  0 -> :none\n  muro__d -> {:some, div(Bitwise.band((#{x}), #{m}), muro__d)}\nend)"
+  end
+
+  defp unsigned_word("remainder", k, x, y) do
+    m = unsigned_mask(k)
+
+    "(case Bitwise.band((#{y}), #{m}) do\n  0 -> :none\n  muro__d -> {:some, rem(Bitwise.band((#{x}), #{m}), muro__d)}\nend)"
+  end
+
+  defp unsigned_word(fun, k, x, y) do
+    "Muro.Word.#{fun}(#{inspect(k)}, #{x}, #{y})"
   end
 
   defp operand_kind(x, y, book) do
