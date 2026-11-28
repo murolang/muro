@@ -37,19 +37,10 @@ __attribute__((unused)) static Maybe *just(void *muro__f_0) {
 Bool mark(Item f) {
   {
   Item muro__s_0 = f;
-  switch (muro__s_0) {
-  case 0: {
+  if (muro__s_0 == muro__tag_Item_self) {
   return muro__tag_Bool_true_k;
-  break;
-  }
-  case 1: {
+  } else {
   return muro__tag_Bool_false_k;
-  break;
-  }
-  default: {
-  /* unreachable */
-  abort();
-  }
   }
   }
 }
@@ -57,19 +48,10 @@ Bool mark(Item f) {
 Maybe *effective(Item f) {
   {
   Item muro__s_0 = f;
-  switch (muro__s_0) {
-  case 0: {
+  if (muro__s_0 == muro__tag_Item_self) {
   return just((void *)(uintptr_t)(muro__tag_Bool_true_k));
-  break;
-  }
-  case 1: {
+  } else {
   return nothing();
-  break;
-  }
-  default: {
-  /* unreachable */
-  abort();
-  }
   }
   }
 }

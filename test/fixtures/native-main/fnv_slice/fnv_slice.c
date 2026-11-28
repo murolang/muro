@@ -69,11 +69,11 @@ uint32_t offset(void) {
   return (uint32_t)UINT64_C(2166136261);
 }
 
-uint32_t prime(void) {
+__attribute__((always_inline)) inline uint32_t prime(void) {
   return (uint32_t)UINT64_C(16777619);
 }
 
-uint32_t mix(uint32_t h, uint8_t b) {
+__attribute__((always_inline)) inline uint32_t mix(uint32_t h, uint8_t b) {
   return (uint32_t)((uint64_t)((uint32_t)((uint32_t)(h) ^ (uint32_t)((uint32_t)(uint64_t)(b)))) * (uint64_t)(prime()));
 }
 

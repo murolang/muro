@@ -443,7 +443,8 @@ defmodule Muro.EmitCEnumTest do
       refute body =~ "muro__ALLOC", fun
     end
 
-    assert source =~ "switch (muro__s_1)"
+    assert source =~ "if (muro__s_1 == #{true_tag})"
+    refute source =~ "switch ("
 
     File.write!(Path.join(dir, "main.c"), """
     #include <stdio.h>

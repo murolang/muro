@@ -21,19 +21,10 @@ __attribute__((unused)) static Bool false_k(void) { return muro__tag_Bool_false_
 Bool grant(Bool b) {
   {
   Bool muro__s_0 = b;
-  switch (muro__s_0) {
-  case 0: {
+  if (muro__s_0 == muro__tag_Bool_true_k) {
   return muro__tag_Bool_true_k;
-  break;
-  }
-  case 1: {
+  } else {
   return muro__tag_Bool_false_k;
-  break;
-  }
-  default: {
-  /* unreachable */
-  abort();
-  }
   }
   }
 }

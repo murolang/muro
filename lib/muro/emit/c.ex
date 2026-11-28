@@ -37,8 +37,13 @@ defmodule Muro.Emit.C do
   struct into the call and back. When every octet outside a set of one,
   two, or three constant bytes returns that accumulator unchanged, the
   loop advances to the next such byte with `muro__find2` or
-  `muro__find3` and runs the body only there. A step the emitter cannot
-  read that way keeps the byte-by-byte loop.
+  `muro__find3` and runs the body only there. A fold of `U64` whose
+  step is the border automaton of a fixed octet string, state in the
+  low three bits and the index above them, scans for that string
+  instead. A scalar run with no loop that such a byte loop reaches,
+  and whose body is no wider than that name step, is `always_inline`.
+  A step the emitter cannot read that way keeps the byte-by-byte loop.
+  A match on an enum of two constructors is an `if` on the first tag.
 
   Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor of an all-nullary data type is the
@@ -954,63 +959,13 @@ defmodule Muro.Emit.C do
   # accumulator's address. The body sees only the loop's binders.
   # `inert_skip/5` jumps to the next byte that can change the
   # accumulator, when that set is one, two, or three constants.
-  defp emit_ir0({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
-    {on, _, _} = octet
-    {rn, _, _} = rest
-    {an, alay, _} = acc
-    cty = ctype(alay, st.book, st.prefix)
-    cap_tys = Enum.map(caps, fn {_n, lay, _g, _tm} -> ctype(lay, st.book, st.prefix) end)
-
-    with {:ok, {cpres, cexs, st}} <- emit_args(Enum.map(caps, &elem(&1, 3)), cap_tys, env, st),
-         {:ok, {pz, ez, _zlay, st}} <- emit_ir(z, env, st, cty),
-         {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
-      {accv, st} = news(st)
-      {cur, st} = news(st)
-      sl = g("slice")
-
-      {cap_decls, benv, st} =
-        caps
-        |> Enum.zip(Enum.zip(cap_tys, cexs))
-        |> Enum.reduce({[], [], st}, fn {{n, lay, _g, _tm}, {ty, ex}}, {decls, benv, st} ->
-          {local, st} = news(st)
-          void = if uses?(body, n) or stop_uses?(stop, n), do: "", else: "(void)#{local};"
-          {decls ++ ["#{ty}#{local} = #{ex};", void], [{n, local, lay} | benv], st}
-        end)
-
-      {bv, st} = news(st)
-      {rv, st} = news(st)
-      benv = [{an, accv, alay}, {rn, rv, :slice}, {on, bv, :u8} | benv]
-
-      with {:ok, {stop_src, st}} <- loop_stop(stop, accv, alay, st),
-           {:ok, {bpre, step, st}} <- loop_body(body, an, accv, benv, cty, st) do
-        {skip, st} = inert_skip(body, on, an, cur, st)
-        octet_decl = if uses?(body, on), do: "uint8_t #{bv} = #{cur}.p[0];", else: ""
-        rest_decl = "#{sl} #{rv} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};"
-        rest_void = if uses?(body, rn), do: "", else: "(void)#{rv};"
-
-        inner =
-          squash([
-            stop_src,
-            skip,
-            octet_decl,
-            rest_decl,
-            rest_void,
-            bpre,
-            step,
-            "#{cur} = #{rv};"
-          ])
-
-        loop =
-          squash([
-            "#{cty}#{accv} = #{ez};",
-            "#{sl} #{cur} = #{es};",
-            "while (#{cur}.n > 0) {",
-            indent(inner, 2),
-            "}"
-          ])
-
-        {:ok, {squash(cpres ++ cap_decls ++ [pz, ps, loop]), accv, alay, st}}
-      end
+  # `needle_loop/3` replaces a fold that is the border automaton of a
+  # fixed string. Anything else is the byte loop.
+  defp emit_ir0({:loop, _, _, _, _, _, _, _, _} = tm, env, st, expect) do
+    case needle_loop(tm, env, st) do
+      {:ok, emitted} -> {:ok, emitted}
+      :no -> emit_byte_loop(tm, env, st, expect)
+      {:error, _} = err -> err
     end
   end
 
@@ -1101,6 +1056,66 @@ defmodule Muro.Emit.C do
 
   defp enum_ctor_expr(_dname, _cname, fun, exprs, _st) do
     "#{fun}(#{Enum.join(exprs, ", ")})"
+  end
+
+  defp emit_byte_loop({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
+    {on, _, _} = octet
+    {rn, _, _} = rest
+    {an, alay, _} = acc
+    cty = ctype(alay, st.book, st.prefix)
+    cap_tys = Enum.map(caps, fn {_n, lay, _g, _tm} -> ctype(lay, st.book, st.prefix) end)
+
+    with {:ok, {cpres, cexs, st}} <- emit_args(Enum.map(caps, &elem(&1, 3)), cap_tys, env, st),
+         {:ok, {pz, ez, _zlay, st}} <- emit_ir(z, env, st, cty),
+         {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+      {accv, st} = news(st)
+      {cur, st} = news(st)
+      sl = g("slice")
+
+      {cap_decls, benv, st} =
+        caps
+        |> Enum.zip(Enum.zip(cap_tys, cexs))
+        |> Enum.reduce({[], [], st}, fn {{n, lay, _g, _tm}, {ty, ex}}, {decls, benv, st} ->
+          {local, st} = news(st)
+          void = if uses?(body, n) or stop_uses?(stop, n), do: "", else: "(void)#{local};"
+          {decls ++ ["#{ty}#{local} = #{ex};", void], [{n, local, lay} | benv], st}
+        end)
+
+      {bv, st} = news(st)
+      {rv, st} = news(st)
+      benv = [{an, accv, alay}, {rn, rv, :slice}, {on, bv, :u8} | benv]
+
+      with {:ok, {stop_src, st}} <- loop_stop(stop, accv, alay, st),
+           {:ok, {bpre, step, st}} <- loop_body(body, an, accv, benv, cty, st) do
+        {skip, st} = inert_skip(body, on, an, cur, st)
+        octet_decl = if uses?(body, on), do: "uint8_t #{bv} = #{cur}.p[0];", else: ""
+        rest_decl = "#{sl} #{rv} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};"
+        rest_void = if uses?(body, rn), do: "", else: "(void)#{rv};"
+
+        inner =
+          squash([
+            stop_src,
+            skip,
+            octet_decl,
+            rest_decl,
+            rest_void,
+            bpre,
+            step,
+            "#{cur} = #{rv};"
+          ])
+
+        loop =
+          squash([
+            "#{cty}#{accv} = #{ez};",
+            "#{sl} #{cur} = #{es};",
+            "while (#{cur}.n > 0) {",
+            indent(inner, 2),
+            "}"
+          ])
+
+        {:ok, {squash(cpres ++ cap_decls ++ [pz, ps, loop]), accv, alay, st}}
+      end
+    end
   end
 
   # A pair slot and a stream seed are `void *`. The struct is copied
@@ -1336,29 +1351,10 @@ defmodule Muro.Emit.C do
         {:error, "c:unsupported"}
 
       data ->
-        {sname, st} = news(st)
-        {tname, fresh, st} = slot(st)
-        {ptr, switch_on, arrow} = data_scrut(data, dname, sname, st)
-
-        with {:ok, {cases, st}} <-
-               emit_data_arms(arms, data, sname, tname, arrow, env, st, expect) do
-          stmt =
-            squash([
-              pre,
-              slot_init(fresh, expect, tname, st),
-              "{",
-              "#{ptr}#{sname} = #{ex};",
-              "switch (#{switch_on}) {",
-              cases,
-              "default: {",
-              "/* unreachable */",
-              "abort();",
-              "}",
-              "}",
-              "}"
-            ])
-
-          {:ok, {stmt, tname, st}}
+        if enum_if?(data, arms) do
+          emit_enum_if(data, dname, pre, ex, arms, env, st, expect)
+        else
+          emit_data_switch(data, dname, pre, ex, arms, env, st, expect)
         end
     end
   end
@@ -1463,6 +1459,82 @@ defmodule Muro.Emit.C do
       :enum -> {struct_name(dname, st.prefix) <> " ", sname, "->"}
       :value -> {struct_name(dname, st.prefix) <> " ", "#{sname}.#{tagf}", "."}
       :boxed -> {struct_ptr(dname, st.prefix), "#{sname}->#{tagf}", "->"}
+    end
+  end
+
+  # Both tags are the whole type, so an out-of-range value is not a
+  # third arm. The `else` is the second constructor. A wider enum keeps
+  # the switch and its `abort`.
+  defp enum_if?(data, arms) do
+    Rep.enum_data?(data) and length(data.ctors) == 2 and enum_arms?(data, arms)
+  end
+
+  defp enum_arms?(data, [{:arm, a, [], _}, {:arm, b, [], _}]) do
+    Enum.map(data.ctors, & &1.name) == [a, b]
+  end
+
+  defp enum_arms?(_data, _arms), do: false
+
+  defp emit_enum_if(data, dname, pre, ex, arms, env, st, expect) do
+    {sname, st} = news(st)
+    {tname, fresh, st} = slot(st)
+    [c0 | _] = data.ctors
+    [arm0, arm1] = arms
+    tag0 = ctor_tag(dname, c0.name, st.prefix)
+    ptr = struct_name(dname, st.prefix) <> " "
+
+    with {:ok, {t0, st}} <- enum_if_arm(arm0, tname, env, st, expect),
+         {:ok, {t1, st}} <- enum_if_arm(arm1, tname, env, st, expect) do
+      stmt =
+        squash([
+          pre,
+          slot_init(fresh, expect, tname, st),
+          "{",
+          "#{ptr}#{sname} = #{ex};",
+          "if (#{sname} == #{tag0}) {",
+          t0,
+          "} else {",
+          t1,
+          "}",
+          "}"
+        ])
+
+      {:ok, {stmt, tname, st}}
+    end
+  end
+
+  defp enum_if_arm({:arm, _cname, [], body}, tname, env, st, expect) do
+    st = %{st | scope: st.base_scope}
+
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, expect) do
+      {:ok, {squash([pre, assign(tname, ex)]), st}}
+    end
+  end
+
+  defp emit_data_switch(data, dname, pre, ex, arms, env, st, expect) do
+    {sname, st} = news(st)
+    {tname, fresh, st} = slot(st)
+    {ptr, switch_on, arrow} = data_scrut(data, dname, sname, st)
+
+    with {:ok, {cases, st}} <-
+           emit_data_arms(arms, data, sname, tname, arrow, env, st, expect) do
+      stmt =
+        squash([
+          pre,
+          slot_init(fresh, expect, tname, st),
+          "{",
+          "#{ptr}#{sname} = #{ex};",
+          "switch (#{switch_on}) {",
+          cases,
+          "default: {",
+          "/* unreachable */",
+          "abort();",
+          "}",
+          "}",
+          "}"
+        ])
+
+      {:ok, {stmt, tname, st}}
     end
   end
 
@@ -2464,6 +2536,8 @@ defmodule Muro.Emit.C do
   end
 
   defp source(book, runs, sigs, funs, extras, stem, nm, _opts, bytes?, strings?, prefix) do
+    {funs, extras} = inline_hot(funs, extras, book, prefix)
+
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -2488,6 +2562,153 @@ defmodule Muro.Emit.C do
 
     join_parts(parts)
   end
+
+  # A scalar run the byte loops reach, with no loop of its own and a
+  # body no wider than the name step. Inlining it removes the call
+  # around each octet. A run past that width, or one the loops do not
+  # reach, stays a call: inlining it bloated the request step.
+  @inline_body 700
+
+  defp inline_hot(funs, extras, book, prefix) do
+    parsed = Enum.flat_map(funs ++ extras, &parse_cfun/1)
+    by = Map.new(parsed, fn p -> {p.name, p} end)
+    chosen = inline_names(parsed, by, scalar_rets(book, prefix))
+    {Enum.map(funs, &apply_inline(&1, chosen)), Enum.map(extras, &apply_inline(&1, chosen))}
+  end
+
+  defp scalar_rets(book, prefix) do
+    enums =
+      book
+      |> data_defs()
+      |> Enum.filter(&Rep.enum_data?/1)
+      |> Enum.map(&struct_name(&1.name, prefix))
+
+    MapSet.new(["uint8_t", "uint32_t", "uint64_t", "int64_t" | enums])
+  end
+
+  defp inline_names(parsed, by, scalar) do
+    small =
+      parsed
+      |> Enum.filter(fn p ->
+        MapSet.member?(scalar, p.ret) and not p.loop and not p.field and p.size <= @inline_body
+      end)
+      |> MapSet.new(& &1.name)
+
+    parsed
+    |> hot_steps()
+    |> Enum.reduce(MapSet.new(), fn name, seen -> inline_walk(name, by, seen) end)
+    |> MapSet.intersection(small)
+  end
+
+  defp hot_steps(parsed) do
+    Enum.reduce(parsed, MapSet.new(), fn p, acc ->
+      if p.loop, do: MapSet.union(acc, assigned_in_loops(p.body, p.name)), else: acc
+    end)
+  end
+
+  defp inline_walk(name, by, seen) do
+    cond do
+      MapSet.member?(seen, name) ->
+        seen
+
+      match?(%{loop: true}, Map.get(by, name)) ->
+        seen
+
+      is_map(Map.get(by, name)) ->
+        seen = MapSet.put(seen, name)
+        Enum.reduce(Map.fetch!(by, name).calls, seen, &inline_walk(&1, by, &2))
+
+      true ->
+        seen
+    end
+  end
+
+  defp assigned_in_loops(body, self) do
+    body
+    |> String.split("\n")
+    |> Enum.reduce({MapSet.new(), 0, false}, fn line, {set, depth, pending} ->
+      pending = pending or Regex.match?(~r/\b(while|for)\s*\(/, line)
+      opens = length(:binary.matches(line, "{"))
+      closes = length(:binary.matches(line, "}"))
+
+      set =
+        if depth > 0 or pending do
+          ~r/=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/
+          |> Regex.scan(line)
+          |> Enum.reduce(set, fn [_, n], s ->
+            if n == self, do: s, else: MapSet.put(s, n)
+          end)
+        else
+          set
+        end
+
+      {depth, pending} =
+        cond do
+          pending and opens > 0 -> {depth + opens, false}
+          depth > 0 -> {max(depth + opens - closes, 0), false}
+          true -> {depth, pending}
+        end
+
+      {set, depth, pending}
+    end)
+    |> elem(0)
+  end
+
+  defp parse_cfun(text) when is_binary(text) do
+    case Regex.run(~r/\A(.*?)\{(.*)\}\s*\z/s, text) do
+      [_, head, body] ->
+        cleaned =
+          head
+          |> String.replace(~r/__attribute__\(\([^)]*\)\)/, "")
+          |> String.replace(~r/\b(static|inline)\b/, "")
+          |> String.trim()
+
+        case Regex.run(~r/\A(.+?)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/s, cleaned) do
+          [_, ret, name] ->
+            [
+              %{
+                name: name,
+                ret: String.trim(ret),
+                size: byte_size(text),
+                loop: Regex.match?(~r/\b(while|for)\s*\(/, body),
+                field: String.contains?(body, "muro__field_tag"),
+                calls: c_calls(body, name),
+                body: body
+              }
+            ]
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp c_calls(body, self) do
+    ~r/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/
+    |> Regex.scan(body)
+    |> Enum.map(fn [_, n] -> n end)
+    |> Enum.reject(&(&1 == self))
+    |> MapSet.new()
+  end
+
+  defp apply_inline(text, chosen) do
+    case parse_cfun(text) do
+      [%{name: name}] ->
+        if MapSet.member?(chosen, name), do: prefix_inline(text), else: text
+
+      _ ->
+        text
+    end
+  end
+
+  defp prefix_inline("__attribute__((unused)) static " <> rest) do
+    "__attribute__((always_inline, unused)) static inline " <> rest
+  end
+
+  defp prefix_inline(text), do: "__attribute__((always_inline)) inline " <> text
 
   defp join_parts(parts) do
     parts
@@ -2883,24 +3104,26 @@ defmodule Muro.Emit.C do
   defp find_helpers(text) when is_binary(text) do
     want2 = String.contains?(text, g("find2") <> "(")
     want3 = String.contains?(text, g("find3") <> "(")
+    sse = want2 or want3 or String.contains?(text, "_mm_cmpeq_epi8")
 
     parts =
       []
       |> then(fn acc -> if want2, do: acc ++ [find2_helper()], else: acc end)
       |> then(fn acc -> if want3, do: acc ++ [find3_helper()], else: acc end)
 
-    case parts do
-      [] ->
-        ""
-
-      ps ->
+    hdr =
+      if sse do
         """
         #include <string.h>
         #if defined(__SSE2__)
         #include <emmintrin.h>
         #endif
-        """ <> Enum.join(ps, "\n\n")
-    end
+        """
+      else
+        ""
+      end
+
+    hdr <> Enum.join(parts, "\n\n")
   end
 
   defp find2_helper do
@@ -3108,6 +3331,337 @@ defmodule Muro.Emit.C do
 
     with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, Map.put(st, :dest, acc), cty) do
       {:ok, {pre, assign(acc, ex), Map.put(st, :dest, d)}}
+    end
+  end
+
+  # A fold of a `U64` whose step is the border automaton of one octet
+  # string: the low three bits are the matched length, the bits above
+  # them are how far the fold has read, and the matched length sticks
+  # once it is the whole string. The loop is a scan for that string.
+  # The unmatched suffix is the automaton, so the packed miss state is
+  # the one the byte loop would have returned. A step this cannot read
+  # stays the byte loop. Recognition is the transition table, not the
+  # step's name.
+  defp needle_loop({:loop, [], octet, rest, {an, :u64, _}, z, s, _stop, body}, env, st) do
+    {on, _, _} = octet
+    {rn, _, _} = rest
+
+    with false <- uses?(body, rn),
+         {:ok, bytes, delta, accept} <- needle_table(z, body, on, an, st) do
+      cty = ctype(:u64, st.book, st.prefix)
+      sl = g("slice")
+
+      with {:ok, {pz, ez, _, st}} <- emit_ir(z, env, st, cty),
+           {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+        {accv, st} = news(st)
+        {cur, st} = news(st)
+        {lab, st} = news(st)
+
+        stmt =
+          squash([
+            pz,
+            ps,
+            "#{cty}#{accv} = #{ez};",
+            "#{sl} #{cur} = #{es};",
+            needle_c(bytes, delta, accept, accv, cur, lab)
+          ])
+
+        {:ok, {stmt, accv, :u64, st}}
+      end
+    else
+      _ -> :no
+    end
+  end
+
+  defp needle_loop(_, _, _), do: :no
+
+  defp needle_table(z, body, on, an, st) do
+    funs = Map.values(st.funs)
+
+    with {:ok, {:word, :u64, 0}} <- Muro.IR.Eval.eval(funs, z, %{}, fuel: 8_000),
+         {:ok, delta, accept} <- probe_states(funs, body, on, an),
+         {:ok, bytes} <- chain_needle(delta, accept),
+         true <- border_matches?(bytes, delta, accept) do
+      {:ok, bytes, delta, accept}
+    else
+      _ -> :no
+    end
+  end
+
+  defp probe_states(funs, body, on, an) do
+    walk_states([0], MapSet.new(), %{}, nil, funs, body, on, an)
+  end
+
+  defp walk_states([], _seen, _delta, nil, _funs, _body, _on, _an), do: :no
+
+  defp walk_states([], _seen, delta, accept, _funs, _body, _on, _an),
+    do: {:ok, delta, accept}
+
+  defp walk_states([s | rest], seen, delta, accept, funs, body, on, an) do
+    cond do
+      s > 7 or MapSet.member?(seen, s) ->
+        walk_states(rest, seen, delta, accept, funs, body, on, an)
+
+      true ->
+        seen = MapSet.put(seen, s)
+
+        case classify_state(s, funs, body, on, an) do
+          :no ->
+            :no
+
+          :absorb ->
+            if accept == nil do
+              walk_states(rest, seen, delta, s, funs, body, on, an)
+            else
+              :no
+            end
+
+          {:move, map} ->
+            delta = Enum.reduce(map, delta, fn {b, n}, d -> Map.put(d, {s, b}, n) end)
+            more = map |> Map.values() |> Enum.uniq()
+            walk_states(rest ++ more, seen, delta, accept, funs, body, on, an)
+        end
+    end
+  end
+
+  defp classify_state(s, funs, body, on, an) do
+    acc = Bitwise.bor(Bitwise.band(s, 7), 40)
+
+    0..255
+    |> Enum.reduce_while({:same, %{}}, fn b, {mode, map} ->
+      case probe_step(funs, body, on, an, b, acc) do
+        {:ok, ^acc} ->
+          if mode == :move, do: {:halt, :no}, else: {:cont, {:same, map}}
+
+        {:ok, r} ->
+          next = Bitwise.band(r, 7)
+          moved = Bitwise.bsr(r, 3) == 6 and next <= 7 and mode != :same_bad
+
+          cond do
+            moved and mode in [:same, :move] -> {:cont, {:move, Map.put(map, b, next)}}
+            true -> {:halt, :no}
+          end
+
+        :no ->
+          {:halt, :no}
+      end
+    end)
+    |> case do
+      {:same, _} -> :absorb
+      {:move, map} when map_size(map) == 256 -> {:move, map}
+      _ -> :no
+    end
+  end
+
+  defp probe_step(funs, body, on, an, byte, acc) do
+    env = %{on => {:word, :u8, byte}, an => {:word, :u64, acc}}
+
+    case Muro.IR.Eval.eval(funs, body, env, fuel: 8_000) do
+      {:ok, {:word, :u64, n}} when is_integer(n) and n >= 0 -> {:ok, n}
+      _ -> :no
+    end
+  end
+
+  defp chain_needle(delta, accept) when is_integer(accept) and accept >= 2 and accept <= 7 do
+    0..(accept - 1)
+    |> Enum.reduce_while([], fn s, acc ->
+      bytes = for b <- 0..255, Map.get(delta, {s, b}) == s + 1, do: b
+
+      case bytes do
+        [b] -> {:cont, acc ++ [b]}
+        _ -> {:halt, :no}
+      end
+    end)
+    |> case do
+      bytes when is_list(bytes) and length(bytes) == accept -> {:ok, bytes}
+      _ -> :no
+    end
+  end
+
+  defp chain_needle(_delta, _accept), do: :no
+
+  # `pi` is the border table of the needle. Every reached state has to
+  # be that automaton, including a byte that is not the next octet of
+  # the needle.
+  defp border_matches?(bytes, delta, accept) do
+    pi = prefix_borders(bytes)
+
+    covered =
+      Enum.all?(0..(accept - 1), fn s -> Enum.all?(0..255, &Map.has_key?(delta, {s, &1})) end)
+
+    covered and
+      Enum.all?(delta, fn {{s, b}, n} ->
+        s <= accept and border_step(bytes, pi, s, b) == n
+      end)
+  end
+
+  defp prefix_borders(bytes) do
+    m = length(bytes)
+
+    {pi, _} =
+      Enum.reduce(1..max(m - 1, 0)//1, {%{0 => 0}, 0}, fn q, {pi, k} ->
+        k = drop_border(bytes, pi, k, q)
+        k = if Enum.at(bytes, k) == Enum.at(bytes, q), do: k + 1, else: k
+        {Map.put(pi, q, k), k}
+      end)
+
+    pi
+  end
+
+  defp drop_border(bytes, pi, k, q) when k > 0 do
+    if Enum.at(bytes, k) == Enum.at(bytes, q),
+      do: k,
+      else: drop_border(bytes, pi, Map.fetch!(pi, k - 1), q)
+  end
+
+  defp drop_border(_bytes, _pi, 0, _q), do: 0
+
+  # The step walks borders against the octet just read. `drop_border/4`
+  # walks them against a later needle index, which is how `pi` is built.
+  defp fall_border(bytes, pi, k, b) when k > 0 do
+    if Enum.at(bytes, k) == b,
+      do: k,
+      else: fall_border(bytes, pi, Map.fetch!(pi, k - 1), b)
+  end
+
+  defp fall_border(_bytes, _pi, 0, _b), do: 0
+
+  defp border_step(bytes, pi, s, b) do
+    if s == length(bytes) do
+      s
+    else
+      s = fall_border(bytes, pi, s, b)
+      if s < length(bytes) and Enum.at(bytes, s) == b, do: s + 1, else: s
+    end
+  end
+
+  defp needle_c(bytes, delta, accept, accv, cur, lab) do
+    len = length(bytes)
+    b0 = hd(bytes)
+    stride = 16 - (len - 1)
+    hit = lab <> "_hit"
+    done = lab <> "_done"
+    tail = len - 1
+
+    """
+    {
+      const uint8_t *p = #{cur}.p;
+      size_t n = #{cur}.n;
+      const uint8_t *hit = 0;
+      if (n >= #{len}) {
+    #if defined(__SSE2__)
+        const __m128i v0 = _mm_set1_epi8((char)#{b0});
+        const uint8_t *q = p;
+        const uint8_t *end = p + n;
+        while ((size_t)(end - q) >= 16) {
+          __m128i v;
+          unsigned bits;
+          memcpy(&v, q, 16);
+          bits = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(v, v0));
+          while (bits) {
+            unsigned i = (unsigned)__builtin_ctz(bits);
+            if ((size_t)(q - p) + i + #{len} <= n && #{sse_verify(bytes)}) {
+              hit = q + i;
+              goto #{hit};
+            }
+            bits &= bits - 1;
+          }
+          q += #{stride};
+        }
+        while (q + #{len} <= end) {
+          if (#{scalar_verify(bytes)}) { hit = q; goto #{hit}; }
+          q++;
+        }
+    #else
+        const uint8_t *q = p;
+        const uint8_t *end = p + n;
+        while (q + #{len} <= end) {
+          if (#{scalar_verify(bytes)}) { hit = q; goto #{hit}; }
+          q++;
+        }
+    #endif
+      }
+      {
+        size_t i;
+        size_t start;
+        unsigned st;
+        uint8_t b;
+        start = n > #{tail} ? n - #{tail} : 0;
+        st = 0;
+        for (i = start; i < n; i++) {
+          b = p[i];
+          #{miss_switch(delta, accept)}
+          if (st == #{accept}) {
+            #{accv} = ((uint64_t)#{accept}) | ((uint64_t)(i + 1) << 3);
+            goto #{done};
+          }
+        }
+        #{accv} = ((uint64_t)st) | ((uint64_t)n << 3);
+        goto #{done};
+      }
+    #{hit}:
+      #{accv} = ((uint64_t)#{accept}) | ((uint64_t)((size_t)(hit - p) + #{len}) << 3);
+    #{done}:
+      ;
+    }
+    """
+  end
+
+  defp sse_verify([_b]), do: "1"
+
+  defp sse_verify(bytes) do
+    bytes
+    |> Enum.drop(1)
+    |> Enum.with_index(1)
+    |> Enum.map_join(" && ", fn {b, i} -> "q[i + #{i}] == #{b}" end)
+  end
+
+  defp scalar_verify(bytes) do
+    bytes
+    |> Enum.with_index()
+    |> Enum.map_join(" && ", fn {b, i} -> "q[#{i}] == #{b}" end)
+  end
+
+  defp miss_switch(delta, accept) do
+    arms =
+      Enum.map(0..(accept - 1), fn s ->
+        "case #{s}: { #{miss_arm(delta, s)} break; }"
+      end)
+
+    """
+    switch (st) {
+    #{Enum.join(arms, "\n")}
+    case #{accept}: break;
+    default: st = 0; break;
+    }
+    """
+    |> String.trim()
+  end
+
+  defp miss_arm(delta, s) do
+    groups = Enum.group_by(0..255, fn b -> Map.fetch!(delta, {s, b}) end)
+    {default, _} = Enum.max_by(groups, fn {_n, bs} -> length(bs) end)
+
+    specials =
+      groups
+      |> Enum.reject(fn {n, _} -> n == default end)
+      |> Enum.sort_by(fn {n, _} -> n end)
+
+    cond do
+      specials == [] ->
+        "st = #{default};"
+
+      true ->
+        chain =
+          specials
+          |> Enum.with_index()
+          |> Enum.map_join(" ", fn {{n, bs}, i} ->
+            kw = if i == 0, do: "if", else: "else if"
+            test = Enum.map_join(bs, " || ", fn b -> "b == #{b}" end)
+            "#{kw} (#{test}) st = #{n};"
+          end)
+
+        chain <> " else st = #{default};"
     end
   end
 
