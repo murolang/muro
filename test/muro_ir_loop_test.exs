@@ -352,7 +352,7 @@ defmodule Muro.IRLoopTest do
     refute c =~ ~r/HSt \w+\(muro__slice \w+, uint8_t \w+, muro__slice/
 
     assert c_fun(c, "HSt scan(") =~
-             ~r/muro__io_\d+\(\w+, \w+, byteIndex\(\w+, \w+\), &\w+\);/
+             ~r/muro__io_\d+\(\w+, \w+, muro__inl_byteIndex\(\w+, \w+\), &\w+\);/
 
     assert c =~ ~r/static void muro__io_\d+\(muro__slice buf, uint8_t b, uint64_t i, HSt \*st\)/
   end
