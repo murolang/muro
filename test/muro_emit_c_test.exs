@@ -1213,7 +1213,9 @@ defmodule Muro.EmitCTest do
 
     assert source =~ "_mm_cmpeq_epi8"
     assert source =~ "__builtin_ctz"
-    assert source =~ "__attribute__((always_inline)) inline Bool u8eq("
+    assert source =~ "__attribute__((always_inline, unused)) static inline Bool muro__inl_u8eq("
+    refute source =~ "__attribute__((always_inline)) inline Bool u8eq("
+    assert source =~ "Bool u8eq("
 
     File.write!(Path.join(dir, "add.muro"), """
     def sum : run Π (+ s : Slice) → U64 :=

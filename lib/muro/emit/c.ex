@@ -42,7 +42,9 @@ defmodule Muro.Emit.C do
   low three bits and the index above them, scans for that string
   instead. The index is a pass-through: the step adds one and packs
   it back, and no condition reads it. A scalar run with no loop that such a byte loop reaches,
-  and whose body is no wider than that name step, is `always_inline`.
+  and whose body is no wider than that name step, is `always_inline`
+  when the run is `static`. An exported run keeps an ordinary
+  definition, and calls in this file use a `static` copy.
   A step the emitter cannot read that way keeps the byte-by-byte loop.
   A match on an enum of two constructors is an `if` on the first tag
   and an `else if` on the second. Any other tag calls `abort`.
@@ -2541,7 +2543,7 @@ defmodule Muro.Emit.C do
   end
 
   defp source(book, runs, sigs, funs, extras, stem, nm, _opts, bytes?, strings?, prefix) do
-    {funs, extras} = inline_hot(funs, extras, book, prefix)
+    {funs, extras, helpers} = inline_hot(funs, extras, book, prefix)
 
     internals =
       sigs
@@ -2561,6 +2563,7 @@ defmodule Muro.Emit.C do
       stream_helpers(runs, stream_declared?(sigs, book)),
       data_ctors(book, nm, sigs, prefix),
       internals,
+      Enum.join(helpers, "\n"),
       Enum.join(extras, "\n\n"),
       Enum.join(funs, "\n\n")
     ]
@@ -2575,10 +2578,125 @@ defmodule Muro.Emit.C do
   @inline_body 700
 
   defp inline_hot(funs, extras, book, prefix) do
-    parsed = Enum.flat_map(funs ++ extras, &parse_cfun/1)
+    texts = funs ++ extras
+    parsed = Enum.flat_map(texts, &parse_cfun/1)
     by = Map.new(parsed, fn p -> {p.name, p} end)
     chosen = inline_names(parsed, by, scalar_rets(book, prefix))
-    {Enum.map(funs, &apply_inline(&1, chosen)), Enum.map(extras, &apply_inline(&1, chosen))}
+
+    exported =
+      texts
+      |> Enum.flat_map(fn text ->
+        case parse_cfun(text) do
+          [%{name: name}] ->
+            if MapSet.member?(chosen, name) and not static_cfun?(text), do: [name], else: []
+
+          _ ->
+            []
+        end
+      end)
+      |> MapSet.new()
+
+    helpers = Enum.flat_map(texts, &helper_def(&1, exported))
+    protos = Enum.map(helpers, &helper_proto/1)
+
+    {
+      Enum.map(funs, &finish_fun(&1, chosen, exported)),
+      Enum.map(extras, &finish_fun(&1, chosen, exported)),
+      protos ++ helpers
+    }
+  end
+
+  defp static_cfun?(text), do: String.starts_with?(text, "__attribute__((unused)) static ")
+
+  defp inl_name(name), do: "muro__inl_" <> name
+
+  # The calls in this file use the static copy. The exported name stays
+  # a plain function, so a later translation unit still links to it.
+  defp helper_def(text, exported) do
+    with [%{name: name}] <- parse_cfun(text),
+         true <- MapSet.member?(exported, name),
+         {:ok, head, body} <- split_cfun(text) do
+      helper = inl_name(name)
+
+      head =
+        String.replace(head, ~r/\b#{Regex.escape(name)}\s*\(/, helper <> "(", global: false)
+
+      body = rewrite_calls(body, exported)
+
+      [
+        "__attribute__((always_inline, unused)) static inline " <>
+          String.trim_leading(head) <> "{" <> body <> "}"
+      ]
+    else
+      _ -> []
+    end
+  end
+
+  defp helper_proto(defn) do
+    case Regex.run(~r/\A(.*?)\{/s, defn) do
+      [_, head] -> String.trim_trailing(head) <> ";"
+      _ -> ""
+    end
+  end
+
+  defp finish_fun(text, chosen, exported) do
+    case split_cfun(text) do
+      {:ok, head, body} ->
+        body = rewrite_calls(body, exported)
+        rebuilt = head <> "{" <> body <> "}"
+
+        case parse_cfun(rebuilt) do
+          [%{name: name}] ->
+            cond do
+              MapSet.member?(exported, name) -> export_wrapper(head, name)
+              MapSet.member?(chosen, name) -> prefix_inline(rebuilt)
+              true -> rebuilt
+            end
+
+          _ ->
+            rebuilt
+        end
+
+      :no ->
+        text
+    end
+  end
+
+  defp export_wrapper(head, name) do
+    call = inl_name(name) <> "(" <> Enum.join(param_names(head), ", ") <> ")"
+    String.trim_trailing(head) <> " {\n  return " <> call <> ";\n}"
+  end
+
+  defp param_names(head) do
+    case Regex.run(~r/\((.*)\)/s, head) do
+      [_, params] ->
+        params
+        |> String.split(",")
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 in ["", "void"]))
+        |> Enum.map(fn p ->
+          [_, n] = Regex.run(~r/([A-Za-z_][A-Za-z0-9_]*)\s*$/, p)
+          n
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp rewrite_calls(body, exported) do
+    exported
+    |> Enum.sort_by(&byte_size/1, :desc)
+    |> Enum.reduce(body, fn name, body ->
+      String.replace(body, ~r/\b#{Regex.escape(name)}\s*\(/, inl_name(name) <> "(")
+    end)
+  end
+
+  defp split_cfun(text) do
+    case Regex.run(~r/\A(.*?)\{(.*)\}\s*\z/s, text) do
+      [_, head, body] -> {:ok, head, body}
+      _ -> :no
+    end
   end
 
   defp scalar_rets(book, prefix) do
@@ -2699,21 +2817,11 @@ defmodule Muro.Emit.C do
     |> MapSet.new()
   end
 
-  defp apply_inline(text, chosen) do
-    case parse_cfun(text) do
-      [%{name: name}] ->
-        if MapSet.member?(chosen, name), do: prefix_inline(text), else: text
-
-      _ ->
-        text
-    end
-  end
-
   defp prefix_inline("__attribute__((unused)) static " <> rest) do
     "__attribute__((always_inline, unused)) static inline " <> rest
   end
 
-  defp prefix_inline(text), do: "__attribute__((always_inline)) inline " <> text
+  defp prefix_inline(text), do: text
 
   defp join_parts(parts) do
     parts
