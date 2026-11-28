@@ -554,8 +554,9 @@ defmodule Muro.Emit.CSharpTest do
   # The right-hand side is the expected value. `Assert.Equal` takes
   # that argument first. A call names the implementation type. A
   # simple (non-namespaced) name is written `global::T`, so a stem
-  # or `--impl` of `Values` is not the nested helper `MuroValues`,
-  # and a name that matches a nested type is looked up globally.
+  # or `--impl` literally named `MuroValues` is not the nested helper
+  # of the same name, and a name that matches a nested type is looked
+  # up globally.
   defp side({:call, fun, []}, impl), do: "#{qualify_impl(impl)}.#{fun}()"
 
   defp side({:call, fun, args}, impl),
