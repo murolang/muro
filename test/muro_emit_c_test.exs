@@ -1127,6 +1127,141 @@ defmodule Muro.EmitCTest do
     out
   end
 
+  test "a byte fold skips to the octets that change the accumulator" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "hot.muro"), """
+    import "std:bool.muro"
+
+    unboxed data HSt : Type where
+      hst : Π (+ ph : U64) → HSt
+
+    def u8eq : run Π (x : U8) → Π (y : U8) → Bool :=
+      λ (x : U8) → λ (y : U8) →
+        match (eqi x y) motive (λ _ → Bool)
+          | wtrue => true
+          | wfalse => false
+
+    def u64eq : run Π (x : U64) → Π (y : U64) → Bool :=
+      λ (x : U64) → λ (y : U64) →
+        match (eqi x y) motive (λ _ → Bool)
+          | wtrue => true
+          | wfalse => false
+
+    def stepB : run Π (+ b : U8) → Π (+ st : HSt) → HSt :=
+      λ (+ b : U8) → λ (+ st : HSt) →
+        match st motive (λ _ → HSt)
+          | hst ph =>
+              (match (or (u64eq ph (toU64 2)) (u64eq ph (toU64 3))) motive (λ _ → HSt)
+                | true => st
+                | false =>
+                    (match (u8eq b (toU8 10)) motive (λ _ → HSt)
+                      | true => hst (toU64 2)
+                      | false =>
+                          (match (and (u64eq ph (toU64 0)) (u8eq b (toU8 58))) motive (λ _ → HSt)
+                            | true => hst (toU64 1)
+                            | false => st)))
+
+    def scan : run Π (+ s : Slice) → HSt :=
+      λ (+ s : Slice) →
+        sliceFold HSt (hst (toU64 0))
+          (λ (b : U8) → λ (_r : Slice) → λ (st : HSt) → stepB b st)
+          s
+
+    def phOf : run Π (+ st : HSt) → U64 :=
+      λ (+ st : HSt) →
+        match st motive (λ _ → U64)
+          | hst ph => ph
+
+    def countLF : run Π (+ s : Slice) → U64 :=
+      λ (+ s : Slice) →
+        sliceFold U64 (toU64 0)
+          (λ (b : U8) → λ (_r : Slice) → λ (n : U64) →
+            match (u8eq b (toU8 10)) motive (λ _ → U64)
+              | true => addi n (toU64 1)
+              | false => n)
+          s
+
+    def isSep : run Π (+ b : U8) → Bool :=
+      λ (+ b : U8) →
+        or (or (u8eq b (toU8 32)) (u8eq b (toU8 9))) (u8eq b (toU8 44))
+
+    def countSep : run Π (+ s : Slice) → U64 :=
+      λ (+ s : Slice) →
+        sliceFold U64 (toU64 0)
+          (λ (b : U8) → λ (_r : Slice) → λ (n : U64) →
+            match (isSep b) motive (λ _ → U64)
+              | true => addi n (toU64 1)
+              | false => n)
+          s
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "hot.muro"), "--backend", "c"])
+    end)
+
+    source = File.read!(Path.join(dir, "hot.c"))
+    assert source =~ "muro__find2("
+    assert source =~ "muro__find2(muro__s_"
+    assert source =~ ", 10, 58)"
+    assert source =~ ", 10, 10)"
+    assert source =~ "muro__find3("
+    assert source =~ ", 9, 32, 44)"
+
+    assert source =~
+             "__attribute__((always_inline, unused)) static inline const uint8_t *muro__find2("
+
+    assert source =~ "_mm_cmpeq_epi8"
+    assert source =~ "__builtin_ctz"
+
+    File.write!(Path.join(dir, "add.muro"), """
+    def sum : run Π (+ s : Slice) → U64 :=
+      λ (+ s : Slice) →
+        sliceFold U64 (toU64 0)
+          (λ (b : U8) → λ (_r : Slice) → λ (n : U64) → addi n (asU64 b))
+          s
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "add.muro"), "--backend", "c"])
+    end)
+
+    add = File.read!(Path.join(dir, "add.c"))
+    refute add =~ "muro__find2"
+    refute add =~ "muro__find3"
+
+    out =
+      link_run!(dir, "hot", """
+      #include "hot.h"
+      #include <stdio.h>
+      #include <string.h>
+
+      static muro__slice sl(const char *s) {
+        return (muro__slice){(const uint8_t *)s, strlen(s)};
+      }
+
+      int main(void) {
+        char gap[64];
+        memset(gap, 'a', 40);
+        memcpy(gap + 40, ":\\n", 2);
+        gap[42] = 0;
+        printf("%llu %llu %llu %llu %llu %llu %llu %llu %llu\\n",
+          (unsigned long long)phOf(scan(sl(""))),
+          (unsigned long long)phOf(scan(sl("abcdef"))),
+          (unsigned long long)phOf(scan(sl("a:b"))),
+          (unsigned long long)phOf(scan(sl("abc:def\\n"))),
+          (unsigned long long)phOf(scan(sl("\\n:"))),
+          (unsigned long long)phOf(scan(sl(gap))),
+          (unsigned long long)countLF(sl("a\\nb\\n")),
+          (unsigned long long)countLF(sl("abc")),
+          (unsigned long long)countSep(sl("a b,c\\td")));
+        return 0;
+      }
+      """)
+
+    assert out == "0 0 1 2 2 2 2 0 3\n"
+  end
+
   test "a closed numeral is the successor chain" do
     dir = tmp_dir()
     path = Path.join(dir, "two.muro")

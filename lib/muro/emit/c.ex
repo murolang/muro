@@ -34,7 +34,11 @@ defmodule Muro.Emit.C do
   breaks. When the step's value is a run that updates a by-value
   struct accumulator, the loop calls that run's in-place twin
   `muro__io_N` on the accumulator's address instead of copying the
-  struct into the call and back.
+  struct into the call and back. When every octet outside a set of one,
+  two, or three constant bytes returns that accumulator unchanged, the
+  loop advances to the next such byte with `muro__find2` or
+  `muro__find3` and runs the body only there. A step the emitter cannot
+  read that way keeps the byte-by-byte loop.
 
   Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor of an all-nullary data type is the
@@ -948,6 +952,8 @@ defmodule Muro.Emit.C do
   # that returns the accumulator unchanged assigns nothing. A body that
   # ends in `{:inout, f, args}` calls `f`'s in-place twin on the
   # accumulator's address. The body sees only the loop's binders.
+  # `inert_skip/5` jumps to the next byte that can change the
+  # accumulator, when that set is one, two, or three constants.
   defp emit_ir0({:loop, caps, octet, rest, acc, z, s, stop, body}, env, st, _expect) do
     {on, _, _} = octet
     {rn, _, _} = rest
@@ -977,12 +983,22 @@ defmodule Muro.Emit.C do
 
       with {:ok, {stop_src, st}} <- loop_stop(stop, accv, alay, st),
            {:ok, {bpre, step, st}} <- loop_body(body, an, accv, benv, cty, st) do
+        {skip, st} = inert_skip(body, on, an, cur, st)
         octet_decl = if uses?(body, on), do: "uint8_t #{bv} = #{cur}.p[0];", else: ""
         rest_decl = "#{sl} #{rv} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};"
         rest_void = if uses?(body, rn), do: "", else: "(void)#{rv};"
 
         inner =
-          squash([stop_src, octet_decl, rest_decl, rest_void, bpre, step, "#{cur} = #{rv};"])
+          squash([
+            stop_src,
+            skip,
+            octet_decl,
+            rest_decl,
+            rest_void,
+            bpre,
+            step,
+            "#{cur} = #{rv};"
+          ])
 
         loop =
           squash([
@@ -2458,6 +2474,7 @@ defmodule Muro.Emit.C do
       "#include \"#{stem}.h\"",
       "#include <stdlib.h>",
       if(bytes?, do: "#include <string.h>\n" <> bytes_helpers(), else: ""),
+      find_helpers(Enum.join(funs ++ extras, "\n")),
       nat_helpers(),
       unit_helpers(),
       if(strings?, do: "#include <string.h>\n" <> string_helpers(bytes?), else: ""),
@@ -2857,6 +2874,98 @@ defmodule Muro.Emit.C do
     |> String.trim()
   end
 
+  # Emitted only when a loop jumps to a short set of bytes. A book
+  # with no such loop keeps the bytes it had. SSE2 compares sixteen
+  # octets and stops on the first equal one. The scalar tail is that
+  # same scan, and it is the whole function where SSE2 is absent.
+  # Either way the pointer is the first hit or the end, never a later
+  # octet. `memcpy` keeps the wide load off the slice's element type.
+  defp find_helpers(text) when is_binary(text) do
+    want2 = String.contains?(text, g("find2") <> "(")
+    want3 = String.contains?(text, g("find3") <> "(")
+
+    parts =
+      []
+      |> then(fn acc -> if want2, do: acc ++ [find2_helper()], else: acc end)
+      |> then(fn acc -> if want3, do: acc ++ [find3_helper()], else: acc end)
+
+    case parts do
+      [] ->
+        ""
+
+      ps ->
+        """
+        #include <string.h>
+        #if defined(__SSE2__)
+        #include <emmintrin.h>
+        #endif
+        """ <> Enum.join(ps, "\n\n")
+    end
+  end
+
+  defp find2_helper do
+    name = g("find2")
+
+    """
+    __attribute__((always_inline, unused)) static inline const uint8_t *#{name}(const uint8_t *p, size_t n, uint8_t a, uint8_t b) {
+      const uint8_t *end = p + n;
+    #if defined(__SSE2__)
+      const __m128i va = _mm_set1_epi8((char)a);
+      const __m128i vb = _mm_set1_epi8((char)b);
+      while (n >= 16) {
+        __m128i v;
+        __m128i m;
+        unsigned bits;
+        memcpy(&v, p, 16);
+        m = _mm_or_si128(_mm_cmpeq_epi8(v, va), _mm_cmpeq_epi8(v, vb));
+        bits = (unsigned)_mm_movemask_epi8(m);
+        if (bits) return p + (unsigned)__builtin_ctz(bits);
+        p += 16;
+        n -= 16;
+      }
+    #endif
+      while (p < end) {
+        if (*p == a || *p == b) return p;
+        p++;
+      }
+      return end;
+    }
+    """
+    |> String.trim()
+  end
+
+  defp find3_helper do
+    name = g("find3")
+
+    """
+    __attribute__((always_inline, unused)) static inline const uint8_t *#{name}(const uint8_t *p, size_t n, uint8_t a, uint8_t b, uint8_t c) {
+      const uint8_t *end = p + n;
+    #if defined(__SSE2__)
+      const __m128i va = _mm_set1_epi8((char)a);
+      const __m128i vb = _mm_set1_epi8((char)b);
+      const __m128i vc = _mm_set1_epi8((char)c);
+      while (n >= 16) {
+        __m128i v;
+        __m128i m;
+        unsigned bits;
+        memcpy(&v, p, 16);
+        m = _mm_or_si128(_mm_cmpeq_epi8(v, va), _mm_or_si128(_mm_cmpeq_epi8(v, vb), _mm_cmpeq_epi8(v, vc)));
+        bits = (unsigned)_mm_movemask_epi8(m);
+        if (bits) return p + (unsigned)__builtin_ctz(bits);
+        p += 16;
+        n -= 16;
+      }
+    #endif
+      while (p < end) {
+        if (*p == a || *p == b || *p == c) return p;
+        p++;
+      }
+      return end;
+    }
+    """
+    |> String.trim()
+  end
+
   defp emit_cap_list(caps, env, st) do
     Enum.reduce_while(caps, {:ok, [], [], st}, fn {_name, tm}, {:ok, pres, exprs, st} ->
       case emit_ir(tm, env, st, "void *") do
@@ -3001,6 +3110,549 @@ defmodule Muro.Emit.C do
       {:ok, {pre, assign(acc, ex), Map.put(st, :dest, d)}}
     end
   end
+
+  # A byte the step returns the accumulator for is inert. When every
+  # inert byte is outside a set of one, two, or three constants, the
+  # loop may jump to the next byte in that set and run the body once
+  # there. The index is the distance from the slice the fold was given,
+  # so moving the cursor keeps it. A false hit is an earlier byte, and
+  # the body is the identity on it, so the loop still moves forward.
+  # Anything the walk cannot read (an unconstrained change, a test it
+  # does not know, an empty set, a set larger than three) keeps today's
+  # loop. The predicates are recognised by their bodies, not their names.
+  defp inert_skip(body, oct, acc, cur, st) do
+    case hot_bytes(body, oct, acc, st.funs) do
+      :no ->
+        {"", st}
+
+      {:ok, ks} ->
+        {hit, st} = news(st)
+        {sk, st} = news(st)
+        sl = g("slice")
+
+        src =
+          [
+            "{",
+            "const uint8_t *#{hit} = #{find_call(ks, cur)};",
+            "size_t #{sk} = (size_t)(#{hit} - #{cur}.p);",
+            "#{cur} = (#{sl}){#{hit}, #{cur}.n - #{sk}};",
+            "}",
+            "if (#{cur}.n == 0) break;"
+          ]
+          |> Enum.join("\n")
+
+        {src, st}
+    end
+  end
+
+  defp find_call([k], cur), do: "#{g("find2")}(#{cur}.p, #{cur}.n, #{k}, #{k})"
+
+  defp find_call([a, b], cur), do: "#{g("find2")}(#{cur}.p, #{cur}.n, #{a}, #{b})"
+
+  defp find_call([a, b, c], cur), do: "#{g("find3")}(#{cur}.p, #{cur}.n, #{a}, #{b}, #{c})"
+
+  defp hot_bytes(body, oct, acc, funs) do
+    case follow_step(body, oct, acc, funs, 0) do
+      {:ok, set} ->
+        ks = set |> MapSet.to_list() |> Enum.sort()
+
+        if ks != [] and length(ks) <= 3 and Enum.all?(ks, &(&1 in 0..255)),
+          do: {:ok, ks},
+          else: :no
+
+      :no ->
+        :no
+    end
+  end
+
+  # Follow a tail call that passes the octet and the accumulator once
+  # each, into that callee, and then read the body. A `let` that binds
+  # neither is substituted first. Four hops is enough for a fold that
+  # names its step; past that the byte loop stays.
+  defp follow_step(tm, oct, acc, funs, depth) do
+    case peel_lets(tm, oct, acc) do
+      :no ->
+        :no
+
+      {:ok, {:call, f, args}} ->
+        descend_step(f, args, oct, acc, funs, depth)
+
+      {:ok, {:inout, f, args}} ->
+        descend_step(f, args, oct, acc, funs, depth)
+
+      {:ok, other} ->
+        walk_hot(other, oct, acc, empty_hot(), funs)
+    end
+  end
+
+  defp descend_step(f, args, oct, acc, funs, depth) do
+    with true <- depth < 4,
+         %{} = fun <- Map.get(funs, f),
+         {:ok, oct2, acc2} <- map_step_params(fun.params, args, oct, acc) do
+      follow_step(fun.body, oct2, acc2, funs, depth + 1)
+    else
+      _ -> walk_hot({:call, f, args}, oct, acc, empty_hot(), funs)
+    end
+  end
+
+  defp map_step_params(params, args, oct, acc) do
+    pairs = Enum.zip(params, args)
+    oct_ps = for {p, {:var, ^oct}} <- pairs, do: IR.param_name(p)
+    acc_ps = for {p, {:var, ^acc}} <- pairs, do: IR.param_name(p)
+
+    if length(oct_ps) == 1 and length(acc_ps) == 1 and hd(oct_ps) != hd(acc_ps) do
+      {:ok, hd(oct_ps), hd(acc_ps)}
+    else
+      :no
+    end
+  end
+
+  defp peel_lets({:let, x, _lay, _g, val, body}, oct, acc) do
+    if x == oct or x == acc do
+      :no
+    else
+      case peel_lets(body, oct, acc) do
+        :no -> :no
+        {:ok, inner} -> {:ok, subst_term(inner, x, val)}
+      end
+    end
+  end
+
+  defp peel_lets(tm, _oct, _acc), do: {:ok, tm}
+
+  defp subst_term({:var, x}, x, val), do: val
+  defp subst_term({:var, y}, _x, _val), do: {:var, y}
+
+  defp subst_term({:let, z, lay, g, v, b}, x, val) do
+    v = subst_term(v, x, val)
+    if z == x, do: {:let, z, lay, g, v, b}, else: {:let, z, lay, g, v, subst_term(b, x, val)}
+  end
+
+  defp subst_term({:letp, a, b, e, body}, x, val) do
+    e = subst_term(e, x, val)
+
+    if x in [a, b],
+      do: {:letp, a, b, e, body},
+      else: {:letp, a, b, e, subst_term(body, x, val)}
+  end
+
+  defp subst_term({:match, scrut, arms}, x, val) when is_list(arms) do
+    {:match, subst_term(scrut, x, val), subst_arms(arms, x, val)}
+  end
+
+  defp subst_term({:match, scrut, lay, arms}, x, val) when is_list(arms) do
+    {:match, subst_term(scrut, x, val), lay, subst_arms(arms, x, val)}
+  end
+
+  defp subst_term(t, x, val) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.map(&subst_term(&1, x, val)) |> List.to_tuple()
+  end
+
+  defp subst_term(t, x, val) when is_list(t), do: Enum.map(t, &subst_term(&1, x, val))
+  defp subst_term(t, _x, _val), do: t
+
+  defp subst_arms(arms, x, val) do
+    Enum.map(arms, fn
+      {:arm, c, names, tm} = arm ->
+        if is_list(names) and x in names, do: arm, else: {:arm, c, names, subst_term(tm, x, val)}
+
+      other ->
+        subst_term(other, x, val)
+    end)
+  end
+
+  defp empty_hot, do: %{eq: nil, neq: MapSet.new(), inset: MapSet.new()}
+
+  # `{:ok, set}` is the bytes a non-identity leaf may see. `:no` means
+  # some leaf is reachable with no finite byte, so the fold is not a
+  # search for a short set.
+  defp walk_hot({:var, name}, _oct, acc, _c, _funs) when name == acc, do: {:ok, MapSet.new()}
+
+  defp walk_hot({:let, x, _lay, _g, val, body}, oct, acc, c, funs) do
+    if x == oct or x == acc do
+      :no
+    else
+      walk_hot(subst_term(body, x, val), oct, acc, c, funs)
+    end
+  end
+
+  defp walk_hot({:match, scrut, arms}, oct, acc, c, funs) when is_list(arms) do
+    walk_match_arms(arms, classify(scrut, oct, funs), oct, acc, c, funs)
+  end
+
+  defp walk_hot({:match, scrut, _lay, arms}, oct, acc, c, funs) when is_list(arms) do
+    walk_hot({:match, scrut, arms}, oct, acc, c, funs)
+  end
+
+  defp walk_hot(_tm, _oct, _acc, c, _funs), do: hot_leaf(c)
+
+  defp walk_match_arms(arms, class, oct, acc, c, funs) do
+    Enum.reduce_while(arms, {:ok, MapSet.new()}, fn arm, {:ok, accs} ->
+      case arm_hot(arm, class, oct, acc, c, funs) do
+        :no -> {:halt, :no}
+        {:ok, s} -> {:cont, {:ok, MapSet.union(accs, s)}}
+      end
+    end)
+  end
+
+  defp arm_hot({:arm, ctor, binders, body}, class, oct, acc, c, funs) when is_list(binders) do
+    if oct in binders or acc in binders do
+      :no
+    else
+      case arm_constraint(class, ctor, c) do
+        :dead -> {:ok, MapSet.new()}
+        {:ok, c2} -> walk_hot(body, oct, acc, c2, funs)
+      end
+    end
+  end
+
+  defp arm_hot(_, _, _, _, _, _), do: :no
+
+  defp arm_constraint({:bool_eq, k}, "true", c), do: put_eq(c, k)
+  defp arm_constraint({:bool_eq, k}, "false", c), do: add_neq(c, k)
+  defp arm_constraint({:bool_neq, k}, "true", c), do: add_neq(c, k)
+  defp arm_constraint({:bool_neq, k}, "false", c), do: put_eq(c, k)
+  defp arm_constraint({:and_byte, k}, "true", c), do: put_eq(c, k)
+  defp arm_constraint({:and_byte, _k}, "false", c), do: {:ok, c}
+  defp arm_constraint({:byte_in, ks}, "true", c), do: hot_in(c, ks)
+  defp arm_constraint({:byte_in, ks}, "false", c), do: add_neq_all(c, ks)
+  defp arm_constraint({:wbool_eq, k}, "wtrue", c), do: put_eq(c, k)
+  defp arm_constraint({:wbool_eq, k}, "wfalse", c), do: add_neq(c, k)
+  defp arm_constraint(_class, _ctor, c), do: {:ok, c}
+
+  defp put_eq(%{eq: eq, neq: neq} = c, k) do
+    cond do
+      eq == k ->
+        {:ok, c}
+
+      eq == nil and not MapSet.member?(neq, k) ->
+        {:ok, %{c | eq: k}}
+
+      eq == :in and MapSet.member?(c.inset, k) and not MapSet.member?(neq, k) ->
+        {:ok, %{c | eq: k}}
+
+      true ->
+        :dead
+    end
+  end
+
+  defp add_neq(%{eq: k}, k) when is_integer(k), do: :dead
+
+  defp add_neq(%{eq: :in, inset: inset, neq: neq} = c, k) do
+    inset = MapSet.delete(inset, k)
+
+    case MapSet.size(inset) do
+      0 ->
+        :dead
+
+      1 ->
+        {:ok, %{c | eq: hd(MapSet.to_list(inset)), inset: MapSet.new(), neq: MapSet.put(neq, k)}}
+
+      _ ->
+        {:ok, %{c | inset: inset, neq: MapSet.put(neq, k)}}
+    end
+  end
+
+  defp add_neq(%{neq: neq} = c, k), do: {:ok, %{c | neq: MapSet.put(neq, k)}}
+
+  defp add_neq_all(c, ks) do
+    Enum.reduce_while(ks, {:ok, c}, fn k, {:ok, c} ->
+      case add_neq(c, k) do
+        :dead -> {:halt, :dead}
+        {:ok, c2} -> {:cont, {:ok, c2}}
+      end
+    end)
+  end
+
+  defp hot_in(%{eq: eq, neq: neq, inset: inset} = c, ks) do
+    ks = MapSet.difference(ks, neq)
+
+    cond do
+      is_integer(eq) and MapSet.member?(ks, eq) ->
+        {:ok, c}
+
+      is_integer(eq) ->
+        :dead
+
+      eq == :in ->
+        both = MapSet.intersection(inset, ks)
+
+        case MapSet.size(both) do
+          0 -> :dead
+          1 -> {:ok, %{c | eq: hd(MapSet.to_list(both))}}
+          _ -> {:ok, %{c | inset: both}}
+        end
+
+      MapSet.size(ks) == 0 ->
+        :dead
+
+      MapSet.size(ks) == 1 ->
+        {:ok, %{c | eq: hd(MapSet.to_list(ks))}}
+
+      true ->
+        {:ok, %{c | eq: :in, inset: ks}}
+    end
+  end
+
+  defp hot_leaf(%{eq: k, neq: neq}) when is_integer(k) do
+    if MapSet.member?(neq, k), do: {:ok, MapSet.new()}, else: {:ok, MapSet.new([k])}
+  end
+
+  defp hot_leaf(%{eq: :in, inset: inset, neq: neq}) do
+    ks = MapSet.difference(inset, neq)
+    if MapSet.size(ks) == 0, do: {:ok, MapSet.new()}, else: {:ok, ks}
+  end
+
+  defp hot_leaf(_c), do: :no
+
+  # A scrutinee that does not mention the octet constrains the state.
+  # Both arms keep the byte constraint they already had. A call the
+  # known boolean forms do not match is opened once, when it passes the
+  # octet through, so a named test of that octet is still a byte test.
+  # Four opens is the limit; a cycle keeps the byte-by-byte loop.
+  defp classify(tm, oct, funs), do: classify_at(tm, oct, funs, 0)
+
+  defp classify_at({:let, x, _lay, _g, val, body}, oct, funs, depth) do
+    if x == oct, do: :unknown, else: classify_at(subst_term(body, x, val), oct, funs, depth)
+  end
+
+  defp classify_at(tm, oct, funs, depth) do
+    if uses?(tm, oct), do: classify_byte(tm, oct, funs, depth), else: :state
+  end
+
+  defp classify_byte({:call, f, args}, oct, funs, depth) do
+    case Map.get(funs, f) do
+      %{} = fun ->
+        case classify_fun(fun, args, oct, funs, depth) do
+          :unknown -> unfold_test(fun, args, oct, funs, depth)
+          other -> other
+        end
+
+      _ ->
+        :unknown
+    end
+  end
+
+  defp classify_byte({:wrd, :u8, :eq, args}, oct, _funs, _depth) do
+    case lit_pair(args, oct) do
+      {:ok, k} -> {:wbool_eq, k}
+      :no -> :unknown
+    end
+  end
+
+  defp classify_byte({:match, {:wrd, :u8, :eq, args}, arms}, oct, _funs, _depth) do
+    if u8eq_arms?(arms) do
+      case lit_pair(args, oct) do
+        {:ok, k} -> {:bool_eq, k}
+        :no -> :unknown
+      end
+    else
+      :unknown
+    end
+  end
+
+  defp classify_byte(
+         {:match, first,
+          [
+            {:arm, "true", [], {:con, "Bool", "false", []}},
+            {:arm, "false", [], {:con, "Bool", "true", []}}
+          ]},
+         oct,
+         funs,
+         depth
+       ) do
+    classify_not(first, oct, funs, depth)
+  end
+
+  defp classify_byte(
+         {:match, first,
+          [
+            {:arm, "true", [], second},
+            {:arm, "false", [], {:con, "Bool", "false", []}}
+          ]},
+         oct,
+         funs,
+         depth
+       ) do
+    classify_and(first, second, oct, funs, depth)
+  end
+
+  defp classify_byte(
+         {:match, first,
+          [
+            {:arm, "true", [], {:con, "Bool", "true", []}},
+            {:arm, "false", [], second}
+          ]},
+         oct,
+         funs,
+         depth
+       ) do
+    classify_or(first, second, oct, funs, depth)
+  end
+
+  defp classify_byte(_, _, _, _), do: :unknown
+
+  # Only a callee that takes the octet as exactly one argument, and
+  # does not mention it in any other argument, is a test of that octet.
+  defp unfold_test(_fun, _args, _oct, _funs, depth) when depth >= 4, do: :unknown
+
+  defp unfold_test(fun, args, oct, funs, depth) do
+    case octet_param(fun.params, args, oct) do
+      {:ok, pname} -> classify_at(fun.body, pname, funs, depth + 1)
+      :no -> :unknown
+    end
+  end
+
+  defp octet_param(params, args, oct) do
+    pairs = Enum.zip(params, args)
+    named = for {p, {:var, ^oct}} <- pairs, do: IR.param_name(p)
+    others = for {_p, arg} <- pairs, arg != {:var, oct}, do: arg
+
+    if length(named) == 1 and not Enum.any?(others, &uses?(&1, oct)) do
+      {:ok, hd(named)}
+    else
+      :no
+    end
+  end
+
+  defp classify_fun(fun, args, oct, funs, depth) do
+    cond do
+      u8eq_fun?(fun) ->
+        case lit_pair(args, oct) do
+          {:ok, k} -> {:bool_eq, k}
+          :no -> :unknown
+        end
+
+      and_fun?(fun) and length(args) == 2 ->
+        classify_and(Enum.at(args, 0), Enum.at(args, 1), oct, funs, depth)
+
+      or_fun?(fun) and length(args) == 2 ->
+        classify_or(Enum.at(args, 0), Enum.at(args, 1), oct, funs, depth)
+
+      not_fun?(fun) and length(args) == 1 ->
+        classify_not(hd(args), oct, funs, depth)
+
+      true ->
+        :unknown
+    end
+  end
+
+  defp classify_and(a, b, oct, funs, depth) do
+    case {classify_at(a, oct, funs, depth), classify_at(b, oct, funs, depth)} do
+      {:state, {:bool_eq, k}} -> {:and_byte, k}
+      {{:bool_eq, k}, :state} -> {:and_byte, k}
+      {:state, {:wbool_eq, k}} -> {:and_byte, k}
+      {{:wbool_eq, k}, :state} -> {:and_byte, k}
+      {:state, :state} -> :state
+      _ -> :unknown
+    end
+  end
+
+  defp classify_or(a, b, oct, funs, depth) do
+    case {classify_at(a, oct, funs, depth), classify_at(b, oct, funs, depth)} do
+      {:state, :state} ->
+        :state
+
+      {{:bool_eq, k}, {:bool_eq, m}} ->
+        {:byte_in, MapSet.new([k, m])}
+
+      {{:bool_eq, k}, {:byte_in, ks}} ->
+        {:byte_in, MapSet.put(ks, k)}
+
+      {{:byte_in, ks}, {:bool_eq, k}} ->
+        {:byte_in, MapSet.put(ks, k)}
+
+      {{:byte_in, ks}, {:byte_in, ms}} ->
+        {:byte_in, MapSet.union(ks, ms)}
+
+      _ ->
+        :unknown
+    end
+  end
+
+  defp classify_not(a, oct, funs, depth) do
+    case classify_at(a, oct, funs, depth) do
+      {:bool_eq, k} -> {:bool_neq, k}
+      {:wbool_eq, k} -> {:bool_neq, k}
+      :state -> :state
+      _ -> :unknown
+    end
+  end
+
+  defp u8eq_fun?(%{
+         params: params,
+         body: {:match, {:wrd, :u8, :eq, [{:var, a}, {:var, b}]}, arms}
+       }) do
+    names = Enum.map(params, &IR.param_name/1)
+    length(names) == 2 and MapSet.new(names) == MapSet.new([a, b]) and u8eq_arms?(arms)
+  end
+
+  defp u8eq_fun?(_), do: false
+
+  defp u8eq_arms?([
+         {:arm, "wtrue", [], {:con, "Bool", "true", []}},
+         {:arm, "wfalse", [], {:con, "Bool", "false", []}}
+       ]),
+       do: true
+
+  defp u8eq_arms?(_), do: false
+
+  defp and_fun?(%{
+         params: [p, q],
+         body:
+           {:match, {:var, a},
+            [
+              {:arm, "true", [], {:var, b}},
+              {:arm, "false", [], {:con, "Bool", "false", []}}
+            ]}
+       }) do
+    IR.param_name(p) == a and IR.param_name(q) == b
+  end
+
+  defp and_fun?(_), do: false
+
+  defp or_fun?(%{
+         params: [p, q],
+         body:
+           {:match, {:var, a},
+            [
+              {:arm, "true", [], {:con, "Bool", "true", []}},
+              {:arm, "false", [], {:var, b}}
+            ]}
+       }) do
+    IR.param_name(p) == a and IR.param_name(q) == b
+  end
+
+  defp or_fun?(_), do: false
+
+  defp not_fun?(%{
+         params: [p],
+         body:
+           {:match, {:var, a},
+            [
+              {:arm, "true", [], {:con, "Bool", "false", []}},
+              {:arm, "false", [], {:con, "Bool", "true", []}}
+            ]}
+       }) do
+    IR.param_name(p) == a
+  end
+
+  defp not_fun?(_), do: false
+
+  defp lit_pair([a, b], oct) do
+    cond do
+      a == {:var, oct} -> u8_lit(b)
+      b == {:var, oct} -> u8_lit(a)
+      true -> :no
+    end
+  end
+
+  defp lit_pair(_, _), do: :no
+
+  defp u8_lit({:wrd, :u8, {:lit, :u8, k}, []}) when is_integer(k) and k >= 0 and k <= 255,
+    do: {:ok, k}
+
+  defp u8_lit(_), do: :no
 
   # `f`'s in-place twin on the address of the accumulator, which is the
   # argument in the place of `f`'s `inout` parameter.
