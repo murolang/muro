@@ -2,7 +2,7 @@
 title: The executable
 slug: binary
 order: 16
-summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, assembly, OTP, and MBI, init, and muro skills add.
+summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, Go, assembly, OTP, and MBI, init, and muro skills add.
 ---
 
 # The executable
@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.22.51-macos-aarch64
-muro-0.22.51-macos-x86_64
-muro-0.22.51-linux-x86_64
-muro-0.22.51-linux-aarch64
+muro-0.22.52-macos-aarch64
+muro-0.22.52-macos-x86_64
+muro-0.22.52-linux-x86_64
+muro-0.22.52-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,14 +25,14 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.22.51
+mise use -g github:murolang/muro@0.22.52
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.22.51
+mise use -g github:murolang/muro@0.22.52
 ```
 
 `mise install muro` from the mise registry follows once the assets exist. When a merge lands on main, the `Hex and tag` job in CI starts after the Elixir job on that commit succeeds. It publishes that `mix.exs` version to Hex if it is not already there, and pushes the annotated tag `vX.Y.Z` if it is missing. It does not wait for Agda or muro_visor. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. When this commit published the version or created the tag, the Release workflow builds the four files, smokes the Linux binary in a container with no Elixir and no Erlang, and attaches the assets to the GitHub release only after that smoke succeeds. A failed smoke publishes no binaries. The Hex package is already on Hex by then, and its dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
@@ -49,7 +49,7 @@ prints `Muro v` and the version, the same line as `mix muro --version`.
 
 ```
 muro check path.muro
-muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|js|mbi|fsm|exunit|pytest|rust-test|csharp-test] [--node NAME] [--imports] [--prefix TEXT] [--impl MODULE]
+muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|js|go|mbi|fsm|exunit|pytest|rust-test|csharp-test] [--node NAME] [--imports] [--prefix TEXT] [--impl MODULE] [--package NAME]
 muro gen
 muro gen --check
 muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
@@ -77,6 +77,10 @@ The executable never compiles a host application and never starts one. That hold
 
 `muro gen` with `kind: :c` writes the `.c` target and the `.h` beside it. The source includes that header by the target stem (`src/rounding.c` from `muro/half.muro` includes `rounding.h`). It does not build a NIF.
 
+## Go
+
+`muro emit path.muro --backend go` writes `<stem>.go` next to the book and prints that path. `--package NAME` sets the package clause. Absent, the package is the book stem. The file is the session machines, the choreography monitors, and the keyed-family dispatchers. It does not emit `run`. `muro gen` with `kind: :go` writes that same file. The entry omits `module`. The target ends with `.go`. The page is [Go](go.md).
+
 ## muro.toml
 
 `muro.exs` stays the Mix manifest. A project without `mix.exs` uses `muro.toml` at its root. A `Cargo.toml` may carry the same table as `[package.metadata.muro]` instead of a separate file. Loading more than one of `muro.exs`, a `:muro` key, `muro.toml`, and `[package.metadata.muro]` is an error, and the message names each of them:
@@ -88,7 +92,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.22.51"
+muro = "0.22.52"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 
@@ -101,11 +105,11 @@ git = "https://example.com/rounding.git"
 tag = "v1"
 ```
 
-`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, `rust-test`, or `csharp-test`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
+`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `go`, `mbi`, `fsm`, `exunit`, `pytest`, `rust-test`, or `csharp-test`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
 
 `book` and `target` are required. Paths are relative to the project root. A book or a target outside the project is refused, a missing book is refused, and a duplicate target is refused. The errors name the entry index, as they do for `muro.exs`.
 
-`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `pytest`, `rust-test`, or `csharp-test` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). A `js` target ends with `.mjs`, and the declaration file is written beside it (`src/rounding.mjs` also reserves `src/rounding.d.ts`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. An `otp` target ends with `.ex`. An `mbi` target ends with `.mbi`. The `pytest` target ends with `.py`. `impl` on that entry is a Python module name (`"host.rounding"`). A `rust-test` target ends with `.rs`, and `impl` on that entry is a Rust path (`"crate::rounding"`). A `csharp-test` target ends with `.cs`, and `impl` on that entry is a C# type name (`"Host.Rounding"`). `imports` is a boolean and is valid on `exunit`, `pytest`, `rust-test`, and `csharp-test`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
+`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, `asm`, `otp`, `js`, `go`, `mbi`, `pytest`, `rust-test`, or `csharp-test` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). A `js` target ends with `.mjs`, and the declaration file is written beside it (`src/rounding.mjs` also reserves `src/rounding.d.ts`). A `go` target ends with `.go`. `--package` is a flag of `muro emit`, not a manifest key. The package clause is the book stem unless that command sets it. That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. An `otp` target ends with `.ex`. An `mbi` target ends with `.mbi`. The `pytest` target ends with `.py`. `impl` on that entry is a Python module name (`"host.rounding"`). A `rust-test` target ends with `.rs`, and `impl` on that entry is a Rust path (`"crate::rounding"`). A `csharp-test` target ends with `.cs`, and `impl` on that entry is a C# type name (`"Host.Rounding"`). `imports` is a boolean and is valid on `exunit`, `pytest`, `rust-test`, and `csharp-test`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
 
 `muro_deps` is the same set of packages as `muro_deps:` in `muro.exs`. Each name is a table:
 

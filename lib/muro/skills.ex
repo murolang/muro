@@ -62,7 +62,7 @@ defmodule Muro.Skills do
   @begin "<!-- muro:begin -->"
   @close "<!-- muro:end -->"
 
-  @backends ~w(elixir c rust zig asm otp js mbi fsm exunit pytest rust-test csharp-test)
+  @backends ~w(elixir c rust zig asm otp js go mbi fsm exunit pytest rust-test csharp-test)
 
   @skill_order [:book, :check, :emit, :gen, :synth, :contracts]
 
@@ -80,7 +80,7 @@ defmodule Muro.Skills do
     emit: %{
       source: :for_agents,
       description:
-        "Emit a checked Muro book to elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, rust-test, or csharp-test. Use when choosing a backend or an emit flag."
+        "Emit a checked Muro book to elixir, c, rust, zig, asm, otp, js, go, mbi, fsm, exunit, pytest, rust-test, or csharp-test. Use when choosing a backend or an emit flag."
     },
     gen: %{
       source: :gen,

@@ -438,6 +438,7 @@ defmodule Muro.Init do
   end
 
   defp example_book(:otp), do: "ping.muro"
+  defp example_book(:go), do: "ping.muro"
   defp example_book(:mbi), do: "one.muro"
   defp example_book(_backend), do: "rounding.muro"
 
@@ -455,6 +456,7 @@ defmodule Muro.Init do
   defp example_paths(:zig), do: {"src/rounding.zig", nil}
   defp example_paths(:asm), do: {"src/rounding.s", nil}
   defp example_paths(:js), do: {"src/rounding.mjs", nil}
+  defp example_paths(:go), do: {"src/ping.go", nil}
   defp example_paths(:otp), do: {"lib/ping_otp.ex", nil}
   defp example_paths(:mbi), do: {"src/one.mbi", nil}
   defp example_paths(nil), do: {"src/rounding.rs", nil}

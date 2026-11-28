@@ -50,7 +50,8 @@ defmodule Muro.CliHelpTest do
     "https://muro-lang.dev/llms.txt"
   ]
 
-  @book "def one : run Nat := 0\n"
+  # A run, so the run backends emit, and one session, so --backend go does.
+  @book "def one : run Nat := 0\nsession ping := recv Nat end\n"
 
   test "no arguments, --help, -h, and help print one usage on stdout" do
     version = Mix.Tasks.Muro.version()
@@ -220,6 +221,7 @@ defmodule Muro.CliHelpTest do
           "zig",
           "asm",
           "js",
+          "go",
           "otp",
           "fsm",
           "exunit",
@@ -245,7 +247,7 @@ defmodule Muro.CliHelpTest do
     assert mix_gen =~ "adds the header except on an `:mbi` image"
 
     assert mix_gen =~
-             "Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi`"
+             "Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:go`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi`"
 
     init = Muro.CLI.Init.help()
     assert init =~ "https://muro-lang.dev/docs/binary"

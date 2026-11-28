@@ -24,7 +24,7 @@ defmodule Muro.Manifest do
       `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`,
       `kind: :csharp_test`, `kind: :fsm`,
       `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :otp`,
-      `kind: :js`, or `kind: :mbi`.
+      `kind: :js`, `kind: :go`, or `kind: :mbi`.
       For `:exunit`, an optional `impl:` alias is the implementation
       the suite tests by default. For `:pytest`, `impl:` is a Python
       module name. For `:rust_test`, `impl:` is a Rust path. For
@@ -50,10 +50,10 @@ defmodule Muro.Manifest do
   `MURO_IMPL_FOO_BAR`.
 
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
-  `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:otp`, `:mbi`, `:pytest`, `:rust_test`,
+  `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:go`, `:otp`, `:mbi`, `:pytest`, `:rust_test`,
   or `:csharp_test`
   entry may omit it. The target then ends with `.c`, `.rs`, `.zig`,
-  `.s`, `.mjs`, `.ex`, `.mbi`, `.py`, or `.cs`. A `:rust` target and a `:rust_test` target
+  `.s`, `.mjs`, `.go`, `.ex`, `.mbi`, `.py`, or `.cs`. A `:rust` target and a `:rust_test` target
   both end in `.rs`. The kind tells them apart. A `:c` target also reserves the `.h`
   written beside it, and a `:js` target reserves the `.d.ts`. That path is checked as a target before
   generation: a directory is refused, and it is a duplicate when
@@ -722,6 +722,7 @@ defmodule Muro.Manifest do
              :asm,
              :otp,
              :js,
+             :go,
              :mbi,
              :fsm,
              :exunit,
@@ -735,7 +736,7 @@ defmodule Muro.Manifest do
         {nil,
          errors ++
            [
-             "manifest backend: must be elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, rust-test, or csharp-test, got: #{inspect(backend)}"
+             "manifest backend: must be elixir, c, rust, zig, asm, otp, js, go, mbi, fsm, exunit, pytest, rust-test, or csharp-test, got: #{inspect(backend)}"
            ]}
     end
   end
@@ -923,6 +924,7 @@ defmodule Muro.Manifest do
              :zig,
              :asm,
              :js,
+             :go,
              :mbi
            ] ->
         {kind, []}
@@ -1119,7 +1121,19 @@ defmodule Muro.Manifest do
   end
 
   defp validate_module(nil, _index, kind)
-       when kind in [:c, :rust, :zig, :asm, :js, :otp, :mbi, :pytest, :rust_test, :csharp_test],
+       when kind in [
+              :c,
+              :rust,
+              :zig,
+              :asm,
+              :js,
+              :go,
+              :otp,
+              :mbi,
+              :pytest,
+              :rust_test,
+              :csharp_test
+            ],
        do: []
 
   defp validate_module(module, index, _kind) do
@@ -1135,6 +1149,7 @@ defmodule Muro.Manifest do
   defp extension_errors(:zig, rel, index), do: extension_errors(rel, ".zig", :zig, index)
   defp extension_errors(:asm, rel, index), do: extension_errors(rel, ".s", :asm, index)
   defp extension_errors(:js, rel, index), do: extension_errors(rel, ".mjs", :js, index)
+  defp extension_errors(:go, rel, index), do: extension_errors(rel, ".go", :go, index)
   defp extension_errors(:pytest, rel, index), do: extension_errors(rel, ".py", :pytest, index)
 
   defp extension_errors(:rust_test, rel, index),

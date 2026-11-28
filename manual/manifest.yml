@@ -65,7 +65,7 @@ pages:
   - file: emit.md
     slug: emit
     title: Emit
-    summary: What becomes Elixir. C, Rust, Zig, and JavaScript print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+    summary: What becomes Elixir. C, Rust, Zig, and JavaScript print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. Go writes the session machines, the choreography monitors, and the keyed-family dispatchers. A cross is one call on a named node. Spec and evidence are omitted from a run.
   - file: exunit.md
     slug: exunit
     title: Closed equations as tests
@@ -89,7 +89,7 @@ pages:
   - file: binary.md
     slug: binary
     title: The executable
-    summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, and assembly, init, and muro skills add.
+    summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, Go, and assembly, init, and muro skills add.
   - file: repr.md
     slug: repr
     title: Host representations
@@ -134,6 +134,10 @@ pages:
     slug: fsm
     title: State machines
     summary: Each session endpoint is a pure state machine, a keyed family is one dispatcher, a choreography is one monitor, and a family of a choreography is that monitor per key. The transport stays with the host.
+  - file: go.md
+    slug: go
+    title: Go
+    summary: Sessions, choreography monitors, and keyed-family dispatchers as one Go file. Runs, data declarations, and repr codecs are not emitted.
   - file: mutate.md
     slug: mutate
     title: Mutation

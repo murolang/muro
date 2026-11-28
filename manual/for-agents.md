@@ -107,6 +107,10 @@ lib/muro/emit/pytest.ex closed equations → one pytest module (`--backend pytes
 lib/muro/emit/rust_test.ex closed equations → one Rust test file (`--backend rust-test`, `kind: :rust_test`)
 lib/muro/emit/csharp_test.ex closed equations → one C# xUnit file (`--backend csharp-test`, `kind: :csharp_test`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked peer is monitored and a `:DOWN` that is not a halt takes the failure arm; a book with no mark emits the previous module (`--backend otp`)
+lib/muro/emit/go.ex     one Go file for the session machines, the choreography monitors, and the keyed-family dispatchers; the plan is the one `fsm.ex` checks; a refused step is an error; the file does not emit `run` (`--backend go`, `kind: :go`)
+lib/muro/emit/go_session.ex  one session as a Go struct, `New`, `Step`, `Expected`, and `Down` when the book marks a party
+lib/muro/emit/go_choreo.ex   one choreography monitor, and one per-key monitor for a family of a choreography
+lib/muro/emit/go_family.ex   one keyed-family dispatcher; `go_family_engine.go` is the step, the same decisions as `Muro.Family.Step`
 lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (an open instance leaves), `withdraw/2` (a held instance leaves without opening and does not count as resolved), `skip/3`, `drop_key/2`, `skip_below/2` (one floor for every key: an arrival at or below it is the departed refusal), `finish` (`:resolve` or `:rerun`), and `check_trace/1` (arrivals, resolutions, withdrawals, skips, drops, `skip_below`, reruns, and, on a family marked `may revert`, `{:revert, id}`, and `{party, id, send|recv|down}`). A rule is `never held`, `held while earlier unresolved`, `held while any unresolved`, `held while <kind> unresolved`, or `held until <kind> resolved`. A comma lists kinds, and repeating `held` mixes the two. `earlier_resolved k kind` names the earlier instances of that key and kind. `some_resolved k kind` is one resolved instance of that kind. `waiting_on/2` names what still blocks a held id; each meeting end has `finish`, and `:rerun` when one family uses that end; two families on one end name `finish` on the family child; the transport stays with the host (`--backend fsm`). A family may be marked `may redeliver`, `may revert`, or both, after the kind and before the rules, in either order. With `may revert` the child also has `revert/2`: a resolved row stays until `revert`, `drop_key`, or `skip_below`, `revert` puts it back to `:open`, and `check_trace` accepts `{:revert, id}`. A family without the mark emits no `revert`. `contract name : idempotent init`, `contract name : in order`, and `contract name : dense`, and `skip` after an entry, are [State machines](fsm.md#an-external-contract). A choreography that checks is a monitor child with `init/0`, `step/4`, `step/5`, `choose/3`, `expected/1`, `done?/1`, and `check_trace/1,2`, stepped with global events in the written order; a `seen` of a choreography is a session child, and a `seen` of a talk is refused. A family of a choreography that checks is a child with `init/0`, `step_shared/4,5` and `choose_shared/3` for the shared preamble, `step/5,6` and `choose/4` per key (refused until the preamble is done), `expected_shared/1`, `shared_done?/1`, `expected/2`, `done?/2`, `keys/1`, and `check_trace/1,2` over `{:shared, event}` and `{:key, key, event}`.
 lib/muro/emit/c_session.ex a session endpoint is a pure step written as C; the actions are the ones the state machine takes, init takes `uint64_t`, and `down` is not emitted (`--backend c`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
@@ -164,7 +168,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.51`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.52`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -177,7 +181,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.51.ez
+mix archive.install muro-0.22.52.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -192,7 +196,7 @@ mix archive.install github murolang/muro
 
 A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Use `mix muro.check` and `mix muro.emit`.
 
-`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `mix muro.emit path.muro --backend pytest` prints one pytest module for those same equations. `mix muro.emit path.muro --backend rust-test` prints one Rust test file for those same equations. `mix muro.emit path.muro --backend csharp-test` prints one C# xUnit file for those same equations. `--imports` with any of these four also collects the files the book imports directly. The pages are [Closed equations as tests](exunit.md), [Pytest](pytest.md), [Rust tests](rust-test.md), and [C# tests](csharp-test.md).
+`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `mix muro.emit path.muro --backend pytest` prints one pytest module for those same equations. `mix muro.emit path.muro --backend rust-test` prints one Rust test file for those same equations. `mix muro.emit path.muro --backend csharp-test` prints one C# xUnit file for those same equations. `--imports` with any of these four also collects the files the book imports directly. `mix muro.emit path.muro --backend go` writes `<stem>.go` next to the file: the session machines, the choreography monitors, and the keyed-family dispatchers. `--package NAME` sets the package clause. The page is [Go](go.md). The pages are [Closed equations as tests](exunit.md), [Pytest](pytest.md), [Rust tests](rust-test.md), and [C# tests](csharp-test.md).
 
 `--backend zig` writes `<name>.zig` next to the file. `zig` translates it. The proof stops at the run image.
 
@@ -237,7 +241,7 @@ Bundled examples: `.agents/skills/muro-book/examples/`. Nearest example: `.agent
 The skills live under `.agents/skills/`. This command does not write `.cursor/skills` or `.claude/skills`, so a project-local editor config is left alone. Copy or symlink the `muro-*` skill folders there if your editor only loads those paths.
 <!-- muro:end -->
 
-`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. A pytest entry names a `.py` target and may omit the module. A Rust test entry names a `.rs` target and may omit the module. A C# test entry names a `.cs` target and may omit the module. An `:otp` entry names a `.ex` target and may omit the module. An `:mbi` entry names a `.mbi` target and may omit the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, `[kind: :pytest, impl: "host.rounding"]`, `[kind: :rust_test, impl: "crate::rounding"]`, `[kind: :csharp_test, impl: "Host.Rounding"]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, `[kind: :asm]`, `[kind: :js]`, `[kind: :otp]`, or `[kind: :mbi]`. `imports:` is valid on an exunit entry, a pytest entry, a Rust test entry, and a C# test entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions. One invocation type-checks each book once and emits every target of that book from that copy, including both files of a C target. `--skip-check` does not type-check; `--check --skip-check` still compares bytes. The default type-checks.
+`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. A pytest entry names a `.py` target and may omit the module. A Rust test entry names a `.rs` target and may omit the module. A C# test entry names a `.cs` target and may omit the module. An `:otp` entry names a `.ex` target and may omit the module. An `:mbi` entry names a `.mbi` target and may omit the module. A Go entry names a `.go` target and may omit the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, `[kind: :pytest, impl: "host.rounding"]`, `[kind: :rust_test, impl: "crate::rounding"]`, `[kind: :csharp_test, impl: "Host.Rounding"]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, `[kind: :asm]`, `[kind: :js]`, `[kind: :go]`, `[kind: :otp]`, or `[kind: :mbi]`. `imports:` is valid on an exunit entry, a pytest entry, a Rust test entry, and a C# test entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions. One invocation type-checks each book once and emits every target of that book from that copy, including both files of a C target. `--skip-check` does not type-check; `--check --skip-check` still compares bytes. The default type-checks.
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md` or the skill files. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
 
@@ -271,7 +275,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family (a family of a choreography prints `family <name>: <choreography> per key`) and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom (`dne: depends on classical.LEM` when the entry file is `lib/muro/std/classical.muro`), then:
 
 ```
-Muro v0.22.51
+Muro v0.22.52
 All terms check. Evidence never becomes a run.
 ```
 
@@ -400,7 +404,7 @@ Read every error. The checker reports each definition that fails, in book order,
 
 Emit only after a successful check. Spec and evidence are omitted. Erased arguments are dropped. Only `run` terms are emitted.
 
-Docs: [Emit](https://muro-lang.dev/docs/emit), [MBI images](https://muro-lang.dev/docs/mbi), [State machines](https://muro-lang.dev/docs/fsm), [Closed equations as tests](https://muro-lang.dev/docs/exunit), [Pytest](https://muro-lang.dev/docs/pytest), [Rust tests](https://muro-lang.dev/docs/rust-test), [C# tests](https://muro-lang.dev/docs/csharp-test), [Host representations](https://muro-lang.dev/docs/repr).
+Docs: [Emit](https://muro-lang.dev/docs/emit), [MBI images](https://muro-lang.dev/docs/mbi), [State machines](https://muro-lang.dev/docs/fsm), [Go](https://muro-lang.dev/docs/go), [Closed equations as tests](https://muro-lang.dev/docs/exunit), [Pytest](https://muro-lang.dev/docs/pytest), [Rust tests](https://muro-lang.dev/docs/rust-test), [C# tests](https://muro-lang.dev/docs/csharp-test), [Host representations](https://muro-lang.dev/docs/repr).
 
 ## Backends
 
@@ -413,6 +417,7 @@ Docs: [Emit](https://muro-lang.dev/docs/emit), [MBI images](https://muro-lang.de
 - `asm` — `<name>.s`, Cortex-M0, Nat run.
 - `otp` — a GenServer for a conforming process. A marked peer is monitored; a `:DOWN` that is not a halt takes the failure arm.
 - `js` — `<name>.mjs` and `<name>.d.ts`; Node runs the module.
+- `go` — `<stem>.go`, one package for the session machines, the choreography monitors, and the keyed-family dispatchers. It does not emit `run`. `--package NAME` sets the package clause and is valid only with this backend. Callers synchronize, or give each goroutine its own value.
 - `mbi` — `<stem>.mbi` for muro-beam, exactly one graded run. A run it calls is a closed definition. Writing the file is not acceptance; muro-beam checks the image again. `--backend beam` is refused; use `mbi`. The file is not Erlang BEAM bytecode.
 - `fsm` — one state machine per session, one dispatcher per keyed family, one monitor per choreography, and one per-key dispatcher per family of a choreography, on stdout. The transport stays with the host.
 - `exunit` — one ExUnit module for the book's closed equations, on stdout.
@@ -430,6 +435,8 @@ muro emit path.muro --backend zig
 muro emit path.muro --backend asm
 muro emit path.muro --backend otp
 muro emit path.muro --backend js
+muro emit path.muro --backend go
+muro emit path.muro --backend go --package NAME
 muro emit path.muro --backend mbi
 muro emit path.muro --backend fsm
 muro emit path.muro --backend exunit

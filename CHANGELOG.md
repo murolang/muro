@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.22.52
+
+`mix muro.emit path.muro --backend go` writes `<stem>.go` next to the book. The file is one package for the session machines, the choreography monitors, and the keyed-family dispatchers that `--backend fsm` already plans. `--package NAME` sets the package clause. Absent, the name comes from the book stem. A refused step is an error value (`IllegalTransitionError`, `FamilyError`). The file does not panic, has no `init`, and imports only the standard library. One session, monitor, or dispatcher is not safe for concurrent use: the caller synchronizes, or gives each goroutine its own value. `may redeliver` is a comment. `Revert` is always emitted, and an unmarked family returns `ErrUnmarked`. A failure arm of `finish` or `leave` is emitted. Any other failure arm is `go: failure arm continues the protocol`. A jump from one session to another is `go: unsupported protocol`.
+
+Pure functions, data declarations, and `repr` codecs are not in this file. `Muro.IR` elaborates closed runs. It does not present data declarations or `repr` codecs as a lowering a backend can consume from `elaborate/1` alone. A Go image of `run` would be a second emitter. A book with neither a session nor a choreography is refused with `<file> has no session to emit`.
+
+The live checks were run with go1.27.4. Adding Go to the CI runners is a follow-up, and it needs a workflow change. A machine without `go` skips those tests with `go is not available` and runs the rest.
+
+### Tests
+
+- `test/muro_emit_go_test.exs`: the generated header, the package clause, reserved names, the error types, a deterministic file, and the refusals. These tests do not run `go`.
+- `test/muro_emit_go_live_test.exs`: `gofmt -l`, `go vet`, and `go test` on the emitted file, and `go test -race` when a C compiler is present. The traces are the ones the Elixir session machine and `Muro.Family.Step` accept and refuse, including a seeded walk. One test owns a dispatcher per goroutine. Another shares one dispatcher under `sync.Mutex` in the test file. The file skips with `go is not available` when `go version` does not exit 0.
+- `test/fixtures/emit-examples.digest`: the Go image of every example that is not a keyed family.
+
+### Manual
+
+- Go, Emit, State machines, Sessions, Committed modules, The executable, For agents, AGENTS.md, llms.txt, and README: the Go file, the package clause, the error values, and what is not emitted.
+
+### Package
+
+- Version 0.22.52.
+
 ## 0.22.51
 
 A `U64` string fold is recognized only when the index is a pass-through. The low three bits, and whether a state absorbs, are read at indices 0, 1, 5, and 40, and a move advances the high bits by one. The step is also walked: those bits are only divided by eight, added to one, multiplied by eight, and packed back, and a condition never reads them. Anything the walk does not know stays a byte loop. A step gated on `endIx == 5` matched the 0.22.50 probe and returned 18 for `"\n\n"` where the book returns 16. That fold stays a byte loop.

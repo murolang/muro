@@ -118,6 +118,21 @@ defmodule Muro.Emit.Fsm do
     end
   end
 
+  # The Go backend renders this plan. It does not rebuild the protocol
+  # tree, the choreography monitor, or the family readiness check.
+  @doc false
+  def prepare(book, path, opts \\ []) when is_list(book) do
+    plan(book, path, opts)
+  end
+
+  # Step string to the failure arm zipped onto that protocol node.
+  # `{why, skeleton}`. `why` is `nil` or `{type, name}`. The skeleton is
+  # what `Session.carry_kept/3` returns.
+  @doc false
+  def failure_table(book, st) when is_list(book) and is_map(st) do
+    fail_tables(book, st)
+  end
+
   defp plan(book, path, opts) do
     with {:ok, st} <- plan_sessions(book, path, opts),
          {:ok, globals} <- plan_globals(st) do
