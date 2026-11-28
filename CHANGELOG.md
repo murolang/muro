@@ -22,13 +22,37 @@ The live checks were run with go1.27.4. Adding Go to the CI runners is a follow-
 
 - Version 0.22.52.
 
+## 0.22.51
+
+A `U64` string fold is recognized only when the index is a pass-through. The low three bits, and whether a state absorbs, are read at indices 0, 1, 5, and 40, and a move advances the high bits by one. The step is also walked: those bits are only divided by eight, added to one, multiplied by eight, and packed back, and a condition never reads them. Anything the walk does not know stays a byte loop. A step gated on `endIx == 5` matched the 0.22.50 probe and returned 18 for `"\n\n"` where the book returns 16. That fold stays a byte loop.
+
+A match on an enum of two constructors is an `if` on the first tag and an `else if` on the second. Any other tag calls `abort`, the same as the `default` of a wider enum. `Bool` stays `true`, then `false`. `Opt` and `WBool` are unchanged.
+
+`always_inline` applies only to a `static` function. An exported hot callee keeps an ordinary definition. The calls in the file go to a `static` `always_inline` copy of that body, and the export returns the copy.
+
+On the muro-http request step, a keep-alive GET is 7,966.5, 7,977.2, and 8,010.5 instructions per request (loads 2.31, 4.29, and 4.29; mean 7,984.7; 200,000 requests, errors 0). The 0.22.50 figure was 7,987, and the gate is 8,000. The recognition fix does not change that image. The `else if` and the static copy are in this measurement. Split headers (`--split-headers=200`) measured 17,894.5 while the load rose from 3.32 to 11.63 (0.22.50 was 18,089). A late-body POST (`--split-body=200`) measured 12,411.6 while the load rose from 11.63 to 19.02 (0.22.50 was 12,135). Hand C on this machine is about 5,965, 15,769, and 12,457.
+
+### Tests
+
+- `test/muro_emit_c_test.exs`: a fold gated on `endIx == 5` stays a byte loop and agrees with the book, including 16 for `"\n\n"`. The hot-octet and string scans are compiled again with every `#if defined(__SSE2__)` rewritten to `#if 0`, and they print the same oracle.
+- `test/muro_emit_c_enum_test.exs`: `Bool` `not` is an `if` on `true` and an `else if` on `false`. The only `switch` is the three-constructor `Color`.
+- `test/fixtures/c-session` (`computed`, `field-bindings`, `pair-bindings`), `test/fixtures/native-main` (`fnv_slice`), and `test/fixtures/emit-examples.digest`: the C images.
+
+### Manual
+
+- Emit, Shared calls: the index has to be a pass-through, a two-constructor match aborts on any other tag, and `always_inline` is for a `static` run.
+
+### Package
+
+- Version 0.22.51.
+
 ## 0.22.50
 
 The C backend writes a tail match where its value goes. A match or a let in tail position no longer fills a zeroed temporary that each enclosing match copies up. In a run that returns anything but a string, each arm returns. In a fold step the arm assigns the accumulator. In a run that updates its argument in place the arm assigns through the pointer, and an arm that leaves the argument unchanged assigns nothing. A nested match writes into the outer match's result. A match in any other position keeps its own temporary. `sliceUntil` and `sliceAfter` find the octet with `memchr`. The emitted functions, their names, parameters, and results are unchanged.
 
 On the muro-http request step (`step.muro`, Phase 1b of the IR plan), a keep-alive GET drops from 11,784 to 8,843 instructions per request on x86-64 at `-O2`. The hand-written C step is about 5,950. The per-octet scan loop keeps its state in registers instead of copying the state struct at each match level.
 
-A byte fold whose step returns the accumulator unchanged outside a set of two or three constants jumps to the next such octet. `muro__find2` and `muro__find3` compare sixteen octets with SSE2 and stop on the first hit. The scalar tail is that same scan, and it is the whole function where SSE2 is absent. On this machine that pass takes the same GET from 8,852 to 8,656 (reps 8,665.4 at load 0.65 and 8,646.8 at load 0.28).
+A byte fold whose step returns the accumulator unchanged outside a set of one, two, or three constants jumps to the next such octet. `muro__find2` and `muro__find3` compare sixteen octets with SSE2 and stop on the first hit. The scalar tail is that same scan, and it is the whole function where SSE2 is absent. On this machine that pass takes the same GET from 8,852 to 8,656 (reps 8,665.4 at load 0.65 and 8,646.8 at load 0.28).
 
 A fold of `U64` whose step is the border automaton of one octet string scans for that string. The low three bits are the matched length and the bits above them are the index. A hit packs the accept state with the end of the match. A miss runs the automaton on the unmatched suffix, so the packed state is the one the byte loop returns. A scalar run with no loop that a byte loop reaches, and whose body is no wider than the name step, is `always_inline`. A wider run stays a call. A match on an enum of two constructors, with an arm for each and no binders, is an `if` on the first tag. The `else` is the second constructor. A wider enum stays a `switch`.
 
