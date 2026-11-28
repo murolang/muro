@@ -1110,13 +1110,13 @@ defmodule Muro.EmitCTest do
     |> Enum.uniq()
   end
 
-  defp link_run!(dir, stem, main) do
+  defp link_run!(dir, stem, main, extra \\ []) do
     File.write!(Path.join(dir, "main.c"), main)
-    cc!(dir, "#{stem}.c", "#{stem}.o")
-    cc!(dir, "main.c", "main.o")
+    cc!(dir, "#{stem}.c", "#{stem}.o", extra)
+    cc!(dir, "main.c", "main.o", extra)
 
     {link, status} =
-      System.cmd("cc", ["#{stem}.o", "main.o", "-o", "main_bin"],
+      System.cmd("cc", extra ++ ["#{stem}.o", "main.o", "-o", "main_bin"],
         cd: dir,
         stderr_to_stdout: true
       )
@@ -1232,36 +1232,37 @@ defmodule Muro.EmitCTest do
     refute add =~ "muro__find3"
     refute add =~ "_mm_set1_epi8"
 
-    out =
-      link_run!(dir, "hot", """
-      #include "hot.h"
-      #include <stdio.h>
-      #include <string.h>
+    hot_main = """
+    #include "hot.h"
+    #include <stdio.h>
+    #include <string.h>
 
-      static muro__slice sl(const char *s) {
-        return (muro__slice){(const uint8_t *)s, strlen(s)};
-      }
+    static muro__slice sl(const char *s) {
+      return (muro__slice){(const uint8_t *)s, strlen(s)};
+    }
 
-      int main(void) {
-        char gap[64];
-        memset(gap, 'a', 40);
-        memcpy(gap + 40, ":\\n", 2);
-        gap[42] = 0;
-        printf("%llu %llu %llu %llu %llu %llu %llu %llu %llu\\n",
-          (unsigned long long)phOf(scan(sl(""))),
-          (unsigned long long)phOf(scan(sl("abcdef"))),
-          (unsigned long long)phOf(scan(sl("a:b"))),
-          (unsigned long long)phOf(scan(sl("abc:def\\n"))),
-          (unsigned long long)phOf(scan(sl("\\n:"))),
-          (unsigned long long)phOf(scan(sl(gap))),
-          (unsigned long long)countLF(sl("a\\nb\\n")),
-          (unsigned long long)countLF(sl("abc")),
-          (unsigned long long)countSep(sl("a b,c\\td")));
-        return 0;
-      }
-      """)
+    int main(void) {
+      char gap[64];
+      memset(gap, 'a', 40);
+      memcpy(gap + 40, ":\\n", 2);
+      gap[42] = 0;
+      printf("%llu %llu %llu %llu %llu %llu %llu %llu %llu\\n",
+        (unsigned long long)phOf(scan(sl(""))),
+        (unsigned long long)phOf(scan(sl("abcdef"))),
+        (unsigned long long)phOf(scan(sl("a:b"))),
+        (unsigned long long)phOf(scan(sl("abc:def\\n"))),
+        (unsigned long long)phOf(scan(sl("\\n:"))),
+        (unsigned long long)phOf(scan(sl(gap))),
+        (unsigned long long)countLF(sl("a\\nb\\n")),
+        (unsigned long long)countLF(sl("abc")),
+        (unsigned long long)countSep(sl("a b,c\\td")));
+      return 0;
+    }
+    """
 
-    assert out == "0 0 1 2 2 2 2 0 3\n"
+    assert link_run!(dir, "hot", hot_main) == "0 0 1 2 2 2 2 0 3\n"
+    # The scalar tail of muro__find2 and muro__find3, with SSE2 off.
+    assert link_run!(dir, "hot", hot_main, ~w(-mno-sse2)) == "0 0 1 2 2 2 2 0 3\n"
   end
 
   test "a U64 fold that is a string automaton scans for that string" do
@@ -1352,55 +1353,57 @@ defmodule Muro.EmitCTest do
     refute source =~ "muro__find2"
     refute source =~ "muro__find3"
 
-    out =
-      link_run!(dir, "crlf", """
-      #include "crlf.h"
-      #include <stdio.h>
-      #include <string.h>
+    crlf_main = """
+    #include "crlf.h"
+    #include <stdio.h>
+    #include <string.h>
 
-      static muro__slice sl(const char *s) {
-        return (muro__slice){(const uint8_t *)s, strlen(s)};
-      }
+    static muro__slice sl(const char *s) {
+      return (muro__slice){(const uint8_t *)s, strlen(s)};
+    }
 
-      static muro__slice raw(const char *s, size_t n) {
-        return (muro__slice){(const uint8_t *)s, n};
-      }
+    static muro__slice raw(const char *s, size_t n) {
+      return (muro__slice){(const uint8_t *)s, n};
+    }
 
-      int main(void) {
-        char a40[44];
-        char gap[34];
-        char crs[33];
-        memset(a40, 'a', 40);
-        memcpy(a40 + 40, "\\r\\n\\r\\n", 4);
-        memset(gap, 'a', 34);
-        memcpy(gap + 20, "\\r\\n\\rX", 4);
-        memcpy(gap + 30, "\\r\\n\\r\\n", 4);
-        memset(crs, '\\r', 30);
-        memcpy(crs + 30, "\\n\\r\\n", 3);
-        printf("%llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\\n",
-          (unsigned long long)crlfFold(sl("")),
-          (unsigned long long)crlfFold(sl("abc")),
-          (unsigned long long)crlfFold(sl("\\r")),
-          (unsigned long long)crlfFold(sl("\\r\\n")),
-          (unsigned long long)crlfFold(sl("\\r\\n\\r")),
-          (unsigned long long)crlfFold(sl("\\r\\n\\r\\n")),
-          (unsigned long long)crlfFold(sl("xx\\r\\n\\r\\n")),
-          (unsigned long long)crlfFold(sl("\\r\\r\\n\\r\\n")),
-          (unsigned long long)crlfFold(raw(a40, 44)),
-          (unsigned long long)crlfFold(sl("\\r\\n\\r\\r\\n\\r\\n")),
-          (unsigned long long)crlfFold(sl("\\r\\n\\r\\nxxx")),
-          (unsigned long long)crlfFold(raw(gap, 34)),
-          (unsigned long long)crlfFold(raw(crs, 33)),
-          (unsigned long long)lfFold(sl("")),
-          (unsigned long long)lfFold(sl("\\n")),
-          (unsigned long long)lfFold(sl("\\n\\n")),
-          (unsigned long long)lfFold(sl("a\\n\\nb")),
-          (unsigned long long)lfFold(sl("\\n\\n\\n")));
-        return 0;
-      }
-      """)
+    int main(void) {
+      char a40[44];
+      char gap[34];
+      char crs[33];
+      memset(a40, 'a', 40);
+      memcpy(a40 + 40, "\\r\\n\\r\\n", 4);
+      memset(gap, 'a', 34);
+      memcpy(gap + 20, "\\r\\n\\rX", 4);
+      memcpy(gap + 30, "\\r\\n\\r\\n", 4);
+      memset(crs, '\\r', 30);
+      memcpy(crs + 30, "\\n\\r\\n", 3);
+      printf("%llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\\n",
+        (unsigned long long)crlfFold(sl("")),
+        (unsigned long long)crlfFold(sl("abc")),
+        (unsigned long long)crlfFold(sl("\\r")),
+        (unsigned long long)crlfFold(sl("\\r\\n")),
+        (unsigned long long)crlfFold(sl("\\r\\n\\r")),
+        (unsigned long long)crlfFold(sl("\\r\\n\\r\\n")),
+        (unsigned long long)crlfFold(sl("xx\\r\\n\\r\\n")),
+        (unsigned long long)crlfFold(sl("\\r\\r\\n\\r\\n")),
+        (unsigned long long)crlfFold(raw(a40, 44)),
+        (unsigned long long)crlfFold(sl("\\r\\n\\r\\r\\n\\r\\n")),
+        (unsigned long long)crlfFold(sl("\\r\\n\\r\\nxxx")),
+        (unsigned long long)crlfFold(raw(gap, 34)),
+        (unsigned long long)crlfFold(raw(crs, 33)),
+        (unsigned long long)lfFold(sl("")),
+        (unsigned long long)lfFold(sl("\\n")),
+        (unsigned long long)lfFold(sl("\\n\\n")),
+        (unsigned long long)lfFold(sl("a\\n\\nb")),
+        (unsigned long long)lfFold(sl("\\n\\n\\n")));
+      return 0;
+    }
+    """
 
-    assert out == "0 24 9 18 27 36 52 44 356 60 36 276 268 0 9 18 26 18\n"
+    crlf_oracle = "0 24 9 18 27 36 52 44 356 60 36 276 268 0 9 18 26 18\n"
+    assert link_run!(dir, "crlf", crlf_main) == crlf_oracle
+    # The scalar #else of the needle scan, with SSE2 off.
+    assert link_run!(dir, "crlf", crlf_main, ~w(-mno-sse2)) == crlf_oracle
   end
 
   # The border table of "\n\n" holds at index 5 and nowhere else. A
