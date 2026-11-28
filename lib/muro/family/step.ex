@@ -1411,22 +1411,28 @@ defmodule Muro.Family.Step do
 
   defp blocks_classic?(_row, _index, _mode), do: false
 
-  defp wait_row?(%{index: ix, id: id, kind: kind, phase: phase})
-       when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and
-              phase in [:open, :held],
-       do: true
+  defp wait_row?(row), do: row_phase?(row, [:open, :held])
 
-  defp wait_row?(_), do: false
+  # A retained resolved row of this key is not a wait hit and is not
+  # `:bad`. The marked dispatcher continues past it the same way.
+  defp scan_row?(row), do: row_phase?(row, [:open, :held, :resolved])
+
+  defp row_phase?(%{index: ix, id: id, kind: kind, phase: phase}, phases)
+       when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind),
+       do: phase in phases
+
+  defp row_phase?(_row, _phases), do: false
 
   # Halt on a row that is not a row, and on a same-key row the
-  # dispatcher would refuse. Another key stays out of the comparison.
+  # dispatcher would refuse. A retained `:resolved` row continues.
+  # Another key stays out of the comparison.
   defp scan_key(rows, key) do
     case Enum.reduce_while(rows, [], fn row, acc ->
            cond do
              not row_shape?(row) ->
                {:halt, :bad}
 
-             row.key == key and not wait_row?(row) ->
+             row.key == key and not scan_row?(row) ->
                {:halt, :bad}
 
              row.key == key ->

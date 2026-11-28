@@ -1256,6 +1256,8 @@ defmodule Muro.Parser do
 
   defp revert_only, do: "may revert is only a mark on a family"
 
+  defp family_marks_only, do: "may redeliver and may revert are the marks on a family"
+
   defp refuse_stray_may_fail(s) do
     cond do
       may_revert_mark?(s) ->
@@ -1396,7 +1398,7 @@ defmodule Muro.Parser do
           {:error, err(s, may_fail_only())}
 
         true ->
-          {:error, err(s, redeliver_only())}
+          {:error, err(s, family_marks_only())}
       end
     else
       {:ok, %{redeliver: redeliver, revert: revert}, s}

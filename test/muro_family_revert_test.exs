@@ -79,6 +79,15 @@ defmodule Muro.FamilyRevertTest do
              kinds(~w(front)) <>
                @meet <>
                """
+               family rollout : slot per key of Step may foobar
+                 front never held
+               """
+           ) =~ "may redeliver and may revert are the marks on a family"
+
+    assert parse_error(
+             kinds(~w(front)) <>
+               @meet <>
+               """
                family rollout : slot per key of Step
                  front never held
                may revert
@@ -218,6 +227,7 @@ defmodule Muro.FamilyRevertTest do
     assert {:ok, :open, 1, st} = Step.arrive(st, "a", :front, 1, held_behind)
     assert {:ok, [], st} = Step.resolve(st, 1, held_behind)
     assert Step.view(st) == [{"a", 0, 0, :worker, :held}, {"a", 1, 1, :front, :resolved}]
+    assert {:ok, %{kinds: [:schema], ids: []}} = Step.waiting_on(st, 0, held_behind)
     assert {:ok, st} = Step.revert(st, 1, held_behind)
     assert Step.view(st) == [{"a", 0, 0, :worker, :held}, {"a", 1, 1, :front, :open}]
     assert st.kinds == %{}
@@ -263,6 +273,92 @@ defmodule Muro.FamilyRevertTest do
     assert {:ok, :held, 1, st} = Step.arrive(st, "a", :worker, 1, @front)
     assert {:ok, kept} = Step.skip_below(st, 0)
     assert Step.view(kept) == Step.view(st)
+  end
+
+  test "waiting_on continues past a retained resolved row" do
+    held_behind = %{
+      {:mark, :revert} => true,
+      front: :never,
+      schema: :never,
+      worker: {:named, %{while: [], until: [:front, :schema]}}
+    }
+
+    st = Step.empty()
+    assert {:ok, :held, 0, st} = Step.arrive(st, "a", :worker, 0, held_behind)
+    assert {:ok, :open, 1, st} = Step.arrive(st, "a", :front, 1, held_behind)
+    assert {:ok, [], st} = Step.resolve(st, 1, held_behind)
+    assert {:ok, %{kinds: [:schema], ids: []}} = Step.waiting_on(st, 0, held_behind)
+    assert {:ok, :open, 2, st} = Step.arrive(st, "a", :schema, 2, held_behind)
+    assert {:ok, %{kinds: [:schema], ids: [2]}} = Step.waiting_on(st, 0, held_behind)
+
+    st = Step.empty()
+    assert {:ok, :open, 0, st} = Step.arrive(st, "a", :slot, 0, @any)
+    assert {:ok, :held, 1, st} = Step.arrive(st, "a", :slot, 1, @any)
+    assert {:ok, :held, 2, st} = Step.arrive(st, "a", :slot, 2, @any)
+    assert {:ok, [{1, "a", :slot}], st} = Step.resolve(st, 0, @any)
+
+    assert Step.view(st) == [
+             {"a", 0, 0, :slot, :resolved},
+             {"a", 1, 1, :slot, :open},
+             {"a", 2, 2, :slot, :held}
+           ]
+
+    assert {:ok, %{kinds: [:slot], ids: [1]}} = Step.waiting_on(st, 2, @any)
+    assert {:error, {:opened, 1}} = Step.waiting_on(st, 1, @any)
+    assert {:error, {:unknown, 0}} = Step.waiting_on(st, 0, @any)
+  end
+
+  test "the dispatcher waiting_on agrees with Step on a retained resolved row" do
+    until_src =
+      kinds(~w(front schema worker)) <>
+        @meet <>
+        """
+        family rollout : slot per key of Step may revert
+          front never held
+          schema never held
+          worker held until front resolved, schema resolved
+        """
+
+    until_rules = %{
+      {:mark, :revert} => true,
+      front: :never,
+      schema: :never,
+      worker: {:named, %{while: [], until: [:front, :schema]}}
+    }
+
+    {until_disp, _parent, _emitted} = compile!(until_src, Rollout)
+
+    until_trace = [
+      {:arrive, "a", :worker, 0},
+      {:arrive, "a", :front, 1},
+      {:resolved, 1}
+    ]
+
+    assert drive(until_disp, until_rules, until_trace) != :error
+
+    any_src =
+      kinds(~w(entry)) <>
+        @meet <>
+        """
+        family rollout : slot per key of Step may revert
+          entry held while any unresolved
+        """
+
+    any_rules = %{
+      {:mark, :revert} => true,
+      entry: :any
+    }
+
+    {any_disp, _parent, _emitted} = compile!(any_src, Rollout)
+
+    any_trace = [
+      {:arrive, "a", :entry, 0},
+      {:arrive, "a", :entry, 1},
+      {:arrive, "a", :entry, 2},
+      {:resolved, 0}
+    ]
+
+    assert drive(any_disp, any_rules, any_trace) != :error
   end
 
   test "the dispatcher revert agrees with Step, including facts and withdrawn ids" do
