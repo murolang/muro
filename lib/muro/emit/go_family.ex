@@ -15,6 +15,14 @@ defmodule Muro.Emit.Go.Family do
   def engine, do: @engine_body
 
   @doc false
+  def engine_idents do
+    ~r/^(?:func|type|var)\s+([A-Za-z_][A-Za-z0-9_]*)/m
+    |> Regex.scan(@engine_body)
+    |> Enum.map(fn [_, name] -> name end)
+    |> MapSet.new()
+  end
+
+  @doc false
   def compile(family, book) when is_map(family) and is_list(book) do
     data = Enum.find(book, &(&1[:kind] == :data and &1.name == family.key))
 

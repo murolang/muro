@@ -64,14 +64,50 @@ defmodule Muro.EmitGoTest do
   end
 
   test "a book with no session is the same refusal as the state machine" do
-    assert {:error, "examples/half_ok.muro has no session to emit"} =
-             render("examples/half_ok.muro")
+    assert {:error, msg} = render("examples/half_ok.muro")
+    assert {:error, ^msg} = fsm("examples/half_ok.muro")
+    assert msg == "examples/half_ok.muro has no session to emit"
+
+    src = render_text!("only.muro", "session ping := recv Nat end\n")
+    assert src =~ "type Ping struct"
+    assert src =~ "func NewPing() Ping"
+    refute src =~ "has no session to emit"
 
     assert {:error, "go: repr payload"} =
              render_text("repr.muro", """
              repr Nat := integer
              session s := send Nat end
              """)
+  end
+
+  test "constructor parameters are claimed and a quiet jump does not emit a negative index" do
+    src =
+      render_text!("claimed.muro", """
+      session box (Box : Nat) (Nat : Nat) (Value : Nat) (string : Nat) (nil : Nat) (func : Nat) (a-b : Nat) (a_b : Nat) := send Nat end
+      session loop := send Nat loop
+      session again (k : Nat) := send Nat (again k)
+      """)
+
+    assert src =~
+             "func NewBox(Box_2 int, Nat_2 int, Value_2 int, string_2 int, nil_2 int, func_2 int, a_b int, a_b_2 int) (Box, error)"
+
+    assert src =~ "\"Box\": Nat(Box_2)"
+    assert src =~ "\"Nat\": Nat(Nat_2)"
+    assert src =~ "\"Value\": Nat(Value_2)"
+    assert src =~ "\"string\": Nat(string_2)"
+    assert src =~ "\"nil\": Nat(nil_2)"
+    assert src =~ "\"func\": Nat(func_2)"
+    assert src =~ "\"a-b\": Nat(a_b)"
+    assert src =~ "\"a_b\": Nat(a_b_2)"
+    refute src =~ "func NewBox(Box int"
+    refute src =~ "jok-1"
+    refute src =~ "j-1,"
+    refute src =~ "Nat(j-1)"
+    assert src =~ "m.state = AgainStateStuck"
+    assert src =~ "return nil"
+
+    assert Muro.Emit.Go.Session.string_lit("a\"b\\c\n" <> <<1>>) ==
+             "\"a\\\"b\\\\c\\n\\x01\""
   end
 
   test "mix muro.emit --backend go writes the file and refuses the other flags" do
@@ -146,6 +182,17 @@ defmodule Muro.EmitGoTest do
   defp render!(path, opts \\ []) do
     assert {:ok, src} = render(path, opts)
     src
+  end
+
+  defp fsm(path) do
+    case Muro.Load.file(path) do
+      {:ok, book} ->
+        book = book |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
+        Muro.Emit.Fsm.prepare(book, path, [])
+
+      {:error, msg} ->
+        {:error, msg}
+    end
   end
 
   defp render(path, opts \\ []) do

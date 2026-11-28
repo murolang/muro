@@ -2,6 +2,7 @@ defmodule Muro.Emit.Go.Session do
   @moduledoc false
 
   alias Muro.Emit.Go.Match
+  alias Muro.Emit.Name
 
   @action ~w(send recv dsend drecv esend erecv isend irecv choose branch)a
 
@@ -37,7 +38,7 @@ defmodule Muro.Emit.Go.Session do
             {:ok,
              %{
                name: sess.name,
-               params: Enum.map(entry.params, &to_string/1),
+               params: Enum.map(entry.params, &Match.source_name/1),
                start: normalize(start),
                states: ordered(acc),
                match: acc.match,
@@ -48,7 +49,7 @@ defmodule Muro.Emit.Go.Session do
   end
 
   @doc false
-  def render(image, go_name, mod) do
+  def render(image, go_name, mod, taken) when is_struct(taken, MapSet) do
     states = image.states
     labels = Map.new(states, &{&1.id, &1.label})
     done = go_name <> "StateDone"
@@ -70,10 +71,12 @@ defmodule Muro.Emit.Go.Session do
       needs: MapSet.new()
     }
 
-    {start_state, start_env, needs} = start_code(image, ctx)
+    {start_state, _start_env, needs} = start_code(image, ctx)
     ctx = %{ctx | needs: MapSet.union(ctx.needs, needs)}
     {methods, needs} = methods(image, ctx)
     ctx = %{ctx | needs: MapSet.union(ctx.needs, needs)}
+    taken = MapSet.union(taken, session_defined(image, go_name, ctx))
+    {ctor, taken} = constructor(image, go_name, start_state, taken)
 
     src = """
     // #{go_name} is one end of session #{image.name}.
@@ -110,7 +113,7 @@ defmodule Muro.Emit.Go.Session do
     }
 
     // New#{go_name} starts #{go_name} at its first step.
-    #{constructor(image, go_name, start_state, start_env)}
+    #{ctor}
 
     // State returns the resting position. The zero value is invalid.
     func (m *#{go_name}) State() #{go_name}State {
@@ -158,42 +161,50 @@ defmodule Muro.Emit.Go.Session do
     #{methods}
     """
 
-    {src, ctx.needs, image.match}
+    {src, ctx.needs, image.match, taken}
   end
 
   defp invalid_string, do: "invalid"
 
-  defp constructor(%{params: []}, go, start_state, _env) do
-    """
-    func New#{go}() #{go} {
-    \treturn #{go}{state: #{start_state}, ready: true, env: map[string]Value{}}
-    }
-    """
+  defp constructor(%{params: []}, go, start_state, taken) do
+    {"""
+     func New#{go}() #{go} {
+     \treturn #{go}{state: #{start_state}, ready: true, env: map[string]Value{}}
+     }
+     """, taken}
   end
 
-  defp constructor(%{params: params, name: session}, go, start_state, _env) do
-    args = Enum.map_join(params, ", ", fn name -> "#{go_arg(name)} int" end)
+  defp constructor(%{params: params, name: session}, go, start_state, taken) do
+    {spellings, taken} =
+      Enum.map_reduce(params, taken, fn name, taken ->
+        Name.claim(go_base(name), taken)
+      end)
+
+    args = Enum.map_join(spellings, ", ", &"#{&1} int")
 
     checks =
-      params
+      spellings
       |> Enum.with_index(1)
-      |> Enum.map_join("", fn {name, i} ->
+      |> Enum.map_join("", fn {spelling, i} ->
+        message = string_lit("session #{session}: argument #{i} is not a nat")
+
         """
-        \tif #{go_arg(name)} < 0 {
-        \t\treturn #{go}{}, &ArgumentError{Message: "session #{escape(session)}: argument #{i} is not a nat"}
+        \tif #{spelling} < 0 {
+        \t\treturn #{go}{}, &ArgumentError{Message: #{message}}
         \t}
         """
       end)
 
     binds =
       params
-      |> Enum.map_join(", ", fn name -> "#{Match.gq(name)}: Nat(#{go_arg(name)})" end)
+      |> Enum.zip(spellings)
+      |> Enum.map_join(", ", fn {name, spelling} -> "#{Match.gq(name)}: Nat(#{spelling})" end)
 
-    """
-    func New#{go}(#{args}) (#{go}, error) {
-    #{checks}\treturn #{go}{state: #{start_state}, ready: true, env: map[string]Value{#{binds}}}, nil
-    }
-    """
+    {"""
+     func New#{go}(#{args}) (#{go}, error) {
+     #{checks}\treturn #{go}{state: #{start_state}, ready: true, env: map[string]Value{#{binds}}}, nil
+     }
+     """, taken}
   end
 
   defp start_code(image, ctx) do
@@ -446,14 +457,16 @@ defmodule Muro.Emit.Go.Session do
       end)
 
     n = length(args)
+    # `0..-1` is `[0, -1]`. A jump with no actuals must not emit `jok-1`.
+    indices = 0..(n - 1)//1
 
     pairs =
       params
-      |> Enum.zip(0..(n - 1))
+      |> Enum.zip(indices)
       |> Enum.map_join(", ", fn {name, i} -> "#{Match.gq(name)}: Nat(j#{i})" end)
 
     checks =
-      Enum.map_join(0..(n - 1), "", fn i ->
+      Enum.map_join(indices, "", fn i ->
         line(ind, "if !jok#{i} {") <>
           line(ind + 1, "m.env = env") <>
           line(ind + 1, "m.state = #{ctx.stuck}") <>
@@ -574,16 +587,48 @@ defmodule Muro.Emit.Go.Session do
   defp stop?(%{fail: %{to: :stop}}), do: true
   defp stop?(_), do: false
 
-  defp go_arg(name) do
-    base = name |> String.replace(~r/[^0-9A-Za-z_]/, "_") |> String.trim("_")
-    base = if base == "" or base =~ ~r/^[0-9]/, do: "p_" <> base, else: base
+  defp session_defined(image, go, ctx) do
+    consts =
+      [ctx.invalid, ctx.done, ctx.stuck] ++
+        if(ctx.has_stop, do: [ctx.stop], else: []) ++
+        Enum.map(image.states, &(go <> "State" <> &1.label))
 
-    if base in ~w(break default func interface select case defer go map struct chan else goto package switch const fallthrough if range type continue for import return var),
-      do: base <> "_k",
-      else: base
+    match_names =
+      Enum.map(image.match.order, fn key ->
+        {name, _src} = image.match.fns[key]
+        name
+      end)
+
+    MapSet.new([go, go <> "State", "New" <> go | consts ++ match_names])
   end
 
-  defp escape(s), do: String.replace(s, "\"", "")
+  defp go_base(name) do
+    base =
+      name
+      |> String.replace(~r/[^0-9A-Za-z_]/, "_")
+      |> String.replace(~r/_+/, "_")
+      |> String.trim("_")
+
+    if base == "" or base =~ ~r/^[0-9]/, do: "p_" <> base, else: base
+  end
+
+  @doc false
+  def string_lit(s) when is_binary(s) do
+    body = s |> String.to_charlist() |> Enum.map_join(&escape_cp/1)
+    "\"" <> body <> "\""
+  end
+
+  defp escape_cp(?\\), do: "\\\\"
+  defp escape_cp(?"), do: "\\\""
+  defp escape_cp(?\n), do: "\\n"
+  defp escape_cp(?\r), do: "\\r"
+  defp escape_cp(?\t), do: "\\t"
+
+  defp escape_cp(c) when c >= 0 and (c < 0x20 or c == 0x7F) do
+    "\\x" <> Base.encode16(<<c>>, case: :lower)
+  end
+
+  defp escape_cp(c) when c in 0..0x10FFFF, do: <<c::utf8>>
 
   defp ordered(acc) do
     acc.states
@@ -963,6 +1008,12 @@ defmodule Muro.Emit.Go.Match do
   def describe({:bnat, _}), do: "nat"
   def describe(_), do: "value"
 
+  # `to_string(nil)` is `""`. A parameter named `nil` is that atom, and the
+  # source spelling is `nil`.
+  @doc false
+  def source_name(name) when is_atom(name), do: Atom.to_string(name)
+  def source_name(name) when is_binary(name), do: name
+
   @doc false
   def gq(s) when is_binary(s) do
     "\"" <>
@@ -993,7 +1044,7 @@ defmodule Muro.Emit.Go.Match do
   end
 
   defp ix_go({:var, name}, env, i) when is_binary(name) or is_atom(name) do
-    {"n#{i}", "ok#{i}", ["n#{i}, ok#{i} := muroNat(#{env}, #{gq(to_string(name))})"],
+    {"n#{i}", "ok#{i}", ["n#{i}, ok#{i} := muroNat(#{env}, #{gq(source_name(name))})"],
      MapSet.new([:nat])}
   end
 

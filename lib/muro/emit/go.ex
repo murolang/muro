@@ -11,6 +11,8 @@ defmodule Muro.Emit.Go do
   @keywords ~w(break default func interface select case defer go map struct chan else goto package switch const fallthrough if range type continue for import return var)
   @predeclared ~w(any bool byte comparable complex64 complex128 error false float32 float64 int int8 int16 int32 int64 rune string true uint uint8 uint16 uint32 uint64 uintptr iota nil append cap clear close complex copy delete imag len make max min new panic print println real recover)
   @reserved ~w(IllegalTransitionError ErrIllegalTransition ArgumentError ErrArgument FamilyError ErrFamily ErrDuplicate ErrDeparted ErrUnknown ErrHeld ErrOpened ErrResolved ErrWithdrawn ErrHeldBy ErrLive ErrKind ErrBadState ErrIndex ErrUnmarked ErrUnfinished Value Event Send Recv Phase PhaseOpen PhaseHeld PhaseResolved Outcome OutcomeResolve OutcomeRerun Released Row Unit Nat Bit0 Bit1 Con Pair Record Vec Pick0 Pick1 String Error)
+  # Package-level helpers the preludes define that are not in `@reserved`.
+  @helpers ~w(muroIllegal muroEvent muroClone muroNat muroDown muroSortRecord valKind valUnit valNat valBit0 valBit1 valCon valPair valRecord valVec valPick0 valPick1)
 
   @doc false
   def render(book, path, opts \\ []) when is_list(book) and is_binary(path) and is_list(opts) do
@@ -82,7 +84,7 @@ defmodule Muro.Emit.Go do
          {:ok, families, used} <- compile_families(plan, book, used),
          {:ok, globals, ctx, used} <- compile_globals(plan, ctx, used),
          {:ok, cfams, _used} <- compile_cfams(plan, globals, used) do
-      {session_src, needs} = render_sessions(sessions)
+      {session_src, needs} = render_sessions(sessions, param_scope(used, families))
       preambles = Map.new(plan.cfams, &{&1.plan, &1.preamble})
       {global_src, gneeds} = render_globals(globals, preambles)
       {family_src, fneeds} = render_families(families)
@@ -190,11 +192,27 @@ defmodule Muro.Emit.Go do
     end)
   end
 
-  defp render_sessions(sessions) do
-    Enum.reduce(sessions, {"", MapSet.new()}, fn {image, go}, {src, needs} ->
-      {piece, more, _match} = Session.render(image, go, image)
-      {src <> piece <> "\n", MapSet.union(needs, more)}
+  defp render_sessions(sessions, taken) do
+    Enum.reduce(sessions, {"", MapSet.new(), taken}, fn {image, go}, {src, needs, taken} ->
+      {piece, more, _match, taken} = Session.render(image, go, image, taken)
+      {src <> piece <> "\n", MapSet.union(needs, more), taken}
     end)
+    |> then(fn {src, needs, _taken} -> {src, needs} end)
+  end
+
+  # Constructor parameters are claimed against this set. `@reserved` is
+  # already in `used`. Keywords and predeclared identifiers are not:
+  # a parameter keeps the source spelling, so `string` and `nil` reach Go
+  # as themselves. The family engine's names are in the file only when a
+  # keyed family is.
+  defp param_scope(used, families) do
+    taken =
+      [@keywords, @predeclared, @helpers]
+      |> Enum.concat()
+      |> MapSet.new()
+      |> MapSet.union(used)
+
+    if families == [], do: taken, else: MapSet.union(taken, Family.engine_idents())
   end
 
   defp render_globals(globals, preambles) do

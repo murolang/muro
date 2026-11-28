@@ -130,6 +130,42 @@ defmodule Muro.EmitGoLiveTest do
     go_run(nums_path, nums_only(nums))
   end
 
+  test "claimed parameters and a zero-argument jump pass go vet" do
+    claimed =
+      """
+      session box (Box : Nat) (Nat : Nat) (Value : Nat) (string : Nat) (nil : Nat) (func : Nat) (a-b : Nat) (a_b : Nat) := send Nat end
+      session loop := send Nat loop
+      session again (k : Nat) := send Nat (again k)
+      """
+
+    go_run_text("claimed.muro", claimed, """
+    package claimed
+
+    import "testing"
+
+    func TestBuilds(t *testing.T) {
+    \tm, err := NewBox(1, 2, 3, 4, 5, 6, 7, 8)
+    \tif err != nil {
+    \t\tt.Fatal(err)
+    \t}
+    \tif err := m.Step(Send{Value: Nat(0)}); err != nil {
+    \t\tt.Fatal(err)
+    \t}
+    \tloop := NewLoop()
+    \tif err := loop.Step(Send{Value: Nat(1)}); err != nil {
+    \t\tt.Fatal(err)
+    \t}
+    \tagain, err := NewAgain(3)
+    \tif err != nil {
+    \t\tt.Fatal(err)
+    \t}
+    \tif err := again.Step(Send{Value: Nat(1)}); err != nil {
+    \t\tt.Fatal(err)
+    \t}
+    }
+    """)
+  end
+
   test "a choreography monitor agrees with the state machine" do
     parent = fsm!("examples/release-plan.muro")
     mod = child(parent, "plan")
