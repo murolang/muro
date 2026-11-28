@@ -20,20 +20,20 @@ defmodule Mix.Tasks.Muro.Gen do
   set `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`,
   `kind: :csharp_test`, `kind: :fsm`,
   `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :otp`,
-  `kind: :js`, or `kind: :mbi`.
+  `kind: :js`, `kind: :go`, or `kind: :mbi`.
   For `:exunit`, `impl: An.Adapter` and `imports: true`. For `:pytest`,
   `impl:` is a Python module name. For `:rust_test`, `impl:` is a Rust
   path. For `:csharp_test`, `impl:` is a C# type name. A `:c`, `:rust`,
-  `:zig`, `:asm`, `:otp`, `:js`, `:mbi`,
+  `:zig`, `:asm`, `:otp`, `:js`, `:go`, `:mbi`,
   `:pytest`, `:rust_test`, or `:csharp_test` entry may omit the module
   (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
   beside the `.c`. `:js` also writes the `.d.ts` beside the `.mjs`.
   An `:otp` target ends with `.ex` and is formatted the same way as
   an Elixir target. An `:mbi` target ends with `.mbi` and is written
   without a gen header. Formatting is left alone for `:c`, `:rust`,
-  `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi`. A pytest
+  `:zig`, `:asm`, `:js`, `:go`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi`. A pytest
   target ends with `.py`. A Rust test target ends with `.rs`. A C# test
-  target ends with `.cs`.
+  target ends with `.cs`. A Go target ends with `.go`.
   `imports:` is
   a boolean, default `false`, and is valid for `:exunit`, `:pytest`,
   `:rust_test`, and `:csharp_test`. `imports: true` also collects the closed equations

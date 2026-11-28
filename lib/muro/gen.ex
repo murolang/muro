@@ -45,7 +45,8 @@ defmodule Muro.Gen do
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
   `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
   `Muro.Emit.Asm.render/2`. A `:js` entry calls `Muro.Emit.JS.render/3`
-  and writes the `.mjs` target and the `.d.ts` beside it. An `:otp`
+  and writes the `.mjs` target and the `.d.ts` beside it. A `:go`
+  entry calls `Muro.Emit.Go.render/3` and writes a `.go` target. An `:otp`
   entry calls `Muro.Emit.Otp.render/2` and writes a `.ex` target,
   formatted like an Elixir module. An `:mbi` entry calls
   `Muro.Emit.Mbi.render/1` and writes a `.mbi` image without a gen
@@ -58,11 +59,11 @@ defmodule Muro.Gen do
   and plugins from `_build/<env>/lib/*/ebin`, the files Mix reads.
   `.ex` and `.exs` are formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi` are not formatted.
+  `:rust`, `:zig`, `:asm`, `:js`, `:go`, `:pytest`, `:rust_test`, `:csharp_test`, and `:mbi` are not formatted.
   The body hash is the emitter's text. There is no timestamp and no
   absolute path.
 
-  The header comment is `#` for Elixir and pytest, `//` for C, Rust, Zig, JavaScript,
+  The header comment is `#` for Elixir and pytest, `//` for C, Rust, Zig, JavaScript, Go,
   a Rust test file, a C# test file,
   the C header, and the declaration file, and `@` for Cortex-M assembly. The words of the two
   lines are the same.
@@ -378,7 +379,7 @@ defmodule Muro.Gen do
 
   defp render(root, entry, version, fuel, loaded, lines) do
     case Map.get(entry, :kind, :elixir) do
-      kind when kind in [:c, :rust, :zig, :asm, :js] ->
+      kind when kind in [:c, :rust, :zig, :asm, :js, :go] ->
         render_native(root, entry, version, loaded, lines, kind)
 
       :mbi ->
@@ -525,6 +526,13 @@ defmodule Muro.Gen do
 
   defp native_parts(entry, :asm, book, stem, _root) do
     case Muro.Emit.Asm.render(book, stem) do
+      {:ok, source} -> {:ok, [{entry.target, source}]}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp native_parts(entry, :go, book, stem, _root) do
+    case Muro.Emit.Go.render(book, entry.book, package: Muro.Emit.Go.package_of(stem)) do
       {:ok, source} -> {:ok, [{entry.target, source}]}
       {:error, _} = err -> err
     end

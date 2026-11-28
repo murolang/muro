@@ -25,7 +25,7 @@ defmodule Muro.Toml do
   `[[package.metadata.muro.modules]]`).
   """
 
-  @backends ~w(elixir c rust zig asm otp js mbi fsm exunit pytest rust-test csharp-test)
+  @backends ~w(elixir c rust zig asm otp js go mbi fsm exunit pytest rust-test csharp-test)
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
 
   @doc """

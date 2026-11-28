@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir, C, Rust, Zig, JavaScript, or Cortex-M assembly, a session as OTP or a state machine, a cross as a call, closed equations as ExUnit, pytest, Rust tests, or C# tests, or exactly one graded run as an .mbi image"
+  @shortdoc "Emit run definitions as Elixir, C, Rust, Zig, JavaScript, or Cortex-M assembly, a session as OTP, Go, or a state machine, a cross as a call, closed equations as ExUnit, pytest, Rust tests, or C# tests, or exactly one graded run as an .mbi image"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -12,6 +12,7 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro --backend rust
       mix muro.emit path.muro --backend zig
       mix muro.emit path.muro --backend js
+      mix muro.emit path.muro --backend go
       mix muro.emit path.muro --backend asm
       mix muro.emit path.muro --backend otp
       mix muro.emit path.muro --backend fsm
@@ -80,6 +81,13 @@ defmodule Mix.Tasks.Muro.Emit do
   JavaScript closure. A self-tail call is a loop, and other named
   recursion is trampolined. At the host boundary `I64` is a signed
   bigint. The proof stops at the run image.
+
+  `--backend go` writes `<name>.go` next to the file and prints that
+  path. The file is one package for the sessions, the choreography
+  monitors, and the keyed families. `--package` sets the package
+  clause. Absent, the name comes from the book stem. A book with no
+  session and no choreography is refused. The file imports only the
+  standard library. `go test` runs it. The proof stops at the image.
 
   `--backend asm` writes `<name>.s` next to the file and prints that
   path. The text is Thumb for Cortex-M0, for a closed `Nat` run.

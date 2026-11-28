@@ -227,6 +227,28 @@ defmodule Muro do
   end
 
   @doc """
+  Write `<name>.go` next to `path`.
+
+  The file is one package: each session, each choreography monitor,
+  and each keyed family. `package:` is the package clause. Absent,
+  the name comes from the book stem. The file imports only the
+  standard library. `go test` runs it. The proof stops at the image.
+  """
+  def emit_go(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+    package = Keyword.get(opts, :package)
+
+    with :ok <- Emit.Go.check_package(package),
+         {:ok, book} <- checked_book(path, opts),
+         {:ok, source} <- Emit.Go.render(book, path, package: package) do
+      file = Path.join(dir, stem <> ".go")
+      File.write!(file, source)
+      {:ok, [file]}
+    end
+  end
+
+  @doc """
   Write `<name>.zig` next to `path` for its run definitions.
   `zig` translates that file. The proof stops at the run image.
   """
