@@ -318,7 +318,7 @@ defmodule Muro.FamilyTest do
              """)
 
     assert msg =~
-             "expected never held, held while earlier unresolved, or held while any unresolved"
+             "expected never held, held while earlier unresolved, held while any unresolved, held while <kind> unresolved, or held until <kind> resolved"
   end
 
   # `resolved k init` is every counting init, and there may be none.
@@ -499,6 +499,8 @@ defmodule Muro.FamilyTest do
            def opened : run Nat := 0
            def resolved : run Nat := 0
            def earlier_resolved : run Nat := 0
+           def some_resolved : run Nat := 0
+           def until : run Nat := 0
            def any : run Nat := 0
            """) == :ok
 

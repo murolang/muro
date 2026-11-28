@@ -8,9 +8,12 @@ defmodule Muro.Family.Graph do
   Instances of one key may arrive in any order. An earlier creation
   index can arrive after a later one has opened.
 
-  `withdraw/3` resolves a held instance without opening it. That host
-  step is not one of the counted runs: a held signal is still opened
-  by the script, and `examples/keyed-slots.muro` keeps its count.
+  `withdraw/3` drops a held instance without opening it. The phase is
+  `:withdrawn`, neither unresolved nor resolved, so it stops blocking
+  `while`, `earlier`, and `any`, and it does not witness `until` or
+  `some_resolved`. A second withdraw is `{:error, {:resolved, id}}`.
+  That host step is not one of the counted runs: a held signal is still
+  opened by the script, and `examples/keyed-slots.muro` keeps its count.
 
   `always`, `eventually`, and `leads_to` are decided here, on the
   same search. Nothing in this module is an Agda proof. The hold rule
@@ -216,7 +219,7 @@ defmodule Muro.Family.Graph do
   defp formula_atoms({:imp, p, q}), do: formula_atoms(p) ++ formula_atoms(q)
 
   defp formula_atoms({atom, _key, kind})
-       when atom in [:opened, :held, :resolved, :earlier_resolved],
+       when atom in [:opened, :held, :resolved, :earlier_resolved, :some_resolved],
        do: [{atom, kind}]
 
   defp formula_atoms(_other), do: []
@@ -275,6 +278,7 @@ defmodule Muro.Family.Graph do
             :never -> true
             :earlier -> earlier_clear?(g, state, inst, mask)
             :any -> any_clear?(g, state, inst)
+            {:named, spec} -> named_clear?(g, state, inst, spec)
           end
 
         _ ->
@@ -418,7 +422,8 @@ defmodule Muro.Family.Graph do
         instantiate_to(p, q, binders, g.keys)
 
       {:ok, _} ->
-        {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
+        {:error,
+         "a family formula names opened, held, resolved, earlier_resolved, or some_resolved"}
     end
   end
 
@@ -463,7 +468,7 @@ defmodule Muro.Family.Graph do
   defp subst({:imp, p, q}, var, key), do: {:imp, subst(p, var, key), subst(q, var, key)}
 
   defp subst({atom, name, kind}, var, key)
-       when atom in [:opened, :held, :resolved, :earlier_resolved] do
+       when atom in [:opened, :held, :resolved, :earlier_resolved, :some_resolved] do
     {atom, if(name == var, do: key, else: name), kind}
   end
 
@@ -493,6 +498,7 @@ defmodule Muro.Family.Graph do
   # An earlier instance counts when it was known at that opening. One
   # that arrives later does not refute the atom while this opening runs.
   # When nothing of that key and constructor is running, the atom holds.
+  # Giving up counts. A withdrawn instance does not.
   defp holds(g, state, {:earlier_resolved, key, kind}) do
     Enum.all?(g.instances, fn inst ->
       inst.key != key or inst.kind != kind or not running?(phase(state, inst.id)) or
@@ -500,10 +506,22 @@ defmodule Muro.Family.Graph do
     end)
   end
 
+  # At least one instance of this key and kind has resolved. False when
+  # none have, including when none have arrived. Giving up counts. A
+  # withdrawn instance does not. This atom is not a reason to double
+  # the script.
+  defp holds(g, state, {:some_resolved, key, kind}) do
+    Enum.any?(g.instances, fn inst ->
+      inst.key == key and inst.kind == kind and resolved?(phase(state, inst.id))
+    end)
+  end
+
   # A known instance counts, unless some other running instance of the
   # same key opened before this one was known. That late arrival does
   # not falsify `resolved` while the earlier opening is still running.
   # When nothing of the key is running, every known instance counts.
+  # The reading is universal and holds when nothing of that kind counts.
+  # Giving up counts. A withdrawn instance is known and is not resolved.
   defp holds(g, state, {:resolved, key, kind}) do
     runners = runners(g, state, key)
 
@@ -672,7 +690,43 @@ defmodule Muro.Family.Graph do
         Enum.all?(g.instances, fn other ->
           other.id == inst.id or other.key != inst.key or not running?(phase(state, other.id))
         end)
+
+      # `while` is the arrived rows of those kinds. A kind that has not
+      # arrived is not unresolved, so it does not hold this one. A
+      # withdrawn row is not unresolved either.
+      # `until` needs one resolved row of each kind. Giving up counts.
+      # A withdrawn row does not. One resolved row is enough while
+      # another of that kind is open.
+      {:named, %{while: while, until: until}} ->
+        Enum.all?(while, fn kind ->
+          not Enum.any?(g.instances, fn other ->
+            other.key == inst.key and other.kind == kind and unresolved?(phase(state, other.id))
+          end)
+        end) and
+          Enum.all?(until, fn kind ->
+            Enum.any?(g.instances, fn other ->
+              other.key == inst.key and other.kind == kind and resolved?(phase(state, other.id))
+            end)
+          end)
     end
+  end
+
+  # Known at the opening: a later row of a `while` kind is not a
+  # violation. `until` is a fact that stays on the graph, because a
+  # resolved phase is not removed.
+  defp named_clear?(g, state, inst, %{while: while, until: until}) do
+    Enum.all?(while, fn kind ->
+      Enum.all?(g.instances, fn other ->
+        other.key != inst.key or other.kind != kind or
+          not unresolved?(phase(state, other.id)) or
+          not known_at_open?(state, inst.id, other.id)
+      end)
+    end) and
+      Enum.all?(until, fn kind ->
+        Enum.any?(g.instances, fn other ->
+          other.key == inst.key and other.kind == kind and resolved?(phase(state, other.id))
+        end)
+      end)
   end
 
   @doc false
@@ -682,9 +736,12 @@ defmodule Muro.Family.Graph do
         do: inst.id
   end
 
-  # A held instance becomes resolved and the meeting does not run.
-  # Absent is not an instance the host has been given. Gave up counts
-  # as resolved. This step is not taken by `reachable/1`.
+  # A held instance becomes withdrawn and the meeting does not run.
+  # The phase is neither unresolved nor resolved: it stops blocking
+  # `while`, `earlier`, and `any`, and it does not witness `until` or
+  # `some_resolved`. Absent is not an instance the host has been given.
+  # Resolved, gave up, and a row already withdrawn are
+  # `{:error, {:resolved, id}}`. This step is not taken by `reachable/1`.
   @doc false
   def withdraw(_g, state, id) when is_integer(id) do
     cond do
@@ -693,10 +750,11 @@ defmodule Muro.Family.Graph do
 
       true ->
         case phase(state, id) do
-          :held -> {:ok, put_phase(state, id, :resolved)}
+          :held -> {:ok, put_phase(state, id, :withdrawn)}
           :absent -> {:error, {:unknown, id}}
           :resolved -> {:error, {:resolved, id}}
           :gave_up -> {:error, {:resolved, id}}
+          :withdrawn -> {:error, {:resolved, id}}
           {:run, _, _, _} -> {:error, {:opened, id}}
         end
     end
@@ -957,6 +1015,7 @@ defmodule Muro.Family.Graph do
   defp phase_name(:held), do: "held"
   defp phase_name(:resolved), do: "resolved"
   defp phase_name(:gave_up), do: "gave up"
+  defp phase_name(:withdrawn), do: "withdrawn"
   defp phase_name({:run, _, 0, _}), do: "running"
   defp phase_name({:run, _, _, _}), do: "retrying"
 

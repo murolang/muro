@@ -53,9 +53,12 @@ defmodule Muro.Family.Step do
   It holds for `earlier` and for `any`. It does not hold for `never`.
   `invariant?/2` is `RulesInv`: distinct ids, distinct key-and-index
   pairs, ids below `next`, birth and open ticks below `tick`, a held
-  row is `earlier` or `any`, a held `earlier` row has an earlier live
-  row, a held `any` row has another open row of its key, `AtMostOne`,
-  `NoOvertake`, and `ResolvedAny`.
+  row is `earlier`, `any`, or a named kind, a held `earlier` row has an
+  earlier live row, a held `any` row has another open row of its key,
+  `AtMostOne`, `NoOvertake`, `ResolvedAny`, and `named_safe?`. An opened
+  named row saw no live `while` row of its key born at or before it
+  opened, and every `until` kind of that key has resolved at least once.
+  A held named row is blocked by the rows and facts that are here now.
 
   `script_a/0` is `script-a`: `init` at 0, `signal` at 1, `signal` at 2.
   `script_b/0` is `script-b`: `init` at 0.
@@ -78,8 +81,21 @@ defmodule Muro.Family.Step do
   and `earlier` only, that release is every unblocked held `earlier`
   row.
 
+  A named rule is `{:named, %{while: kinds, until: kinds}}`. `while` holds
+  while an arrived row of a listed kind and the same key is open or held.
+  None arrived is not a hold. `until` holds until each listed kind has
+  resolved at least once for that key. One resolution is enough. The fact
+  stays after that row leaves. `withdraw` does not record it. `drop_key/2`
+  deletes that key's facts when the state has a `:kinds` field, and it
+  does not add the field. `skip/3` and `skip_below/2` do not clear facts.
+  `empty/0` has no `:kinds` field. `waiting_on/3` names the kinds and ids
+  still blocking a held id. The generated child spells that query
+  `waiting_on/2`, because the child closes over its rules.
+
   The meeting graph, one retry then give-up, `fail stop`, and the
-  program that writes the dispatcher are not this module.
+  program that writes the dispatcher are not this module. `NamedHold` in
+  `agda/Muro/Family.agda` is the named-kind argument. It does not replace
+  the theorems above it.
   """
 
   @doc """
@@ -96,8 +112,15 @@ defmodule Muro.Family.Step do
   """
   def hold_of(rules, kind) do
     case Map.fetch(rules, kind) do
-      {:ok, hold} when hold in [:never, :earlier, :any] -> {:ok, hold}
-      _ -> {:error, {:kind, kind}}
+      {:ok, hold} when hold in [:never, :earlier, :any] ->
+        {:ok, hold}
+
+      {:ok, {:named, %{while: while, until: until}} = hold}
+      when is_list(while) and is_list(until) ->
+        {:ok, hold}
+
+      _ ->
+        {:error, {:kind, kind}}
     end
   end
 
@@ -129,8 +152,17 @@ defmodule Muro.Family.Step do
   The phase `:open` is Agda `opened`.
   """
   def decide(rows, key, index, kind, rules) do
+    decide(rows, key, index, kind, rules, %{})
+  end
+
+  @doc """
+  `decide/5` with the per-key fact map of kinds that have resolved at
+  least once. `decide/5` passes an empty map, so a `held until` kind
+  with no fact in that argument stays held.
+  """
+  def decide(rows, key, index, kind, rules, facts) when is_map(facts) do
     {:ok, hold} = hold_of(rules, kind)
-    assign(hold, rows, key, index)
+    assign(hold, rows, key, index, facts)
   end
 
   @doc "Agda `onKey`."
@@ -159,7 +191,7 @@ defmodule Muro.Family.Step do
           {:error, {:departed, key, index}}
 
         true ->
-          phase = decide(state.rows, key, index, kind, rules)
+          phase = decide(state.rows, key, index, kind, rules, kind_facts(state, key))
           id = state.next
 
           row = %{
@@ -242,6 +274,65 @@ defmodule Muro.Family.Step do
   end
 
   @doc """
+  Host promise: creation index `index` of `key` does not arrive.
+
+  A live row of that index is `{:duplicate, key, index}`. An index at or
+  below the floor returns the same state and does not read the departed
+  record. The kinds record is left in place. A bad departed record fails
+  the way `departed?/3` fails.
+  """
+  def skip(state, key, index) when is_map(state) do
+    with :ok <- index_ok(index),
+         {:ok, floor} <- take_floor(state),
+         rows when is_list(rows) <- Map.get(state, :rows) do
+      cond do
+        not fresh?(rows, key, index) ->
+          {:error, {:duplicate, key, index}}
+
+        index <= floor ->
+          {:ok, state}
+
+        true ->
+          {:ok, note_departed(state, key, index)}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, {:state, state}}
+    end
+  end
+
+  def skip(state, _key, _index), do: {:error, {:state, state}}
+
+  @doc """
+  Forget one key's departed record when that key has no live row.
+
+  The floor stays. When `:kinds` is a map, that key's facts are deleted
+  with the departed record. A state with no `:kinds` field does not grow
+  one. After this call a new `until` row of the key waits again.
+  """
+  def drop_key(state, key) when is_map(state) do
+    with {:ok, _floor} <- take_floor(state),
+         rows when is_list(rows) <- Map.get(state, :rows) do
+      if Enum.any?(rows, fn
+           %{key: ^key} -> true
+           _ -> false
+         end) do
+        {:error, {:live, key}}
+      else
+        case clear_key(state, key) do
+          {:ok, state} -> {:ok, state}
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, {:state, state}}
+    end
+  end
+
+  def drop_key(state, _key), do: {:error, {:state, state}}
+
+  @doc """
   Agda `resolveTo` and `resolveMode`. An opened row leaves. `openAll`
   stamps the rows that release, then the tick advances. A held id is
   `{:held, id}`. An id that is not live is `{:unknown, id}`, including
@@ -257,7 +348,7 @@ defmodule Muro.Family.Step do
           {:error, {:held, id}}
 
         %{phase: :open, key: key} ->
-          release(state, id, key, rules)
+          release(state, id, key, rules, true)
       end
     end
   end
@@ -277,13 +368,53 @@ defmodule Muro.Family.Step do
           {:error, {:opened, id}}
 
         %{phase: :held, key: key} ->
-          release(state, id, key, rules)
+          release(state, id, key, rules, false)
 
         nil ->
           if left?(state, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
       end
     end
   end
+
+  @doc """
+  Why a held id is held.
+
+  `{:ok, %{kinds: kinds, ids: ids}}` names the kinds still blocking it
+  and the ids of the arrived unresolved rows that block it. Kinds follow
+  the rule: `while`, then `until`, each name once. An `until` kind with
+  no arrival yet is in `kinds` and contributes no id. `earlier` and `any`
+  list the kinds of the blocking rows in creation-index order. Ids are
+  sorted by creation index, then id. `{:error, {:opened, id}}` when the
+  row is open. `{:error, {:unknown, id}}` when the id is not live,
+  including one that has left. `{:error, {:state, state}}` when `state`
+  is not a step state, a held row has no blocker this function can
+  name, a row of that key has an index or id that is not a non-negative
+  integer, or, on a family with an `until` clause, that key's kinds
+  entry is not a map. The call does not raise.
+  """
+  def waiting_on(state, id, rules) when is_map(state) and is_map(rules) do
+    with {:ok, _floor} <- take_floor(state),
+         rows when is_list(rows) <- Map.get(state, :rows) do
+      case safe_find(rows, id) do
+        nil ->
+          {:error, {:unknown, id}}
+
+        %{phase: :open} ->
+          {:error, {:opened, id}}
+
+        %{phase: :held} = row ->
+          explain_held(state, rows, row, rules)
+
+        _ ->
+          {:error, {:state, state}}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, {:state, state}}
+    end
+  end
+
+  def waiting_on(state, _id, _rules), do: {:error, {:state, state}}
 
   @doc "Agda `touchTo`. `rerun` leaves an opened row as it is."
   def rerun(state, id), do: touch(state, id)
@@ -411,7 +542,7 @@ defmodule Muro.Family.Step do
     unique_ids?(rows) and unique_index?(rows) and ids_below?(rows, state.next) and
       clock?(rows, state.tick) and held_mode?(rows, rules) and held_earlier?(rows, rules) and
       held_any?(rows, rules) and at_most_one_any?(rows, rules) and no_overtake?(rows, rules) and
-      resolved_any?(rows, rules)
+      resolved_any?(rows, rules) and named_safe?(state, rules)
   end
 
   @doc """
@@ -424,7 +555,8 @@ defmodule Muro.Family.Step do
   def script_b, do: [{:init, 0}]
 
   @doc """
-  Family steps only: `arriveTo`, `resolveTo`, `withdrawTo`, and `touchTo`.
+  Family steps: `arriveTo`, `resolveTo`, `withdrawTo`, `touchTo`,
+  `skip`, `drop_key`, and `skip_below`.
 
   `{:rerun, id}` succeeds here whenever the row is opened. `check_trace`
   also requires the id's sessions to be at `done`. That extra refusal
@@ -474,9 +606,34 @@ defmodule Muro.Family.Step do
     end
   end
 
-  defp assign(:never, _rows, _key, _index), do: :open
-  defp assign(:earlier, rows, key, index), do: phase_of(blocked?(rows, key, index))
-  defp assign(:any, rows, key, index), do: phase_of(any_blocked?(rows, key, index))
+  defp family_act(state, {:skip, key, index}, _rules) do
+    case skip(state, key, index) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp family_act(state, {:drop, key}, _rules) do
+    case drop_key(state, key) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp family_act(state, {:skip_below, index}, _rules) do
+    case skip_below(state, index) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp assign(:never, _rows, _key, _index, _facts), do: :open
+  defp assign(:earlier, rows, key, index, _facts), do: phase_of(blocked?(rows, key, index))
+  defp assign(:any, rows, key, index, _facts), do: phase_of(any_blocked?(rows, key, index))
+
+  defp assign({:named, spec}, rows, key, _index, facts) do
+    phase_of(named_blocked?(spec, rows, key, facts))
+  end
 
   defp phase_of(true), do: :held
   defp phase_of(false), do: :open
@@ -515,12 +672,14 @@ defmodule Muro.Family.Step do
 
   defp left?(state, id), do: is_integer(id) and id >= 0 and id < state.next
 
-  defp release(state, id, key, rules) do
-    %{index: index} = find(state.rows, id)
+  defp release(state, id, key, rules, record?) do
+    row = find(state.rows, id)
     rest = remove(state.rows, id)
-    {rows, released} = open_all(key, rest, state.tick, rules)
+    state = if record?, do: note_resolved(state, key, row.kind, rules), else: state
+    facts = kind_facts(state, key)
+    {rows, released} = open_all(key, rest, state.tick, rules, facts)
     state = %{state | tick: state.tick + 1, rows: rows}
-    {:ok, released, note_departed(state, key, index)}
+    {:ok, released, note_departed(state, key, row.index)}
   end
 
   # Host creation indices. `P` is -1 until a departure folds up to it.
@@ -628,11 +787,12 @@ defmodule Muro.Family.Step do
   # `anyClause` is an unblocked held `any` row, and only when no
   # `earlier` row opens and no smaller `any` row is free. The list
   # `blocked` reads is the list after the removal.
-  defp candidate?(key, all, row, rules) do
+  defp candidate?(key, all, row, rules, facts) do
     row.key == key and row.phase == :held and
       cond do
         signal?(rules, row) -> not blocked?(all, row.key, row.index)
         any?(rules, row) -> not any_blocked?(all, row.key, row.index)
+        named?(rules, row) -> not named_blocked?(named_spec(rules, row), all, key, facts)
         true -> false
       end
   end
@@ -652,8 +812,8 @@ defmodule Muro.Family.Step do
   end
 
   # Agda `openAll` / `stamp`. Released tuples follow `{index, id}`.
-  defp open_all(key, all, tick, rules) do
-    chosen = all |> Enum.filter(&candidate?(key, all, &1, rules)) |> one_of_any(rules)
+  defp open_all(key, all, tick, rules, facts) do
+    chosen = all |> Enum.filter(&candidate?(key, all, &1, rules, facts)) |> one_of_any(rules)
     chosen_ids = MapSet.new(chosen, & &1.id)
 
     rows =
@@ -699,7 +859,7 @@ defmodule Muro.Family.Step do
 
   defp held_mode?(rows, rules) do
     Enum.all?(rows, fn row ->
-      row.phase != :held or signal?(rules, row) or any?(rules, row)
+      row.phase != :held or signal?(rules, row) or any?(rules, row) or named?(rules, row)
     end)
   end
 
@@ -719,6 +879,329 @@ defmodule Muro.Family.Step do
 
   # Agda `ResolvedAny`. An opened `any` row has no earlier live row of
   # the same kind born at or before its open tick.
+  # An opened named row saw no live `while` row of its key born at or
+  # before it opened, and every `until` kind has a fact. A held named
+  # row is blocked by the rows and facts that are here now. A family
+  # with no named rule makes this true.
+  defp named_safe?(state, rules) do
+    Enum.all?(state.rows, fn row ->
+      not named?(rules, row) or
+        case row.phase do
+          :open ->
+            spec = named_spec(rules, row)
+            while_known?(state.rows, row, spec) and until_ok?(state, row, spec)
+
+          :held ->
+            named_blocked?(
+              named_spec(rules, row),
+              state.rows,
+              row.key,
+              kind_facts(state, row.key)
+            )
+        end
+    end)
+  end
+
+  defp while_known?(rows, opened, %{while: while}) do
+    Enum.all?(while, fn kind ->
+      not Enum.any?(rows, fn other ->
+        other.key == opened.key and other.kind == kind and other.born <= opened.opened_at
+      end)
+    end)
+  end
+
+  defp until_ok?(state, opened, %{until: until}) do
+    facts = kind_facts(state, opened.key)
+    Enum.all?(until, &Map.has_key?(facts, &1))
+  end
+
+  defp named_blocked?(%{while: while, until: until}, rows, key, facts) do
+    Enum.any?(while, &kind_live?(rows, key, &1)) or
+      Enum.any?(until, &(not Map.has_key?(facts, &1)))
+  end
+
+  defp kind_live?(rows, key, kind) do
+    Enum.any?(rows, fn row ->
+      row.key == key and row.kind == kind and row.phase in [:open, :held]
+    end)
+  end
+
+  defp kind_facts(state, key) do
+    case Map.get(state, :kinds) do
+      kinds when is_map(kinds) ->
+        case Map.get(kinds, key) do
+          got when is_map(got) -> got
+          _ -> %{}
+        end
+
+      _ ->
+        %{}
+    end
+  end
+
+  # The fact is stored only when some rule's `until` list names the kind.
+  # A family with no such rule does not grow a `:kinds` field.
+  defp note_resolved(state, key, kind, rules) do
+    if records_kind?(rules, kind) do
+      kinds = Map.get(state, :kinds, %{})
+      inner = Map.get(kinds, key, %{})
+      inner = if is_map(inner), do: inner, else: %{}
+      # `empty/0` has no `:kinds` key. `|` cannot add one.
+      Map.put(state, :kinds, Map.put(kinds, key, Map.put(inner, kind, true)))
+    else
+      state
+    end
+  end
+
+  defp records_kind?(rules, kind) do
+    Enum.any?(rules, fn
+      {_ctor, {:named, %{until: until}}} -> kind in until
+      _ -> false
+    end)
+  end
+
+  defp named?(rules, row), do: match?({:ok, {:named, _}}, hold_of(rules, row.kind))
+
+  defp named_spec(rules, row) do
+    {:ok, {:named, spec}} = hold_of(rules, row.kind)
+    spec
+  end
+
+  defp safe_find(rows, id) do
+    Enum.find(rows, fn
+      %{id: ^id} -> true
+      _ -> false
+    end)
+  end
+
+  # A row of this key that is not a live open or held row, or whose
+  # index or id is not a non-negative integer, is the dispatcher's
+  # `:bad`. Another key is not scanned. A row that is not a row at all
+  # is a bad step state.
+  defp explain_held(state, rows, row, rules) do
+    if wait_row?(row) do
+      case hold_of(rules, row.kind) do
+        {:ok, :earlier} ->
+          pack_hits(state, classic_hits(rows, row, :earlier))
+
+        {:ok, :any} ->
+          pack_hits(state, classic_hits(rows, row, :any))
+
+        {:ok, {:named, spec}} ->
+          pack_hits(state, named_hits(state, rows, row, spec, rules))
+
+        _ ->
+          {:error, {:state, state}}
+      end
+    else
+      {:error, {:state, state}}
+    end
+  end
+
+  defp pack_hits(state, :bad), do: {:error, {:state, state}}
+
+  defp pack_hits(state, {kinds, ids}) do
+    if kinds == [] and ids == [] do
+      {:error, {:state, state}}
+    else
+      {:ok, %{kinds: kinds, ids: ids}}
+    end
+  end
+
+  defp classic_hits(rows, %{key: key, index: index}, mode) do
+    case scan_key(rows, key) do
+      :bad ->
+        :bad
+
+      {:ok, key_rows} ->
+        hits =
+          Enum.flat_map(key_rows, fn row ->
+            if blocks_classic?(row, index, mode),
+              do: [{row.index, row.id, row.kind}],
+              else: []
+          end)
+
+        hits = Enum.sort_by(hits, fn {ix, id, _kind} -> {ix, id} end)
+        kinds = hits |> Enum.map(fn {_ix, _id, kind} -> kind end) |> Enum.uniq()
+        ids = Enum.map(hits, fn {_ix, id, _kind} -> id end)
+        {kinds, ids}
+    end
+  end
+
+  defp blocks_classic?(%{index: ix, phase: phase}, index, :earlier)
+       when is_integer(ix) and is_integer(index) do
+    ix < index and phase in [:open, :held]
+  end
+
+  defp blocks_classic?(%{index: ix, phase: phase}, index, :any)
+       when is_integer(ix) and is_integer(index) do
+    ix != index and phase == :open
+  end
+
+  defp blocks_classic?(_row, _index, _mode), do: false
+
+  defp wait_row?(%{index: ix, id: id, kind: kind, phase: phase})
+       when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and
+              phase in [:open, :held],
+       do: true
+
+  defp wait_row?(_), do: false
+
+  # Halt on a row that is not a row, and on a same-key row the
+  # dispatcher would refuse. Another key stays out of the comparison.
+  defp scan_key(rows, key) do
+    case Enum.reduce_while(rows, [], fn row, acc ->
+           cond do
+             not row_shape?(row) ->
+               {:halt, :bad}
+
+             row.key == key and not wait_row?(row) ->
+               {:halt, :bad}
+
+             row.key == key ->
+               {:cont, [row | acc]}
+
+             true ->
+               {:cont, acc}
+           end
+         end) do
+      :bad -> :bad
+      acc -> {:ok, acc}
+    end
+  end
+
+  defp clear_key(state, key) do
+    departed =
+      cond do
+        not Map.has_key?(state, :departed) ->
+          {:ok, state}
+
+        is_map(state.departed) ->
+          {:ok, %{state | departed: Map.delete(state.departed, key)}}
+
+        true ->
+          :bad
+      end
+
+    case departed do
+      :bad ->
+        {:error, {:state, state}}
+
+      {:ok, state} ->
+        case Map.fetch(state, :kinds) do
+          :error ->
+            {:ok, state}
+
+          {:ok, kinds} when is_map(kinds) ->
+            {:ok, %{state | kinds: Map.delete(kinds, key)}}
+
+          {:ok, _} ->
+            {:error, {:state, state}}
+        end
+    end
+  end
+
+  # While kinds, then until kinds. A kind named in both lists appears
+  # once, from the while pass. A family with no `until` clause does not
+  # read `:kinds`. One with an `until` clause reads it even when this
+  # row's until list is empty. A missing `:kinds` key is no facts. A
+  # kinds value that is not a map, or a key whose entry is not a map,
+  # is the dispatcher's `:bad`.
+  defp named_hits(state, rows, row, %{while: while, until: until}, rules) do
+    case scan_key(rows, row.key) do
+      :bad ->
+        :bad
+
+      {:ok, key_rows} ->
+        {kinds, pairs} = gather_while(key_rows, while)
+
+        if until_family?(rules) do
+          add_until_hits(state, row.key, key_rows, until, kinds, pairs)
+        else
+          pack_named(kinds, pairs)
+        end
+    end
+  end
+
+  defp gather_while(rows, kinds) do
+    Enum.reduce(kinds, {[], []}, fn kind, {acc, pairs} ->
+      case live_pairs(rows, kind) do
+        [] -> {acc, pairs}
+        hits -> {acc ++ [kind], pairs ++ hits}
+      end
+    end)
+  end
+
+  defp live_pairs(rows, want) do
+    rows
+    |> Enum.flat_map(fn
+      %{kind: ^want, phase: phase, index: ix, id: id} when phase in [:open, :held] ->
+        [{ix, id}]
+
+      _ ->
+        []
+    end)
+    |> Enum.sort()
+  end
+
+  defp add_until_hits(state, key, rows, until, kinds, pairs) do
+    case kinds_entry(state, key) do
+      :bad ->
+        :bad
+
+      {:ok, facts} ->
+        {kinds, pairs} =
+          Enum.reduce(until, {kinds, pairs}, fn kind, {kinds, pairs} ->
+            if Map.has_key?(facts, kind) or kind in kinds do
+              {kinds, pairs}
+            else
+              {kinds ++ [kind], pairs ++ live_pairs(rows, kind)}
+            end
+          end)
+
+        pack_named(kinds, pairs)
+    end
+  end
+
+  defp pack_named(kinds, pairs) do
+    ids =
+      pairs
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.map(fn {_ix, id} -> id end)
+
+    {kinds, ids}
+  end
+
+  # The emitted `kinds_entry`. Missing `:kinds` is `%{}`. A non-map is
+  # `:bad`, and so is a non-map entry for this key. `kind_facts/2` is
+  # the invariant path and still treats a bad entry as no facts.
+  defp kinds_entry(state, key) do
+    case Map.fetch(state, :kinds) do
+      :error ->
+        {:ok, %{}}
+
+      {:ok, kinds} when is_map(kinds) ->
+        case Map.get(kinds, key, %{}) do
+          got when is_map(got) -> {:ok, got}
+          _ -> :bad
+        end
+
+      _ ->
+        :bad
+    end
+  end
+
+  defp until_family?(rules) do
+    Enum.any?(rules, fn
+      {_ctor, {:named, %{until: [_ | _]}}} -> true
+      _ -> false
+    end)
+  end
+
+  defp row_shape?(%{key: _, index: _, id: _, kind: _, phase: _}), do: true
+  defp row_shape?(_), do: false
+
   defp resolved_any?(rows, rules) do
     Enum.all?(rows, fn opened ->
       not (opened.phase == :open and any?(rules, opened)) or

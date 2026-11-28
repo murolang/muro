@@ -543,6 +543,22 @@ temporal earlier-first : commands :=
 
 `resolved k command` would count the command that is opening, and that command is not resolved on that step, so the formula would be refused. `mix muro.check` prints `family commands: slot per key of Command`, then `temporal earlier-first: holds in 370 reachable states, 835 transitions`. The meeting does not mark a party, so the state machine, Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit emit it. The formula is omitted. `Commands.withdraw` drops a held command. `held while any unresolved` is the other hold: an older command that arrives while a newer one of the same key is open stays held, and the two do not run together. See [Temporal](temporal.md#a-keyed-family).
 
+## keyed-release.muro
+
+`front` and `schema` open when they arrive, including together. `worker` stays held until each of those kinds has resolved at least once for the key. `cleanup` stays held until a `worker` has resolved. `some_resolved` is that fact, and it is false when none have arrived.
+
+```
+family rollout : slot per key of Step
+  front never held
+  schema never held
+  worker held until front resolved, schema resolved
+  cleanup held until worker resolved
+temporal front-before-worker : rollout :=
+  forall (k : key). always ((opened k worker) implies (some_resolved k front))
+```
+
+The book also states the same implication for `schema`, and `always ((opened k cleanup) implies (some_resolved k worker))`. `mix muro.check` prints `family rollout: slot per key of Step`, then each formula holding in 8906 reachable states, 26423 transitions. `front` and `schema` are open together in that graph. See [Temporal](temporal.md#a-keyed-family).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.

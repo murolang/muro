@@ -28,9 +28,10 @@ defmodule Muro.Words do
   @may_fail ~w(may fail)
   @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped dead has first second third st nd rd th)
   # Keywords of `family name :`, of the hold rules, and of the atoms
-  # `opened`, `held`, `resolved`, and `earlier_resolved`. The parser
-  # reserves them only in those forms.
-  @family ~w(per key of never held while earlier unresolved any earlier_resolved opened resolved)
+  # `opened`, `held`, `resolved`, `earlier_resolved`, and `some_resolved`.
+  # The parser reserves them only in those forms. `until` is a keyword
+  # only in `held until <kind> resolved`.
+  @family ~w(per key of never held while earlier unresolved any until earlier_resolved opened resolved some_resolved)
   @repr ~w(else boolean integer nil interned string list optional nullable tuple map_of map open)
   # Keywords only inside `prefix name :`. `start` is the position and
   # `pick` selects an arm. Classified here so the highlighter and the
