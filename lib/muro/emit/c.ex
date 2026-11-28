@@ -44,7 +44,8 @@ defmodule Muro.Emit.C do
   it back, and no condition reads it. A scalar run with no loop that such a byte loop reaches,
   and whose body is no wider than that name step, is `always_inline`.
   A step the emitter cannot read that way keeps the byte-by-byte loop.
-  A match on an enum of two constructors is an `if` on the first tag.
+  A match on an enum of two constructors is an `if` on the first tag
+  and an `else if` on the second. Any other tag calls `abort`.
 
   Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor of an all-nullary data type is the
@@ -1463,9 +1464,8 @@ defmodule Muro.Emit.C do
     end
   end
 
-  # Both tags are the whole type, so an out-of-range value is not a
-  # third arm. The `else` is the second constructor. A wider enum keeps
-  # the switch and its `abort`.
+  # Both tags are the whole type. An out-of-range tag aborts, the same
+  # as the default of a wider enum. Bool stays true, then false.
   defp enum_if?(data, arms) do
     Rep.enum_data?(data) and length(data.ctors) == 2 and enum_arms?(data, arms)
   end
@@ -1479,9 +1479,10 @@ defmodule Muro.Emit.C do
   defp emit_enum_if(data, dname, pre, ex, arms, env, st, expect) do
     {sname, st} = news(st)
     {tname, fresh, st} = slot(st)
-    [c0 | _] = data.ctors
+    [c0, c1] = data.ctors
     [arm0, arm1] = arms
     tag0 = ctor_tag(dname, c0.name, st.prefix)
+    tag1 = ctor_tag(dname, c1.name, st.prefix)
     ptr = struct_name(dname, st.prefix) <> " "
 
     with {:ok, {t0, st}} <- enum_if_arm(arm0, tname, env, st, expect),
@@ -1494,8 +1495,11 @@ defmodule Muro.Emit.C do
           "#{ptr}#{sname} = #{ex};",
           "if (#{sname} == #{tag0}) {",
           t0,
-          "} else {",
+          "} else if (#{sname} == #{tag1}) {",
           t1,
+          "} else {",
+          "/* unreachable */",
+          "abort();",
           "}",
           "}"
         ])
