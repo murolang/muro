@@ -83,7 +83,7 @@ defmodule Muro.Emit.Go do
     with {:ok, sessions, ctx, used} <- compile_sessions(plan, ctx, used),
          {:ok, families, used} <- compile_families(plan, book, used),
          {:ok, globals, ctx, used} <- compile_globals(plan, ctx, used),
-         {:ok, cfams, _used} <- compile_cfams(plan, globals, used) do
+         {:ok, cfams, used} <- compile_cfams(plan, globals, used) do
       {session_src, needs} = render_sessions(sessions, param_scope(used, families))
       preambles = Map.new(plan.cfams, &{&1.plan, &1.preamble})
       {global_src, gneeds} = render_globals(globals, preambles)
