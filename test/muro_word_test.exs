@@ -63,6 +63,12 @@ defmodule Muro.WordTest do
   test "elixir backend evaluates each word edge" do
     src = edges_src()
     assert {:ok, ex} = emit_elixir(src, Muro.WordEdges)
+    # An unsigned residue is the low bits. I64 stays a call.
+    assert ex =~ "Bitwise.band("
+    assert ex =~ "Muro.Word.add(:i64,"
+    refute ex =~ "Muro.Word.add(:u8,"
+    refute ex =~ "Muro.Word.add(:u32,"
+    refute ex =~ "Muro.Word.add(:u64,"
     Code.compile_string(ex)
 
     for spec <- specs() do

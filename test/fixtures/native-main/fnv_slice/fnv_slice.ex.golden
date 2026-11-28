@@ -10,7 +10,7 @@ defmodule FnvSlice do
   end
   
   def mix(x0, x1) do
-    Muro.Word.mul(:u32, Muro.Word.bxor(:u32, x0, Muro.Word.cast(:u32, x1)), prime())
+    Bitwise.band(((Bitwise.bxor(Bitwise.band((x0), 4294967295), Bitwise.band((Bitwise.band((x1), 4294967295)), 4294967295))) * (prime())), 4294967295)
   end
   
   def hash(x0) do

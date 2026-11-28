@@ -6,13 +6,16 @@ The Elixir backend emits a byte fold as `:binary.match` when the same tests the 
 
 On the muro-http request book, `crlfFold` of a 16 KiB body drops from 567,609 reductions to 11, and `scan` stops at the blank line (2,084 reductions, against 2,057 for a short GET). One `stepFact` of a keep-alive GET drops from 15,507 reductions and 90 µs to 7,044 and 46 µs. A POST with a 16 KiB body drops from 1,673,072 reductions and 8,735 µs to 17,976 and 92 µs, against 13,930 and 75 µs for an empty body. A GET with 30 extra headers drops from 184,403 reductions and 906 µs to 41,586 and 214 µs. Feeding a 6,642-byte header in 64-byte pieces drops from about 25.5M reductions and 130 ms to 2,473,100 and 15.5 ms. The piece-wise walk is still quadratic: the book does not store a scan cursor, so each chunk runs `scan` from the first byte.
 
+An unsigned `U8`, `U32`, or `U64` operation lowers to `Bitwise.band` with the modulus mask. That is the residue, including a negative input. `Bitwise.band` compiles to the `band` bif, so the operation is not a `Muro.Word` call. Addition, subtraction, and multiplication mask the result. A bitwise and masks the left input: that input is already in range, so bits above the width in the right input do not appear in the result. Or, exclusive or, and a comparison mask each input. Division and remainder mask both inputs and return `:none` when the divisor's residue is zero. `I64`, a checked add, sub, or mul, and a shift stay on `Muro.Word`, because a shift of a count past the width is zero there and a checked operation is an option. On the same request step, one accepted fact plus one bytes fact drops from 29,106 reductions and 134 µs to 8,414 and 74 µs for a 68-byte GET, from 54,554 and 247 µs to 15,729 and 126 µs for a 16 KiB POST, and from 566,695 and 2,227 µs to 157,737 and 1,052 µs for a 1,457-byte header block. Twelve requests, including a NUL, a CTL byte, a bad name, an empty name, a bare CR, a NUL in the target, HTAB, and an obs-text octet, return the same tuple.
+
 ### Tests
 
 - `test/muro_emit_fold_fast_test.exs`: the `\r\n\r\n` automaton matches a byte-loop oracle, including overlaps, and a 16 KiB miss stays under 1,000 reductions. A count of line feeds skips to that octet. An absorbing count of line feeds stops. A string step gated on one index stays a byte loop.
+- `test/muro_word_test.exs`: an open `U8` add is `Bitwise.band`, and an open `I64` add stays `Muro.Word.add`. The word-edge values are unchanged.
 
 ### Manual
 
-- Emit: an Elixir byte fold is `:binary.match` when it is a string scan or a search for one, two, or three octets, and the closure otherwise.
+- Emit: an Elixir byte fold is `:binary.match` when it is a string scan or a search for one, two, or three octets, and the closure otherwise. An unsigned word operation is `Bitwise.band`. A bitwise and masks the left input. `I64`, a checked operation, and a shift stay on `Muro.Word`.
 
 ### Package
 

@@ -1482,7 +1482,13 @@ defmodule Muro.Emit do
   end
 
   defp emit_word({:of, k}, [t], d, book, names) do
-    "Muro.Word.of(#{inspect(k)}, #{emit_db(t, d, book, names)})"
+    src = emit_db(t, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      unsigned_box(k, src)
+    else
+      "Muro.Word.of(#{inspect(k)}, #{src})"
+    end
   end
 
   # A residue is a non-negative integer, so it is already that Nat.
@@ -1499,7 +1505,15 @@ defmodule Muro.Emit do
   end
 
   defp emit_word(:not, [x], d, book, names) do
-    "Muro.Word.bnot(#{inspect(need_kind(x, book))}, #{emit_db(x, d, book, names)})"
+    k = need_kind(x, book)
+    src = emit_db(x, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      m = unsigned_mask(k)
+      "Bitwise.bxor(Bitwise.band((#{src}), #{m}), #{m})"
+    else
+      "Muro.Word.bnot(#{inspect(k)}, #{src})"
+    end
   end
 
   defp emit_word(op, [x, y], d, book, names) when op in [:eq, :lt, :le] do
@@ -1522,7 +1536,13 @@ defmodule Muro.Emit do
   end
 
   defp emit_word({:cast, k}, [x], d, book, names) do
-    "Muro.Word.cast(#{inspect(k)}, #{emit_db(x, d, book, names)})"
+    src = emit_db(x, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      unsigned_box(k, src)
+    else
+      "Muro.Word.cast(#{inspect(k)}, #{src})"
+    end
   end
 
   defp emit_word(:some, [x], d, book, names) do
@@ -1531,8 +1551,69 @@ defmodule Muro.Emit do
 
   defp emit_word(_op, _args, _d, _book, _names), do: "raise \"erased term\""
 
+  # An unsigned residue is the low bits of the integer, including a
+  # negative one (two's complement). `Bitwise.band` compiles to the
+  # `band` bif, so a per-byte word op is not a `Muro.Word` call.
+  # Signed words stay on `Muro.Word`.
   defp word_bin(fun, x, y, d, book, names) do
-    "Muro.Word.#{fun}(#{inspect(operand_kind(x, y, book))}, #{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)})"
+    k = operand_kind(x, y, book)
+    xs = emit_db(x, d, book, names)
+    ys = emit_db(y, d, book, names)
+
+    if k in [:u8, :u32, :u64] do
+      unsigned_word(fun, k, xs, ys)
+    else
+      "Muro.Word.#{fun}(#{inspect(k)}, #{xs}, #{ys})"
+    end
+  end
+
+  defp unsigned_mask(k), do: Muro.Word.modulus(k) - 1
+
+  defp unsigned_box(k, src), do: "Bitwise.band((#{src}), #{unsigned_mask(k)})"
+
+  defp unsigned_word("add", k, x, y), do: unsigned_box(k, "(#{x}) + (#{y})")
+  defp unsigned_word("sub", k, x, y), do: unsigned_box(k, "(#{x}) - (#{y})")
+  defp unsigned_word("mul", k, x, y), do: unsigned_box(k, "(#{x}) * (#{y})")
+
+  defp unsigned_word("band", k, x, y) do
+    "Bitwise.band(Bitwise.band((#{x}), #{unsigned_mask(k)}), (#{y}))"
+  end
+
+  defp unsigned_word(fun, k, x, y) when fun in ["bor", "bxor"] do
+    m = unsigned_mask(k)
+    op = if fun == "bor", do: "bor", else: "bxor"
+    "Bitwise.#{op}(Bitwise.band((#{x}), #{m}), Bitwise.band((#{y}), #{m}))"
+  end
+
+  defp unsigned_word("eq?", k, x, y) do
+    m = unsigned_mask(k)
+    "Bitwise.band((#{x}), #{m}) == Bitwise.band((#{y}), #{m})"
+  end
+
+  defp unsigned_word("lt?", k, x, y) do
+    m = unsigned_mask(k)
+    "Bitwise.band((#{x}), #{m}) < Bitwise.band((#{y}), #{m})"
+  end
+
+  defp unsigned_word("le?", k, x, y) do
+    m = unsigned_mask(k)
+    "Bitwise.band((#{x}), #{m}) <= Bitwise.band((#{y}), #{m})"
+  end
+
+  defp unsigned_word("divide", k, x, y) do
+    m = unsigned_mask(k)
+
+    "(case Bitwise.band((#{y}), #{m}) do\n  0 -> :none\n  muro__d -> {:some, div(Bitwise.band((#{x}), #{m}), muro__d)}\nend)"
+  end
+
+  defp unsigned_word("remainder", k, x, y) do
+    m = unsigned_mask(k)
+
+    "(case Bitwise.band((#{y}), #{m}) do\n  0 -> :none\n  muro__d -> {:some, rem(Bitwise.band((#{x}), #{m}), muro__d)}\nend)"
+  end
+
+  defp unsigned_word(fun, k, x, y) do
+    "Muro.Word.#{fun}(#{inspect(k)}, #{x}, #{y})"
   end
 
   defp operand_kind(x, y, book) do
