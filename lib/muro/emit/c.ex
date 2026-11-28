@@ -40,7 +40,8 @@ defmodule Muro.Emit.C do
   `muro__find3` and runs the body only there. A fold of `U64` whose
   step is the border automaton of a fixed octet string, state in the
   low three bits and the index above them, scans for that string
-  instead. A scalar run with no loop that such a byte loop reaches,
+  instead. The index is a pass-through: the step adds one and packs
+  it back, and no condition reads it. A scalar run with no loop that such a byte loop reaches,
   and whose body is no wider than that name step, is `always_inline`.
   A step the emitter cannot read that way keeps the byte-by-byte loop.
   A match on an enum of two constructors is an `if` on the first tag.
@@ -3339,9 +3340,12 @@ defmodule Muro.Emit.C do
   # them are how far the fold has read, and the matched length sticks
   # once it is the whole string. The loop is a scan for that string.
   # The unmatched suffix is the automaton, so the packed miss state is
-  # the one the byte loop would have returned. A step this cannot read
-  # stays the byte loop. Recognition is the transition table, not the
-  # step's name.
+  # the one the byte loop would have returned. The index is only ever
+  # read to add one and pack it back; a condition that reads it, or a
+  # step that does anything else with those bits, stays the byte loop.
+  # The transition of the low three bits is read at several indices and
+  # has to be the same at each. A step this cannot read stays the byte
+  # loop. Recognition is the transition table, not the step's name.
   defp needle_loop({:loop, [], octet, rest, {an, :u64, _}, z, s, _stop, body}, env, st) do
     {on, _, _} = octet
     {rn, _, _} = rest
@@ -3379,6 +3383,7 @@ defmodule Muro.Emit.C do
     funs = Map.values(st.funs)
 
     with {:ok, {:word, :u64, 0}} <- Muro.IR.Eval.eval(funs, z, %{}, fuel: 8_000),
+         true <- index_plain?(st.funs, body, on, an),
          {:ok, delta, accept} <- probe_states(funs, body, on, an),
          {:ok, bytes} <- chain_needle(delta, accept),
          true <- border_matches?(bytes, delta, accept) do
@@ -3424,8 +3429,30 @@ defmodule Muro.Emit.C do
     end
   end
 
+  # One index is not enough. A step gated on that index matches the
+  # border table there and nowhere else, and the scan would disagree
+  # with the byte loop. The low three bits, and whether the state
+  # absorbs, have to be the same at every probed index. A move advances
+  # the high bits by exactly one.
+  @probe_indices [0, 1, 5, 40]
+
   defp classify_state(s, funs, body, on, an) do
-    acc = Bitwise.bor(Bitwise.band(s, 7), 40)
+    Enum.reduce_while(@probe_indices, :start, fn ix, prev ->
+      case classify_at(s, funs, body, on, an, ix) do
+        :no -> {:halt, :no}
+        class when prev == :start -> {:cont, class}
+        ^prev -> {:cont, prev}
+        _ -> {:halt, :no}
+      end
+    end)
+    |> case do
+      :start -> :no
+      class -> class
+    end
+  end
+
+  defp classify_at(s, funs, body, on, an, ix) do
+    acc = Bitwise.bor(Bitwise.band(s, 7), Bitwise.bsl(ix, 3))
 
     0..255
     |> Enum.reduce_while({:same, %{}}, fn b, {mode, map} ->
@@ -3435,11 +3462,11 @@ defmodule Muro.Emit.C do
 
         {:ok, r} ->
           next = Bitwise.band(r, 7)
-          moved = Bitwise.bsr(r, 3) == 6 and next <= 7 and mode != :same_bad
 
-          cond do
-            moved and mode in [:same, :move] -> {:cont, {:move, Map.put(map, b, next)}}
-            true -> {:halt, :no}
+          if Bitwise.bsr(r, 3) == ix + 1 and mode in [:same, :move] do
+            {:cont, {:move, Map.put(map, b, next)}}
+          else
+            {:halt, :no}
           end
 
         :no ->
@@ -3461,6 +3488,310 @@ defmodule Muro.Emit.C do
       _ -> :no
     end
   end
+
+  # The high bits of the accumulator are the index. A pass-through
+  # reads them only to add one and pack them back (`endIx`, `+ 1`,
+  # `packEnd`), and a condition never reads them. The value packed
+  # beside them depends on the low three bits, the octet, and
+  # constants. Returning the accumulator unchanged is the absorbing
+  # state. Anything else, including a term this walk does not know,
+  # is not a pass-through.
+  defp index_plain?(funs, body, on, an) when is_map(funs) do
+    st = %{fuel: 8_000, depth: 0, cache: %{}}
+
+    case abs_ev(funs, body, %{on => :byte, an => :acc}, st) do
+      {:ok, v, _} -> v in [:acc, :packed, :step]
+      :no -> false
+    end
+  end
+
+  defp abs_ev(_funs, _tm, _env, %{fuel: fuel}) when fuel <= 0, do: :no
+
+  defp abs_ev(funs, tm, env, st), do: abs_term(funs, tm, env, %{st | fuel: st.fuel - 1})
+
+  defp abs_term(_funs, {:var, x}, env, st) do
+    case Map.fetch(env, x) do
+      {:ok, v} -> {:ok, v, st}
+      :error -> :no
+    end
+  end
+
+  defp abs_term(_funs, :ze, _env, st), do: {:ok, {:k, 0}, st}
+
+  defp abs_term(_funs, {:nat, n}, _env, st) when is_integer(n) and n >= 0,
+    do: {:ok, {:k, n}, st}
+
+  defp abs_term(funs, {:su, t}, env, st) do
+    case abs_ev(funs, t, env, st) do
+      {:ok, {:k, n}, st} -> {:ok, {:k, n + 1}, st}
+      _ -> :no
+    end
+  end
+
+  defp abs_term(funs, {:let, x, _lay, _g, val, body}, env, st) when is_binary(x) do
+    case abs_ev(funs, val, env, st) do
+      {:ok, v, st} -> abs_ev(funs, body, Map.put(env, x, v), st)
+      :no -> :no
+    end
+  end
+
+  defp abs_term(funs, {:let, x, lay, val, body}, env, st) when is_binary(x),
+    do: abs_term(funs, {:let, x, lay, :reuse, val, body}, env, st)
+
+  defp abs_term(funs, {:call, name, args}, env, st) do
+    with {:ok, vs, st} <- abs_list(funs, args, env, st),
+         %{} = fun <- Map.get(funs, name),
+         true <- st.depth < 12,
+         true <- length(fun.params) == length(vs) do
+      key = {name, vs}
+
+      case Map.get(st.cache, key) do
+        :pending ->
+          :no
+
+        v when v != nil ->
+          {:ok, v, st}
+
+        nil ->
+          bound =
+            fun.params
+            |> Enum.zip(vs)
+            |> Map.new(fn {p, v} -> {param_nm(p), v} end)
+
+          inner = %{st | depth: st.depth + 1, cache: Map.put(st.cache, key, :pending)}
+
+          case abs_ev(funs, fun.body, bound, inner) do
+            {:ok, v, st3} ->
+              {:ok, v, %{st3 | depth: st.depth, cache: Map.put(st3.cache, key, v)}}
+
+            :no ->
+              :no
+          end
+      end
+    else
+      _ -> :no
+    end
+  end
+
+  defp abs_term(funs, {:inout, name, args}, env, st),
+    do: abs_term(funs, {:call, name, args}, env, st)
+
+  defp abs_term(funs, {:match, scrut, arms}, env, st) when is_list(arms) do
+    case abs_ev(funs, scrut, env, st) do
+      {:ok, v, st} -> abs_match(funs, v, arms, env, st)
+      :no -> :no
+    end
+  end
+
+  defp abs_term(funs, {:match, scrut, _lay, arms}, env, st) when is_list(arms),
+    do: abs_term(funs, {:match, scrut, arms}, env, st)
+
+  defp abs_term(funs, {:wrd, _k, op, args}, env, st) do
+    case abs_list(funs, args, env, st) do
+      {:ok, vs, st} ->
+        case abs_wrd(op, vs) do
+          :no -> :no
+          v -> {:ok, v, st}
+        end
+
+      :no ->
+        :no
+    end
+  end
+
+  defp abs_term(funs, {:con, data, ctor, ts}, env, st) do
+    case abs_list(funs, ts, env, st) do
+      {:ok, vs, st} -> {:ok, {:con, data, ctor, vs}, st}
+      :no -> :no
+    end
+  end
+
+  defp abs_term(_funs, _tm, _env, _st), do: :no
+
+  defp abs_list(funs, ts, env, st) do
+    Enum.reduce_while(ts, {:ok, [], st}, fn t, {:ok, acc, st} ->
+      case abs_ev(funs, t, env, st) do
+        {:ok, v, st} -> {:cont, {:ok, [v | acc], st}}
+        :no -> {:halt, :no}
+      end
+    end)
+    |> case do
+      {:ok, vs, st} -> {:ok, Enum.reverse(vs), st}
+      :no -> :no
+    end
+  end
+
+  defp param_nm({n, _, _}), do: n
+  defp param_nm({n, _}), do: n
+
+  defp abs_match(_funs, :bool_ix, _arms, _env, _st), do: :no
+  defp abs_match(_funs, :taint, _arms, _env, _st), do: :no
+
+  defp abs_match(funs, :bool_ok, arms, env, st),
+    do: abs_both(funs, arms, "wtrue", "wfalse", env, st)
+
+  defp abs_match(funs, true, arms, env, st), do: abs_arm(funs, arms, "wtrue", [], env, st)
+  defp abs_match(funs, false, arms, env, st), do: abs_arm(funs, arms, "wfalse", [], env, st)
+
+  defp abs_match(funs, {:either_con, "Bool"}, arms, env, st),
+    do: abs_both(funs, arms, "true", "false", env, st)
+
+  defp abs_match(funs, {:con, _, ctor, fields}, arms, env, st),
+    do: abs_arm(funs, arms, ctor, fields, env, st)
+
+  defp abs_match(funs, {:some, v}, arms, env, st),
+    do: abs_arm(funs, arms, "wsome", [v], env, st)
+
+  defp abs_match(funs, :none, arms, env, st),
+    do: abs_arm(funs, arms, "wnone", [], env, st)
+
+  defp abs_match(_funs, _v, _arms, _env, _st), do: :no
+
+  defp abs_both(funs, arms, a, b, env, st) do
+    with {:arm, _, [], ba} <- Enum.find(arms, fn {:arm, c, _, _} -> c == a end),
+         {:arm, _, [], bb} <- Enum.find(arms, fn {:arm, c, _, _} -> c == b end),
+         {:ok, va, st} <- abs_ev(funs, ba, env, st),
+         {:ok, vb, st} <- abs_ev(funs, bb, env, st),
+         {:ok, joined} <- abs_join(va, vb) do
+      {:ok, joined, st}
+    else
+      _ -> :no
+    end
+  end
+
+  defp abs_arm(funs, arms, ctor, fields, env, st) do
+    case Enum.find(arms, fn {:arm, c, _, _} -> c == ctor end) do
+      {:arm, _, names, body} when length(names) == length(fields) ->
+        env =
+          names
+          |> Enum.zip(fields)
+          |> Enum.reduce(env, fn {n, f}, e -> Map.put(e, n, f) end)
+
+        abs_ev(funs, body, env, st)
+
+      _ ->
+        :no
+    end
+  end
+
+  defp abs_join(v, v), do: {:ok, v}
+  defp abs_join(:acc, :packed), do: {:ok, :step}
+  defp abs_join(:packed, :acc), do: {:ok, :step}
+  defp abs_join(:step, :acc), do: {:ok, :step}
+  defp abs_join(:acc, :step), do: {:ok, :step}
+  defp abs_join(:step, :packed), do: {:ok, :step}
+  defp abs_join(:packed, :step), do: {:ok, :step}
+  defp abs_join(true, false), do: {:ok, :bool_ok}
+  defp abs_join(false, true), do: {:ok, :bool_ok}
+  defp abs_join(:bool_ok, v) when v in [true, false, :bool_ok], do: {:ok, :bool_ok}
+  defp abs_join(v, :bool_ok) when v in [true, false], do: {:ok, :bool_ok}
+  defp abs_join({:k, a}, {:k, b}) when a in 0..7 and b in 0..7, do: {:ok, :low3}
+  defp abs_join({:k, a}, :low3) when a in 0..7, do: {:ok, :low3}
+  defp abs_join(:low3, {:k, a}) when a in 0..7, do: {:ok, :low3}
+  defp abs_join({:con, d, _, []}, {:con, d, _, []}), do: {:ok, {:either_con, d}}
+  defp abs_join({:either_con, d}, {:con, d, _, []}), do: {:ok, {:either_con, d}}
+  defp abs_join({:con, d, _, []}, {:either_con, d}), do: {:ok, {:either_con, d}}
+  defp abs_join(_, _), do: :no
+
+  defp abs_wrd({:lit, _k, n}, []) when is_integer(n) and n >= 0, do: {:k, n}
+  defp abs_wrd(true, []), do: true
+  defp abs_wrd(false, []), do: false
+  defp abs_wrd(:none, []), do: :none
+  defp abs_wrd(:some, [v]), do: {:some, v}
+  defp abs_wrd({:of, _}, [{:k, n}]), do: {:k, n}
+  defp abs_wrd(:and, [a, b]), do: abs_and(a, b)
+  defp abs_wrd(:or, [a, b]), do: abs_or(a, b)
+  defp abs_wrd(:add, [a, b]), do: abs_add(a, b)
+  defp abs_wrd(:mul, [a, b]), do: abs_mul(a, b)
+  defp abs_wrd(:div, [a, b]), do: abs_div(a, b)
+  defp abs_wrd(:eq, [a, b]), do: abs_cmp(a, b, :eq)
+  defp abs_wrd(:lt, [a, b]), do: abs_cmp(a, b, :lt)
+  defp abs_wrd(:le, [a, b]), do: abs_cmp(a, b, :le)
+  defp abs_wrd(:shr, [a, n]), do: abs_shr(a, n)
+  defp abs_wrd(:shl, [a, n]), do: abs_shl(a, n)
+  defp abs_wrd(:not, [{:k, n}]), do: {:k, Bitwise.band(Bitwise.bnot(n), 0xFFFFFFFFFFFFFFFF)}
+  defp abs_wrd(_op, _vs), do: :no
+
+  defp abs_and({:k, a}, {:k, b}), do: {:k, Bitwise.band(a, b)}
+  defp abs_and(:acc, {:k, m}) when m in 0..7, do: :low3
+  defp abs_and({:k, m}, :acc) when m in 0..7, do: :low3
+  defp abs_and(:low3, {:k, _}), do: :low3
+  defp abs_and({:k, _}, :low3), do: :low3
+  defp abs_and(:low3, :low3), do: :low3
+  defp abs_and(:low3, :byte), do: :low3
+  defp abs_and(:byte, :low3), do: :low3
+  defp abs_and(:byte, {:k, m}) when m in 0..7, do: :low3
+  defp abs_and({:k, m}, :byte) when m in 0..7, do: :low3
+  defp abs_and(:pure, {:k, m}) when m in 0..7, do: :low3
+  defp abs_and({:k, m}, :pure) when m in 0..7, do: :low3
+  defp abs_and(:packed, {:k, m}) when m in 0..7, do: :low3
+  defp abs_and({:k, m}, :packed) when m in 0..7, do: :low3
+  defp abs_and(:hipack, {:k, m}) when m in 0..7, do: {:k, 0}
+  defp abs_and({:k, m}, :hipack) when m in 0..7, do: {:k, 0}
+  defp abs_and(_, _), do: :no
+
+  defp abs_or({:k, a}, {:k, b}), do: {:k, Bitwise.bor(a, b)}
+  defp abs_or(:low3, :hipack), do: :packed
+  defp abs_or(:hipack, :low3), do: :packed
+  defp abs_or({:k, n}, :hipack) when n in 0..7, do: :packed
+  defp abs_or(:hipack, {:k, n}) when n in 0..7, do: :packed
+  defp abs_or(:low3, :low3), do: :low3
+  defp abs_or({:k, n}, :low3) when n in 0..7, do: :low3
+  defp abs_or(:low3, {:k, n}) when n in 0..7, do: :low3
+  defp abs_or(_, _), do: :no
+
+  defp abs_add({:k, a}, {:k, b}), do: {:k, Bitwise.band(a + b, 0xFFFFFFFFFFFFFFFF)}
+  defp abs_add(:ix, {:k, 1}), do: :ix1
+  defp abs_add({:k, 1}, :ix), do: :ix1
+  defp abs_add(:low3, {:k, n}) when n in 0..7, do: :pure
+  defp abs_add({:k, n}, :low3) when n in 0..7, do: :pure
+  defp abs_add(:pure, {:k, _}), do: :pure
+  defp abs_add({:k, _}, :pure), do: :pure
+  defp abs_add(:byte, {:k, _}), do: :pure
+  defp abs_add({:k, _}, :byte), do: :pure
+  defp abs_add(_, _), do: :no
+
+  defp abs_mul({:k, a}, {:k, b}), do: {:k, Bitwise.band(a * b, 0xFFFFFFFFFFFFFFFF)}
+  defp abs_mul(:ix1, {:k, 8}), do: :hipack
+  defp abs_mul({:k, 8}, :ix1), do: :hipack
+  defp abs_mul(_, _), do: :no
+
+  defp abs_div(_a, {:k, 0}), do: :none
+  defp abs_div({:k, n}, {:k, d}) when d > 0, do: {:some, {:k, div(n, d)}}
+  defp abs_div(:acc, {:k, 8}), do: {:some, :ix}
+  defp abs_div(:packed, {:k, 8}), do: {:some, :ix1}
+  defp abs_div(:hipack, {:k, 8}), do: {:some, :ix1}
+  defp abs_div(:low3, {:k, d}) when d >= 8, do: {:some, {:k, 0}}
+  defp abs_div(:byte, {:k, d}) when d > 0, do: {:some, :pure}
+  defp abs_div(:pure, {:k, d}) when d > 0, do: {:some, :pure}
+  defp abs_div(_, _), do: :no
+
+  defp abs_cmp({:k, a}, {:k, b}, :eq), do: a == b
+  defp abs_cmp({:k, a}, {:k, b}, :lt), do: a < b
+  defp abs_cmp({:k, a}, {:k, b}, :le), do: a <= b
+
+  defp abs_cmp(a, b, _op) do
+    if idx_dep?(a) or idx_dep?(b), do: :bool_ix, else: :bool_ok
+  end
+
+  defp abs_shr(:acc, {:k, 3}), do: :ix
+  defp abs_shr(:packed, {:k, 3}), do: :ix1
+  defp abs_shr(:hipack, {:k, 3}), do: :ix1
+  defp abs_shr({:k, n}, {:k, s}) when s in 0..63, do: {:k, Bitwise.bsr(n, s)}
+  defp abs_shr(_, _), do: :no
+
+  defp abs_shl(:ix1, {:k, 3}), do: :hipack
+
+  defp abs_shl({:k, n}, {:k, s}) when s in 0..63,
+    do: {:k, Bitwise.band(Bitwise.bsl(n, s), 0xFFFFFFFFFFFFFFFF)}
+
+  defp abs_shl(_, _), do: :no
+
+  defp idx_dep?(v) when v in [:acc, :ix, :ix1, :hipack, :packed, :step, :taint, :bool_ix],
+    do: true
+
+  defp idx_dep?({:some, v}), do: idx_dep?(v)
+  defp idx_dep?(_), do: false
 
   defp chain_needle(delta, accept) when is_integer(accept) and accept >= 2 and accept <= 7 do
     0..(accept - 1)

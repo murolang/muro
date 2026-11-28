@@ -1403,6 +1403,103 @@ defmodule Muro.EmitCTest do
     assert out == "0 24 9 18 27 36 52 44 356 60 36 276 268 0 9 18 26 18\n"
   end
 
+  # The border table of "\n\n" holds at index 5 and nowhere else. A
+  # probe that only packs index 5 lowers this to a whole-buffer scan,
+  # which returns 18 for "\n\n". The book walks indices 0 and 1 and
+  # returns 16. The fold has to stay a byte loop.
+  test "a string step gated on one index stays a byte loop" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "gated.muro"), """
+    import "std:bool.muro"
+
+    def u8eq : run Π (x : U8) → Π (y : U8) → Bool :=
+      λ (x : U8) → λ (y : U8) →
+        match (eqi x y) motive (λ _ → Bool)
+          | wtrue => true
+          | wfalse => false
+
+    def u64eq : run Π (x : U64) → Π (y : U64) → Bool :=
+      λ (x : U64) → λ (y : U64) →
+        match (eqi x y) motive (λ _ → Bool)
+          | wtrue => true
+          | wfalse => false
+
+    def packEnd : run Π (st : U64) → Π (i : U64) → U64 :=
+      λ (st : U64) → λ (i : U64) →
+        ori (andi st (toU64 7)) (muli i (toU64 8))
+
+    def endSt : run Π (a : U64) → U64 :=
+      λ (a : U64) → andi a (toU64 7)
+
+    def endIx : run Π (a : U64) → U64 :=
+      λ (a : U64) →
+        match (divi a (toU64 8)) motive (λ _ → U64)
+          | wsome q => q
+          | wnone => toU64 0
+
+    def gatedByte : run Π (+ b : U8) → Π (+ a : U64) → U64 :=
+      λ (+ b : U8) → λ (+ a : U64) →
+        match (u64eq (endIx a) (toU64 5)) motive (λ _ → U64)
+          | true =>
+              (match (u64eq (endSt a) (toU64 2)) motive (λ _ → U64)
+                | true => a
+                | false =>
+                    (match (u8eq b (toU8 10)) motive (λ _ → U64)
+                      | true =>
+                          (match (u64eq (endSt a) (toU64 1)) motive (λ _ → U64)
+                            | true => packEnd (toU64 2) (addi (endIx a) (toU64 1))
+                            | false => packEnd (toU64 1) (addi (endIx a) (toU64 1)))
+                      | false => packEnd (toU64 0) (addi (endIx a) (toU64 1))))
+          | false => packEnd (toU64 0) (addi (endIx a) (toU64 1))
+
+    def gatedFold : run Π (+ s : Slice) → U64 :=
+      λ (+ s : Slice) →
+        sliceFold U64 (packEnd (toU64 0) (toU64 0))
+          (λ (b : U8) → λ (_r : Slice) → λ (a : U64) → gatedByte b a)
+          s
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "gated.muro"), "--backend", "c"])
+    end)
+
+    source = File.read!(Path.join(dir, "gated.c"))
+    assert source =~ ".n > 0"
+    refute source =~ "_mm_set1_epi8"
+    refute source =~ "muro__find2"
+    refute source =~ "muro__find3"
+
+    slices = ["", "\n\n", "\n", "aaaaa\n\n", "xxxx\n\n", "\n\n\n\n\n\n\n", "aaaaa\naaaaa\n\n"]
+    assert gated_oracle("\n\n") == 16
+
+    out =
+      link_run!(dir, "gated", """
+      #include "gated.h"
+      #include <stdio.h>
+      #include <string.h>
+
+      static muro__slice sl(const char *s) {
+        return (muro__slice){(const uint8_t *)s, strlen(s)};
+      }
+
+      int main(void) {
+        printf("%llu %llu %llu %llu %llu %llu %llu\\n",
+          (unsigned long long)gatedFold(sl("")),
+          (unsigned long long)gatedFold(sl("\\n\\n")),
+          (unsigned long long)gatedFold(sl("\\n")),
+          (unsigned long long)gatedFold(sl("aaaaa\\n\\n")),
+          (unsigned long long)gatedFold(sl("xxxx\\n\\n")),
+          (unsigned long long)gatedFold(sl("\\n\\n\\n\\n\\n\\n\\n")),
+          (unsigned long long)gatedFold(sl("aaaaa\\naaaaa\\n\\n")));
+        return 0;
+      }
+      """)
+
+    expect = Enum.map_join(slices, " ", &(&1 |> gated_oracle() |> Integer.to_string())) <> "\n"
+    assert out == expect
+  end
+
   test "a closed numeral is the successor chain" do
     dir = tmp_dir()
     path = Path.join(dir, "two.muro")
@@ -1411,6 +1508,24 @@ defmodule Muro.EmitCTest do
     source = File.read!(Path.join(dir, "two.c"))
     assert source =~ "muro__suc(muro__suc(muro__zero()))"
     cc!(dir, "two.c", "two.o")
+  end
+
+  # The book oracle for `gatedByte`: the "\\n\\n" automaton runs only
+  # when the packed index is 5. Every other index stores state 0.
+  defp gated_oracle(bin) when is_binary(bin) do
+    bin
+    |> :binary.bin_to_list()
+    |> Enum.reduce(0, fn b, a ->
+      ix = div(a, 8)
+      st = Bitwise.band(a, 7)
+
+      cond do
+        ix == 5 and st == 2 -> a
+        ix == 5 and b == 10 and st == 1 -> Bitwise.bor(2, Bitwise.bsl(ix + 1, 3))
+        ix == 5 and b == 10 -> Bitwise.bor(1, Bitwise.bsl(ix + 1, 3))
+        true -> Bitwise.bsl(ix + 1, 3)
+      end
+    end)
   end
 
   defp tmp_dir do
