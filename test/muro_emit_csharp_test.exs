@@ -7,8 +7,10 @@ defmodule Muro.EmitCSharpSuiteTest do
 
   # Resolved when this file is compiled. MURO_DOTNET names the executable
   # when it is set. Otherwise this is ~/.dotnet/dotnet, then dotnet on PATH.
-  # The live test is skipped when none of those is a file, including in CI.
-  # The workflow files are not the place that installs the SDK.
+  # The live test is skipped when none of those is a file, or when
+  # `dotnet --list-sdks` does not print an SDK, including in CI. A
+  # hanging or failing list is a skip too. The workflow files are not
+  # the place that installs the SDK.
   @dotnet (
             env = System.get_env("MURO_DOTNET")
             home = Path.expand("~/.dotnet/dotnet")
@@ -28,8 +30,34 @@ defmodule Muro.EmitCSharpSuiteTest do
             end
           )
 
-  @have_dotnet is_binary(@dotnet)
-  @dotnet_skip if(@have_dotnet, do: false, else: "dotnet is not available")
+  @have_dotnet_sdk (case @dotnet do
+                      exe when is_binary(exe) ->
+                        task =
+                          Task.async(fn ->
+                            System.cmd(exe, ["--list-sdks"],
+                              stderr_to_stdout: true,
+                              env: [
+                                {"DOTNET_CLI_TELEMETRY_OPTOUT", "1"},
+                                {"DOTNET_NOLOGO", "1"},
+                                {"DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "1"}
+                              ]
+                            )
+                          end)
+
+                        try do
+                          case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
+                            {:ok, {out, 0}} -> String.trim(out) != ""
+                            _ -> false
+                          end
+                        rescue
+                          _ -> false
+                        end
+
+                      _ ->
+                        false
+                    end)
+
+  @dotnet_skip if(@have_dotnet_sdk, do: false, else: "dotnet SDK is not available")
 
   @book """
   data Color : Type where
