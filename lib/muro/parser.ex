@@ -1514,9 +1514,9 @@ defmodule Muro.Parser do
             end
 
           word_kw?(rest, "held") ->
-            case hold_while(skip(after_kw(rest, "held"))) do
-              {:ok, hold, rest} -> {:ok, %{ctor: ctor, hold: hold}, rest}
-              :error -> {:error, err(rest, hold_rule())}
+            case hold_body(skip(after_kw(rest, "held"))) do
+              {:ok, fields, rest} -> {:ok, Map.merge(%{ctor: ctor}, fields), rest}
+              {:error, _} = err -> err
             end
 
           true ->
@@ -1528,27 +1528,130 @@ defmodule Muro.Parser do
     end
   end
 
-  defp hold_while(s) do
-    with {:ok, rest} <- kw(s, "while"),
-         {:ok, hold, rest} <- hold_span(skip(rest)),
-         {:ok, rest} <- kw(skip(rest), "unresolved") do
-      {:ok, hold, rest}
-    else
-      _ -> :error
+  # `while earlier` and `while any` stay the old complete rules. A comma
+  # after either is not a named-kind list. A kind named `earlier` or
+  # `any` cannot be a `while` target, because that spelling is the old
+  # rule. An `until` rule may name those constructors.
+  defp hold_body(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "while") ->
+        rest = s |> after_kw("while") |> skip()
+
+        cond do
+          word_kw?(rest, "earlier") -> span_simple(rest, :earlier)
+          word_kw?(rest, "any") -> span_simple(rest, :any)
+          true -> named_span(rest, :while, [])
+        end
+
+      word_kw?(s, "until") ->
+        named_span(skip(after_kw(s, "until")), :until, [])
+
+      true ->
+        {:error, err(s, hold_rule())}
     end
   end
 
-  # `earlier` is creation order. `any` is every other instance of the key.
-  defp hold_span(s) do
-    cond do
-      word_kw?(s, "earlier") -> {:ok, :earlier, after_kw(s, "earlier")}
-      word_kw?(s, "any") -> {:ok, :any, after_kw(s, "any")}
-      true -> :error
+  defp span_simple(s, hold) do
+    word = if hold == :earlier, do: "earlier", else: "any"
+    rest = s |> after_kw(word) |> skip()
+
+    if word_kw?(rest, "unresolved") do
+      rest = rest |> after_kw("unresolved") |> skip()
+
+      if comma?(rest) do
+        {:error, err(rest, hold_rule())}
+      else
+        {:ok, %{hold: hold}, rest}
+      end
+    else
+      {:error, err(rest, "expected unresolved")}
     end
   end
+
+  # `at` keeps every mention, in source order, so an unknown kind points
+  # at its token. The runtime hold stores each name once, while then until.
+  defp named_span(s, mode, acc) do
+    s = skip(s)
+
+    cond do
+      mode == :while and (word_kw?(s, "earlier") or word_kw?(s, "any")) ->
+        {:error, err(s, hold_rule())}
+
+      true ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            loc = here(s)
+            rest = skip(rest)
+            word = if mode == :while, do: "unresolved", else: "resolved"
+
+            if word_kw?(rest, word) do
+              rest = rest |> after_kw(word) |> skip()
+              acc = acc ++ [{mode, name, loc}]
+
+              if comma?(rest) do
+                more_spans(skip(after_kw(rest, ",")), mode, acc)
+              else
+                {:ok, finish_named(acc), rest}
+              end
+            else
+              {:error, err(rest, "expected #{word}")}
+            end
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  # A repeated `held while` or `held until` switches mode. Any other word,
+  # including a constructor named `until`, stays in the current mode.
+  defp more_spans(s, mode, acc) do
+    s = skip(s)
+
+    if word_kw?(s, "held") do
+      rest = s |> after_kw("held") |> skip()
+
+      cond do
+        word_kw?(rest, "while") ->
+          rest = rest |> after_kw("while") |> skip()
+
+          if word_kw?(rest, "earlier") or word_kw?(rest, "any") do
+            {:error, err(rest, hold_rule())}
+          else
+            named_span(rest, :while, acc)
+          end
+
+        word_kw?(rest, "until") ->
+          named_span(skip(after_kw(rest, "until")), :until, acc)
+
+        true ->
+          {:error, err(rest, hold_rule())}
+      end
+    else
+      named_span(s, mode, acc)
+    end
+  end
+
+  defp finish_named(acc) do
+    %{
+      hold: {:named, %{while: uniq_mode(acc, :while), until: uniq_mode(acc, :until)}},
+      at: acc
+    }
+  end
+
+  defp uniq_mode(acc, mode) do
+    acc
+    |> Enum.filter(&match?({^mode, _, _}, &1))
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.uniq()
+  end
+
+  defp comma?(s), do: has_prefix?(skip(s), ",")
 
   defp hold_rule do
-    "expected never held, held while earlier unresolved, or held while any unresolved"
+    "expected never held, held while earlier unresolved, held while any unresolved, held while <kind> unresolved, or held until <kind> resolved"
   end
 
   defp parse_formula(s) do
@@ -1745,6 +1848,10 @@ defmodule Muro.Parser do
       has_prefix?(s, "(") ->
         parse_paren(s, &parse_prop/1)
 
+      # `some_resolved k front` is one resolved instance, not every one.
+      word_kw?(s, "some_resolved") ->
+        parse_family_atom(s)
+
       # `earlier_resolved k command` is the instances before the one opening.
       word_kw?(s, "earlier_resolved") ->
         parse_family_atom(s)
@@ -1855,6 +1962,7 @@ defmodule Muro.Parser do
   defp parse_family_atom(s) do
     word =
       cond do
+        word_kw?(s, "some_resolved") -> "some_resolved"
         word_kw?(s, "earlier_resolved") -> "earlier_resolved"
         word_kw?(s, "opened") -> "opened"
         word_kw?(s, "held") -> "held"
@@ -1877,6 +1985,7 @@ defmodule Muro.Parser do
     end
   end
 
+  defp family_atom("some_resolved"), do: :some_resolved
   defp family_atom("earlier_resolved"), do: :earlier_resolved
   defp family_atom("opened"), do: :opened
   defp family_atom("held"), do: :held

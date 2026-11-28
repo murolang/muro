@@ -18,6 +18,32 @@ With no `--impl`, a fact that reduces on both sides compares the two normal form
 
 - Version 0.22.47.
 
+## 0.22.45
+
+A family rule can name the kinds an instance waits for. On a family whose kind is a closed `data`, `held while <kind> unresolved` (comma lists allowed) is the open-world reading of `earlier` filtered by kind: the instance is held while an arrived instance of a listed kind with the same key is unresolved, and opens when none has arrived. `held until <kind> resolved` (comma lists allowed) is a prerequisite: the instance is held until at least one instance of each listed kind and key has arrived and resolved, so a `worker` stays held until a `front` arrives and resolves. One resolved instance satisfies the prerequisite even while another instance of that kind is unresolved; repeating `held` mixes the two (`held until front resolved, held while front unresolved`). `withdraw` does not satisfy `until`. On the family graph the phase is `:withdrawn`, neither unresolved nor resolved, so it does not witness `until` or `some_resolved`. The fact that a kind resolved survives the row leaving (`departed`, `skip_below`) and is forgotten by `drop_key`. `never held`, `held while earlier unresolved`, and `held while any unresolved` are unchanged.
+
+An unknown kind is refused at its token (`<line>:<col>: <family>: <kind> is not a constructor of <Kind>`). A cycle of named-kind edges, `while` and `until` alike, is refused at the closing edge and named from its earliest constructor (`hold cycle front, front`, `hold cycle front, worker, front`).
+
+`some_resolved k <kind>` is the existential atom: at least one instance of that key and kind has resolved. `resolved k <kind>` stays universal (vacuous when none has arrived). `examples/keyed-release.muro` is the release DAG of the issue (`front` and `schema` `never held`, `worker held until front resolved, schema resolved`, `cleanup held until worker resolved`); its three `some_resolved` formulas hold in 8,906 states and 26,423 transitions, and `front` and `schema` run concurrently.
+
+`Muro.Family.Step` and every emitted `--backend fsm` family dispatcher share the release. `waiting_on/2` on the dispatcher (`Muro.Family.Step.waiting_on/3`, which also takes the rules) explains a held instance as `{:ok, %{kinds: kinds, ids: ids}}`; an open id is `{:error, {:opened, id}}`, an id that is not live is `{:error, {:unknown, id}}`, and anything else is `{:error, {:state, state}}`. It never raises and covers `earlier` and `any` too. `new/0` gains a `kinds: %{}` field only for a family with an `until` clause, so existing generated modules are unchanged apart from `waiting_on/2`.
+
+`agda/Muro/Family.agda` (`--safe`, no postulates) gains `NamedHold`: kinds with `while` and `until` lists and a rank that descends along both, a fact list that survives row removal, and `no-overtake`, `open-safe`, `arriveN-inv`, `resolve-inv`, `withdraw-inv`, `withdraw-facts`, `release-records`, `release-inv`, and the least-rank progress step `unblocked-min`.
+
+`examples/keyed-slots.muro` (171,649 states, 729,184 transitions) and `examples/keyed-commands.muro` (370 states, 835 transitions) are unchanged.
+
+### Tests
+
+- `test/muro_family_named_test.exs`: the release DAG, `while` versus `until` when no `front` has arrived, one-resolved-while-another-open, withdraw, departed and `drop_key`, `waiting_on` on held, open, unknown, departed, and released ids in `Muro.Family.Step` and the emitted module, unknown kinds and self, 2-, and 3-cycles, `some_resolved` passing and failing, Step-versus-dispatcher agreement including `check_trace/1`, `withdraw/2`, `finish`, `in order`, `dense`, and `idempotent init`, `held until earlier resolved` when `earlier` and `any` are constructors, `Graph.withdraw` leaving `:withdrawn` so an `until` waiter stays held, and a malformed row or kinds entry refused by `waiting_on` the way the emitted dispatcher refuses it.
+
+### Manual
+
+- Fsm, grammar, temporal, limits, examples, extending, and for-agents: named-kind hold rules, `some_resolved`, and `waiting_on/2`.
+
+### Package
+
+- Version 0.22.45.
+
 ## 0.22.44
 
 A family can range over a choreography (#310). `family rollout : plan per key`, with no kind and no hold rule, runs one instance of the global type `plan` per key, any number of keys at once, independent across keys. The checker prints `family rollout: plan per key`.

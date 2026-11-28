@@ -437,7 +437,10 @@ defmodule Muro.ChoreoFamilyTest do
           """
 
       assert {:error, msg} = check(src)
-      assert msg =~ "t: a family formula names opened, held, resolved, or earlier_resolved"
+
+      assert msg =~
+               "t: a family formula names opened, held, resolved, earlier_resolved, or some_resolved"
+
       assert msg =~ "u: done names an interaction of a choreography family"
     end
 

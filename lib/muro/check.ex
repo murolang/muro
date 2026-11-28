@@ -4385,6 +4385,7 @@ defmodule Muro.Check do
     case result do
       :ok -> {:note, Muro.Family.line(d)}
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+      {:error, at, msg} -> {:error, "#{Print.loc_prefix(at)}#{name}: #{msg}"}
     end
   end
 

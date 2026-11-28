@@ -1,7 +1,7 @@
 # The image of every example except a keyed family. A family is spec,
 # so emit skips it on every backend but the state machine. The digest is
-# one sha256 per book, of the picture below. keyed-slots.muro and
-# keyed-commands.muro are the family books. The C image of a session
+# one sha256 per book, of the picture below. keyed-slots.muro,
+# keyed-commands.muro, and keyed-release.muro are the family books. The C image of a session
 # includes the step.
 #
 # What is compared
@@ -33,7 +33,7 @@
 # again on Elixir 1.20.4 (OTP 29).
 defmodule Muro.EmitExamples do
   # Family books are spec plus one dispatcher. The digest is every other example.
-  @exclude ["keyed-slots.muro", "keyed-commands.muro"]
+  @exclude ["keyed-slots.muro", "keyed-commands.muro", "keyed-release.muro"]
 
   def lines(root \\ "examples") do
     root

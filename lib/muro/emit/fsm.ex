@@ -3792,6 +3792,7 @@ defmodule Muro.Emit.Fsm do
         "def arrive(state, key, kind, index)",
         "def resolved(state, id)",
         "def withdraw(state, id)",
+        "def waiting_on(state, id)",
         "def skip(state, key, index)",
         "def drop_key(state, key)",
         "def skip_below(state, index)",
@@ -4177,7 +4178,7 @@ defmodule Muro.Emit.Fsm do
       reads that one row and does not walk the key. `check_trace` replays
       arrivals, resolutions, withdrawals, skips, drops, `skip_below`,
       reruns, and the session steps of an open instance. A rerun clears
-      that id's session, so the next step starts again.
+      that id's session, so the next step starts again.#{family_extra_doc(family)}
       \"\"\"
 
       def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}, floor: -1}
@@ -4226,6 +4227,7 @@ defmodule Muro.Emit.Fsm do
         end
       end
 
+      #{waiting_src(family)}
       def skip(state, key, index) do
         with {:ok, st} <- read(state),
              :ok <- index_ok(index),
@@ -4774,11 +4776,64 @@ defmodule Muro.Emit.Fsm do
         end
       end
 
-      #{clauses}
+      #{clauses}#{until_helpers(family)}
     end
     """
 
-    apply_contracts(src, family)
+    finish_dispatcher(src, family)
+  end
+
+  # `apply_contracts` matches the call text above. Named kinds rewrite
+  # those calls afterwards. `until` also records a per-key fact map.
+  # A family with no named rule keeps the text `apply_contracts` returns.
+  defp finish_dispatcher(src, family) do
+    src = apply_contracts(src, family)
+    src = if named_family?(family), do: name_calls(src), else: src
+    if until_family?(family), do: until_fields(src), else: src
+  end
+
+  defp name_calls(src) do
+    src
+    |> replace_once("phase_of(rows, hold, index, st)", "phase_of(rows, hold, index, st, key)")
+    |> replace_once("not blocked?(rows, kind, ix)", "not blocked?(rows, kind, ix, st, key)")
+  end
+
+  defp until_fields(src) do
+    src
+    |> replace_once(
+      "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}, floor: -1}",
+      "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}, floor: -1, kinds: %{}}"
+    )
+    |> replace_once(
+      "defp read(%{n: n, by: by, id: ids, departed: departed, floor: floor} = st)\n       when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(departed) and\n              is_integer(floor) and floor >= -1 do",
+      "defp read(%{n: n, by: by, id: ids, departed: departed, floor: floor, kinds: kinds} = st)\n       when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(departed) and\n              is_map(kinds) and is_integer(floor) and floor >= -1 do"
+    )
+    |> replace_once(
+      Enum.join(
+        [
+          "{:ok, _kind} <- open_row(rows, index, id, st),",
+          "         {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st),",
+          "         {:ok, departed} <- remember_map(st, key, index) do",
+          "      by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)",
+          "      next = %{st | by: by, id: Map.delete(st.id, id), departed: departed}"
+        ],
+        "\n"
+      ),
+      Enum.join(
+        [
+          "{:ok, kind} <- open_row(rows, index, id, st),",
+          "         {:ok, released, rows} <- take_released(Map.delete(rows, index), key, mark_kind(st, key, kind)),",
+          "         {:ok, departed} <- remember_map(st, key, index) do",
+          "      by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)",
+          "      next = %{mark_kind(st, key, kind) | by: by, id: Map.delete(st.id, id), departed: departed}"
+        ],
+        "\n"
+      )
+    )
+    |> replace_once(
+      "{:ok, %{st | departed: Map.delete(st.departed, key)}}",
+      "{:ok, %{st | departed: Map.delete(st.departed, key), kinds: Map.delete(st.kinds, key)}}"
+    )
   end
 
   # The heredoc above is the 0.22.22 dispatcher. No contract, and
@@ -5345,6 +5400,10 @@ defmodule Muro.Emit.Fsm do
   # `hold_of` only passes a hold this family's `rule` returns. A clause for
   # any other hold is unused, and Elixir 1.20 rejects the generated module.
   defp phase_bodies(family) do
+    if named_family?(family), do: named_phase_bodies(family), else: classic_phase_bodies(family)
+  end
+
+  defp classic_phase_bodies(family) do
     holds = hold_list(family)
 
     clauses =
@@ -5379,6 +5438,10 @@ defmodule Muro.Emit.Fsm do
   # These bodies are joined, not heredocs: a heredoc is scanned as a host
   # helper, and `blocked?` would then reserve a run name.
   defp blocked_body(family) do
+    if named_family?(family), do: named_blocked_body(family), else: classic_blocked_body(family)
+  end
+
+  defp classic_blocked_body(family) do
     arms =
       Enum.flat_map(hold_list(family), fn
         :earlier ->
@@ -5538,7 +5601,7 @@ defmodule Muro.Emit.Fsm do
   defp held_body(family) do
     holds = hold_list(family)
 
-    if :earlier in holds or :any in holds do
+    if :earlier in holds or :any in holds or named_family?(family) do
       Enum.join(
         [
           "defp held_rows(rows) do",
@@ -5580,15 +5643,655 @@ defmodule Muro.Emit.Fsm do
   end
 
   defp held_pred(holds) do
+    named = Enum.any?(holds, &match?({:named, _}, &1))
+
+    classic =
+      cond do
+        :earlier in holds and :any in holds -> "rule(kind) in [:earlier, :any]"
+        :earlier in holds -> "rule(kind) == :earlier"
+        :any in holds -> "rule(kind) == :any"
+        true -> nil
+      end
+
     cond do
-      :earlier in holds and :any in holds -> "rule(kind) in [:earlier, :any]"
-      :earlier in holds -> "rule(kind) == :earlier"
-      :any in holds -> "rule(kind) == :any"
+      named and classic != nil -> "(#{classic} or match?({:named, _}, rule(kind)))"
+      named -> "match?({:named, _}, rule(kind))"
+      true -> classic
     end
+  end
+
+  defp rule_clause(%{ctor: ctor, hold: {:named, %{while: while, until: until}}}) do
+    atom = String.to_atom(Emit.elixir_atom_name(ctor))
+
+    "defp rule(#{inspect(atom)}), do: {:named, %{while: #{emit_atoms(while)}, until: #{emit_atoms(until)}}}"
   end
 
   defp rule_clause(%{ctor: ctor, hold: hold}) do
     atom = String.to_atom(Emit.elixir_atom_name(ctor))
     "defp rule(#{inspect(atom)}), do: #{inspect(hold)}"
+  end
+
+  defp emit_atoms(names) do
+    names
+    |> Enum.map(&String.to_atom(Emit.elixir_atom_name(&1)))
+    |> inspect()
+  end
+
+  defp named_family?(family) do
+    Enum.any?(family.rules, &match?({:named, _}, &1.hold))
+  end
+
+  defp until_family?(family) do
+    Enum.any?(family.rules, fn
+      %{hold: {:named, %{until: until}}} -> until != []
+      _ -> false
+    end)
+  end
+
+  defp family_extra_doc(family) do
+    cond do
+      until_family?(family) ->
+        "\n  A named kind is held while an arrived instance of a listed kind is unresolved, or until a listed kind has resolved at least once for that key. One resolution is enough, and it stays in `kinds` after the row leaves. `withdraw` does not record it. `drop_key` deletes that key's facts. `waiting_on` names what still blocks a held id."
+
+      named_family?(family) ->
+        "\n  A named kind is held while an arrived instance of a listed kind is unresolved. None arrived is not a hold. `waiting_on` names what still blocks a held id."
+
+      true ->
+        ""
+    end
+  end
+
+  defp named_phase_bodies(family) do
+    holds = hold_list(family)
+    classic = Enum.reject(holds, &match?({:named, _}, &1))
+
+    clauses =
+      Enum.map(classic, fn
+        :never ->
+          "defp phase_of(_rows, :never, _index, _st, _key), do: {:ok, :open}"
+
+        :earlier ->
+          named_earlier_phase()
+
+        :any ->
+          named_any_phase()
+      end)
+
+    helpers =
+      Enum.flat_map(classic, fn
+        :earlier -> [earlier_scan()]
+        :any -> [any_scan()]
+        _ -> []
+      end)
+
+    Enum.join(
+      clauses ++ [named_phase(until_family?(family))] ++ helpers ++ [while_clear_src()],
+      "\n\n"
+    )
+  end
+
+  defp named_earlier_phase do
+    Enum.join(
+      [
+        "defp phase_of(rows, :earlier, index, st, _key) do",
+        "  case earlier?(rows, index) do",
+        "    :clear -> {:ok, :open}",
+        "    :blocked -> {:ok, :held}",
+        "    :bad -> {:error, {:state, st}}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp named_any_phase do
+    Enum.join(
+      [
+        "defp phase_of(rows, :any, index, st, _key) do",
+        "  case any_open?(rows, index) do",
+        "    :clear -> {:ok, :open}",
+        "    :blocked -> {:ok, :held}",
+        "    :bad -> {:error, {:state, st}}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp named_phase(true) do
+    Enum.join(
+      [
+        "defp phase_of(rows, {:named, %{while: while, until: until}}, _index, st, key) do",
+        "  case named_status(rows, while, until, st, key) do",
+        "    :clear -> {:ok, :open}",
+        "    :blocked -> {:ok, :held}",
+        "    :bad -> {:error, {:state, st}}",
+        "  end",
+        "end",
+        "",
+        "defp named_status(rows, while, until, st, key) do",
+        "  case while_clear?(rows, while) do",
+        "    :bad ->",
+        "      :bad",
+        "",
+        "    while_status ->",
+        "      case until_status(st, key, until) do",
+        "        :bad -> :bad",
+        "        :blocked -> :blocked",
+        "        :clear -> while_status",
+        "      end",
+        "  end",
+        "end",
+        "",
+        "defp until_status(st, key, kinds) do",
+        "  case kinds_entry(st, key) do",
+        "    :bad ->",
+        "      :bad",
+        "",
+        "    facts ->",
+        "      if Enum.all?(kinds, &Map.has_key?(facts, &1)), do: :clear, else: :blocked",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp named_phase(false) do
+    Enum.join(
+      [
+        "defp phase_of(rows, {:named, %{while: while, until: _until}}, _index, st, _key) do",
+        "  case while_clear?(rows, while) do",
+        "    :clear -> {:ok, :open}",
+        "    :blocked -> {:ok, :held}",
+        "    :bad -> {:error, {:state, st}}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp while_clear_src do
+    Enum.join(
+      [
+        "defp while_clear?(rows, kinds) do",
+        "  Enum.reduce_while(rows, :clear, fn entry, acc ->",
+        "    case entry do",
+        "      {ix, {id, kind, phase}}",
+        "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and",
+        "             phase in [:open, :held] ->",
+        "        if kind in kinds, do: {:cont, :blocked}, else: {:cont, acc}",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}",
+        "    end",
+        "  end)",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp named_blocked_body(family) do
+    arms =
+      Enum.flat_map(hold_list(family), fn
+        :earlier ->
+          [
+            Enum.join(
+              [
+                "    :earlier ->",
+                "      Enum.any?(rows, fn {ix, {_id, _kind, phase}} ->",
+                "        ix < index and phase in [:open, :held]",
+                "      end)"
+              ],
+              "\n"
+            )
+          ]
+
+        :any ->
+          [
+            Enum.join(
+              [
+                "    :any ->",
+                "      Enum.any?(rows, fn {ix, {_id, _kind, phase}} ->",
+                "        ix != index and phase == :open",
+                "      end)"
+              ],
+              "\n"
+            )
+          ]
+
+        {:named, _} ->
+          []
+
+        _ ->
+          []
+      end)
+
+    named_arm =
+      if until_family?(family) do
+        Enum.join(
+          [
+            "    {:named, %{while: while, until: until}} ->",
+            "      while_live?(rows, while) or not until_ready?(st, key, until)"
+          ],
+          "\n"
+        )
+      else
+        Enum.join(
+          [
+            "    {:named, %{while: while, until: until}} ->",
+            "      while_live?(rows, while) or until != []"
+          ],
+          "\n"
+        )
+      end
+
+    ready =
+      if until_family?(family) do
+        Enum.join(
+          [
+            "",
+            "defp until_ready?(st, key, kinds) do",
+            "  case kinds_entry(st, key) do",
+            "    :bad -> false",
+            "    facts -> Enum.all?(kinds, &Map.has_key?(facts, &1))",
+            "  end",
+            "end"
+          ],
+          "\n"
+        )
+      else
+        ""
+      end
+
+    head = if until_family?(family), do: "st, key", else: "_st, _key"
+    holds = hold_list(family)
+    index = if :earlier in holds or :any in holds, do: "index", else: "_index"
+
+    Enum.join(
+      [
+        "defp blocked?(rows, kind, #{index}, #{head}) do",
+        "  case rule(kind) do",
+        Enum.join(arms ++ [named_arm], "\n"),
+        "    _ ->",
+        "      true",
+        "  end",
+        "end",
+        "",
+        "defp while_live?(rows, kinds) do",
+        "  Enum.any?(rows, fn",
+        "    {_ix, {_id, kind, phase}} -> phase in [:open, :held] and kind in kinds",
+        "    _ -> false",
+        "  end)",
+        "end",
+        ready
+      ],
+      "\n"
+    )
+  end
+
+  defp until_helpers(family) do
+    if until_family?(family) do
+      kinds =
+        family.rules
+        |> Enum.flat_map(fn
+          %{hold: {:named, %{until: until}}} -> until
+          _ -> []
+        end)
+        |> Enum.uniq()
+
+      clauses =
+        Enum.map(kinds, fn name ->
+          atom = String.to_atom(Emit.elixir_atom_name(name))
+          "defp records?(#{inspect(atom)}), do: true"
+        end)
+
+      "\n" <>
+        Enum.join(
+          clauses ++
+            [
+              "defp records?(_kind), do: false",
+              "",
+              "defp mark_kind(st, key, kind) do",
+              "  if records?(kind) do",
+              "    got = Map.get(st.kinds, key, %{})",
+              "    inner = if is_map(got), do: got, else: %{}",
+              "    %{st | kinds: Map.put(st.kinds, key, Map.put(inner, kind, true))}",
+              "  else",
+              "    st",
+              "  end",
+              "end",
+              "",
+              "defp kinds_entry(st, key) do",
+              "  case Map.fetch(st, :kinds) do",
+              "    :error ->",
+              "      %{}",
+              "",
+              "    {:ok, kinds} when is_map(kinds) ->",
+              "      case Map.get(kinds, key, %{}) do",
+              "        got when is_map(got) -> got",
+              "        _ -> :bad",
+              "      end",
+              "",
+              "    _ ->",
+              "      :bad",
+              "  end",
+              "end"
+            ],
+          "\n"
+        )
+    else
+      ""
+    end
+  end
+
+  defp waiting_src(family) do
+    holds = hold_list(family)
+    earlier = :earlier in holds
+    any = :any in holds
+    named = named_family?(family)
+    until = until_family?(family)
+
+    arms =
+      []
+      |> then_arm(earlier, earlier_arm())
+      |> then_arm(any, any_arm())
+      |> then_arm(named, named_arm())
+
+    helpers =
+      []
+      |> then_arm(earlier, earlier_wait_src())
+      |> then_arm(any, any_wait_src())
+      |> then_arm(named, named_wait_src(until))
+      |> then_arm(earlier or any or named, scan_rows_src())
+
+    Enum.join(
+      [explain_src(arms, named, earlier or any, earlier or any or named) | helpers],
+      "\n\n"
+    ) <> "\n"
+  end
+
+  defp then_arm(list, true, arm), do: list ++ [arm]
+  defp then_arm(list, false, _arm), do: list
+
+  defp explain_src(arms, named, uses_index, uses_rows) do
+    # A family of only `never held` has no held row it can explain.
+    # `wait_parts` would return `:bad` on every kind, and the success
+    # clause would be rejected as unreachable.
+    held =
+      if arms == [] do
+        """
+                    {:ok, {^id, kind, :held}} when is_atom(kind) ->
+                      {:error, {:state, st}}\
+        """
+      else
+        """
+                    {:ok, {^id, kind, :held}} when is_atom(kind) ->
+                      case wait_parts(st, key, index, kind, rows) do
+                        :bad ->
+                          {:error, {:state, st}}
+
+                        {kinds, pairs} ->
+                          if kinds == [] and pairs == [] do
+                            {:error, {:state, st}}
+                          else
+                            ids =
+                              pairs
+                              |> Enum.uniq()
+                              |> Enum.sort()
+                              |> Enum.map(fn {_ix, id} -> id end)
+
+                            {:ok, %{kinds: kinds, ids: ids}}
+                          end
+                      end\
+        """
+      end
+
+    head = """
+    def waiting_on(state, id) do
+      case read(state) do
+        {:ok, st} -> explain(st, id)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    defp explain(st, id) do
+      case Map.fetch(st.id, id) do
+        {:ok, {key, index}} when is_integer(index) and index >= 0 ->
+          case Map.fetch(st.by, key) do
+            {:ok, rows} when is_map(rows) ->
+              case Map.fetch(rows, index) do
+                {:ok, {^id, kind, :open}} when is_atom(kind) ->
+                  {:error, {:opened, id}}
+
+    #{held}
+
+                _ ->
+                  {:error, {:state, st}}
+              end
+
+            _ ->
+              {:error, {:state, st}}
+          end
+
+        {:ok, _} ->
+          {:error, {:state, st}}
+
+        :error ->
+          {:error, {:unknown, id}}
+      end
+    end\
+    """
+
+    if arms == [] do
+      head
+    else
+      args = if named, do: "st, key", else: "_st, _key"
+      index = if uses_index, do: "index", else: "_index"
+      rows = if uses_rows, do: "rows", else: "_rows"
+      body = Enum.join(arms, "\n") <> "\n    _ ->\n      :bad"
+
+      head <>
+        """
+
+        defp wait_parts(#{args}, #{index}, kind, #{rows}) do
+          case rule(kind) do
+        #{body}
+          end
+        end\
+        """
+    end
+  end
+
+  defp earlier_arm do
+    Enum.join(
+      [
+        "    :earlier ->",
+        "      earlier_wait(rows, index)"
+      ],
+      "\n"
+    )
+  end
+
+  defp any_arm do
+    Enum.join(
+      [
+        "    :any ->",
+        "      any_wait(rows, index)"
+      ],
+      "\n"
+    )
+  end
+
+  defp named_arm do
+    Enum.join(
+      [
+        "    {:named, %{while: while, until: until}} ->",
+        "      named_wait(st, key, rows, while, until)"
+      ],
+      "\n"
+    )
+  end
+
+  defp earlier_wait_src do
+    Enum.join(
+      [
+        "defp earlier_wait(rows, index) do",
+        "  case scan_rows(rows, fn ix, id, kind, phase ->",
+        "         if ix < index and phase in [:open, :held], do: {ix, id, kind}, else: nil",
+        "       end) do",
+        "    :bad ->",
+        "      :bad",
+        "",
+        "    hits ->",
+        "      hits = Enum.sort_by(hits, fn {ix, id, _kind} -> {ix, id} end)",
+        "      kinds = hits |> Enum.map(fn {_ix, _id, kind} -> kind end) |> Enum.uniq()",
+        "      pairs = Enum.map(hits, fn {ix, id, _kind} -> {ix, id} end)",
+        "      {kinds, pairs}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp any_wait_src do
+    Enum.join(
+      [
+        "defp any_wait(rows, index) do",
+        "  case scan_rows(rows, fn ix, id, kind, phase ->",
+        "         if ix != index and phase == :open, do: {ix, id, kind}, else: nil",
+        "       end) do",
+        "    :bad ->",
+        "      :bad",
+        "",
+        "    hits ->",
+        "      hits = Enum.sort_by(hits, fn {ix, id, _kind} -> {ix, id} end)",
+        "      kinds = hits |> Enum.map(fn {_ix, _id, kind} -> kind end) |> Enum.uniq()",
+        "      pairs = Enum.map(hits, fn {ix, id, _kind} -> {ix, id} end)",
+        "      {kinds, pairs}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  # One definition. A family that has both `earlier` and `any` would
+  # otherwise emit `scan_rows` twice.
+  defp scan_rows_src do
+    Enum.join(
+      [
+        "defp scan_rows(rows, keep) do",
+        "  Enum.reduce_while(rows, [], fn entry, acc ->",
+        "    case entry do",
+        "      {ix, {id, kind, phase}}",
+        "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and",
+        "             phase in [:open, :held] ->",
+        "        case keep.(ix, id, kind, phase) do",
+        "          nil -> {:cont, acc}",
+        "          hit -> {:cont, [hit | acc]}",
+        "        end",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}",
+        "    end",
+        "  end)",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp named_wait_src(false) do
+    Enum.join(
+      [
+        "defp named_wait(_st, _key, rows, while_kinds, _until) do",
+        "  gather_while(rows, while_kinds)",
+        "end",
+        "",
+        gather_while_src(),
+        "",
+        live_pairs_src()
+      ],
+      "\n"
+    )
+  end
+
+  defp named_wait_src(true) do
+    Enum.join(
+      [
+        "defp named_wait(st, key, rows, while_kinds, until_kinds) do",
+        "  case gather_while(rows, while_kinds) do",
+        "    :bad ->",
+        "      :bad",
+        "",
+        "    {kinds, pairs} ->",
+        "      add_until(st, key, rows, until_kinds, kinds, pairs)",
+        "  end",
+        "end",
+        "",
+        "defp add_until(st, key, rows, until_kinds, kinds, pairs) do",
+        "  case kinds_entry(st, key) do",
+        "    :bad ->",
+        "      :bad",
+        "",
+        "    facts ->",
+        "      Enum.reduce_while(until_kinds, {kinds, pairs}, fn kind, {kinds, pairs} ->",
+        "        if Map.has_key?(facts, kind) or kind in kinds do",
+        "          {:cont, {kinds, pairs}}",
+        "        else",
+        "          case live_pairs(rows, kind) do",
+        "            :bad -> {:halt, :bad}",
+        "            hits -> {:cont, {kinds ++ [kind], pairs ++ hits}}",
+        "          end",
+        "        end",
+        "      end)",
+        "  end",
+        "end",
+        "",
+        gather_while_src(),
+        "",
+        live_pairs_src()
+      ],
+      "\n"
+    )
+  end
+
+  defp gather_while_src do
+    Enum.join(
+      [
+        "defp gather_while(rows, kinds) do",
+        "  Enum.reduce_while(kinds, {[], []}, fn kind, {acc, pairs} ->",
+        "    case live_pairs(rows, kind) do",
+        "      :bad -> {:halt, :bad}",
+        "      [] -> {:cont, {acc, pairs}}",
+        "      hits -> {:cont, {acc ++ [kind], pairs ++ hits}}",
+        "    end",
+        "  end)",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp live_pairs_src do
+    Enum.join(
+      [
+        "defp live_pairs(rows, want) do",
+        "  case scan_rows(rows, fn ix, id, kind, phase ->",
+        "         if kind == want and phase in [:open, :held], do: {ix, id}, else: nil",
+        "       end) do",
+        "    :bad -> :bad",
+        "    hits -> Enum.sort(hits)",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
   end
 end

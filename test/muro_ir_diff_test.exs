@@ -34,7 +34,8 @@ defmodule Muro.IRDiffTest do
   @no_runs ~w(
     examples/async-meetings.muro examples/cshrl/std/bool.muro
     examples/even_dec.muro examples/keyed-commands.muro
-    examples/keyed-slots.muro examples/may-fail-control.muro
+    examples/keyed-release.muro examples/keyed-slots.muro
+    examples/may-fail-control.muro
     examples/may-fail-free.muro examples/may-fail-send.muro
     examples/ping.muro examples/prefix.muro examples/temporal.muro
     lib/muro/std/classical.muro test/fixtures/reason_match.muro

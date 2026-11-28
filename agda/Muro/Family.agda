@@ -41,6 +41,9 @@
 -- `resolveMode`, `withdrawTo`, `touchMode`, `RulesInv`, `AtMostOne`,
 -- `NoOvertakeR`, `EarlierResolved`, `noStarve`, `withdrawGone`,
 -- `cutoffTwo`, `cutoffScript`, and `anyGap` are the names `Step` uses.
+--
+-- `NamedHold` at the end of this file is a separate argument. It does
+-- not change the theorems above it.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -3491,3 +3494,666 @@ gap-script = zero ∷ suc (suc zero) ∷ []
 
 gap-refused : Dense zero gap-script → ⊥
 gap-refused (den-cons ())
+
+------------------------------------------------------------------------
+-- Named-kind holds.
+--
+-- Kinds are numbers. A dependency gives each kind a `while` list and an
+-- `until` list, and a rank that descends along both, so the dependency
+-- has no cycle. `while` is the open-world hold: an arrived row of a
+-- listed kind and the same key, born at or before this row opened.
+-- A later arrival has a greater birth and does not refute an opening.
+-- `until` is one fact that a listed kind has resolved for that key.
+-- The fact is not a row. Withdrawing a held row does not record it.
+--
+-- Not proved here: the meeting graph, one retry then give-up,
+-- `fail stop`, the book atoms, the departed floor, `drop_key`, `skip`,
+-- the interaction with `held while any unresolved`, and that the Elixir checker agrees with
+-- this step off the invariant. What is proved is `no-overtake`
+-- (an opened row's `while` kinds were clear at its open, and each
+-- `until` kind has a fact), that `arriveN-inv`, `resolve-inv`, and
+-- `withdraw-inv` preserve it, that `withdraw-facts` adds nothing,
+-- that `release-records` does, and `unblocked-min`: a least-rank held
+-- row is not blocked when its `until` facts are in and every in-window
+-- `while` row of its key is itself held.
+------------------------------------------------------------------------
+
+module NamedHold where
+
+  -- `while` is known at open: a later row of a listed kind does not
+  -- pull an nopen row back to nhold. `until` is one fact `(key, kind)`.
+  -- The fact stays after the row that earned it is gone. `withdraw`
+  -- removes a nhold row and does not cons a fact. Opening is one pass
+  -- over the rows that remain: a row nopen in that pass is not a
+  -- reason to open another, because a nhold row still counts as a hit.
+  --
+  -- `no-overtake` is the safety theorem. `arriveN-inv`, `resolve-inv`,
+  -- and `withdraw-inv` preserve it. `withdraw-facts` is the negative
+  -- fact. `release-records` is the positive one. `unblocked-min` is
+  -- progress for a nhold row of least rank: with its `until` facts in,
+  -- and every in-window `while` row of its key nhold, it is not blocked.
+  -- Acyclicity is the rank proof, so that row cannot be waiting on
+  -- itself or on another nhold row of no smaller rank.
+
+  data Reveal {A : Set} (x : A) : Set where
+    reveal : (y : A) → x ≡ y → Reveal x
+
+  uncover : ∀ {A : Set} (x : A) → Reveal x
+  uncover x = reveal x refl
+
+  data Every {A : Set} (P : A → Set) : List A → Set where
+    enone : Every P []
+    emore : ∀ {x xs} → P x → Every P xs → Every P (x ∷ xs)
+
+  elookup : ∀ {A : Set} {P : A → Set} {x : A} {xs : List A} →
+            Every P xs → Any (_≡ x) xs → P x
+  elookup (emore p _)  (here refl) = p
+  elookup (emore _ ps) (there mem) = elookup ps mem
+  elookup enone        ()
+
+  record Dep : Set where
+    field
+      whileOf : ℕ → List ℕ
+      untilOf : ℕ → List ℕ
+      rank    : ℕ → ℕ
+      while↓  : ∀ k d → Any (_≡ d) (whileOf k) → rank d < rank k
+      until↓  : ∀ k d → Any (_≡ d) (untilOf k) → rank d < rank k
+
+  open Dep
+
+  data NPhase : Set where
+    nopen nhold : NPhase
+
+  held? : NPhase → Bool
+  held? nhold   = true
+  held? nopen = false
+
+  record NRow : Set where
+    field
+      key index id kind : ℕ
+      phase             : NPhase
+      born openedAt     : ℕ
+
+  open NRow
+
+  Fact : Set
+  Fact = ℕ × ℕ
+
+  record NState : Set where
+    field
+      rows  : List NRow
+      facts : List Fact
+      tick  : ℕ
+      next  : ℕ
+
+  open NState
+
+  _≤?_ : ∀ m n → Dec (m ≤ n)
+  zero  ≤? n     = yes z≤n
+  suc m ≤? zero  = no λ ()
+  suc m ≤? suc n with m ≤? n
+  ... | yes p = yes (s≤s p)
+  ... | no ¬p = no λ { (s≤s q) → ¬p q }
+
+  elem : ℕ → List ℕ → Bool
+  elem n []       = false
+  elem n (x ∷ xs) = if ⌊ n ≟ x ⌋ then true else elem n xs
+
+  elem-sound : ∀ n xs → T (elem n xs) → Any (_≡ n) xs
+  elem-sound n []       ()
+  elem-sound n (x ∷ xs) t with n ≟ x
+  ... | yes p = here (sym p)
+  ... | no _  = there (elem-sound n xs t)
+
+  self-while : ∀ δ k → Any (_≡ k) (whileOf δ k) → ⊥
+  self-while δ k mem = n≮n (rank δ k) (while↓ δ k k mem)
+
+  self-until : ∀ δ k → Any (_≡ k) (untilOf δ k) → ⊥
+  self-until δ k mem = n≮n (rank δ k) (until↓ δ k k mem)
+
+  ≡true-T : ∀ {b} → b ≡ true → T b
+  ≡true-T refl = tt
+
+  while-irrefl : ∀ δ k → elem k (whileOf δ k) ≡ false
+  while-irrefl δ k with uncover (elem k (whileOf δ k))
+  ... | reveal false eq = eq
+  ... | reveal true  eq = ⊥-elim (self-while δ k (elem-sound k (whileOf δ k) (≡true-T eq)))
+
+  as-true : ∀ b → T b → b ≡ true
+  as-true true  _ = refl
+  as-true false ()
+
+  hit : NRow → ℕ → ℕ → List ℕ → Bool
+  hit r k at ks =
+    if ⌊ k ≟ key r ⌋ then
+      (if elem (kind r) ks then ⌊ born r ≤? at ⌋ else false)
+    else false
+
+  anyWhile : List NRow → ℕ → ℕ → List ℕ → Bool
+  anyWhile []       k at ks = false
+  anyWhile (r ∷ rs) k at ks = hit r k at ks ∨ anyWhile rs k at ks
+
+  fact? : List Fact → ℕ → ℕ → Bool
+  fact? []             k d = false
+  fact? ((k' , d') ∷ fs) k d =
+    if ⌊ k ≟ k' ⌋ then (if ⌊ d ≟ d' ⌋ then true else fact? fs k d)
+    else fact? fs k d
+
+  allUntil : List Fact → ℕ → List ℕ → Bool
+  allUntil fs k []       = true
+  allUntil fs k (d ∷ ds) = fact? fs k d ∧ allUntil fs k ds
+
+  nblocked? : Dep → List NRow → List Fact → ℕ → ℕ → ℕ → Bool
+  nblocked? δ rs fs k at kd =
+    anyWhile rs k at (whileOf δ kd) ∨ not (allUntil fs k (untilOf δ kd))
+
+  -- An nopen row is safe when no `while` kind had a same-key row born
+  -- at or before the open, and every `until` kind has a fact. A nhold
+  -- row carries no obligation.
+  Safe : Dep → List NRow → List Fact → NRow → Set
+  Safe δ rs fs r =
+    T (not (anyWhile rs (key r) (openedAt r) (whileOf δ (kind r)))) ×
+    T (allUntil fs (key r) (untilOf δ (kind r)))
+
+  Ok : Dep → List NRow → List Fact → NRow → Set
+  Ok δ rs fs r = phase r ≡ nopen → Safe δ rs fs r
+
+  NBefore : ℕ → NRow → Set
+  NBefore t r = born r < t × openedAt r < t
+
+  Inv : Dep → NState → Set
+  Inv δ s =
+    Every (NBefore (tick s)) (rows s) ×
+    Every (Ok δ (rows s) (facts s)) (rows s)
+
+  no-overtake : ∀ {δ s r} → Inv δ s → Any (_≡ r) (rows s) → phase r ≡ nopen →
+                Safe δ (rows s) (facts s) r
+  no-overtake inv mem op = elookup (proj₂ inv) mem op
+
+  open-safe : ∀ {δ s r} → Inv δ s → Any (_≡ r) (rows s) → phase r ≡ nopen →
+              Safe δ (rows s) (facts s) r
+  open-safe inv mem op = elookup (proj₂ inv) mem op
+
+  not-T : ∀ b → T (not b) → T b → ⊥
+  not-T true  () _
+  not-T false _  ()
+
+  T-subst : ∀ {a b} → a ≡ b → T a → T b
+  T-subst refl t = t
+
+  T-not-subst : ∀ {a b} → a ≡ b → T (not a) → T (not b)
+  T-not-subst eq t = T-subst (cong not eq) t
+
+  ≡false-Tnot : ∀ b → b ≡ false → T (not b)
+  ≡false-Tnot false refl = tt
+  ≡false-Tnot true  ()
+
+  Tnot-≡false : ∀ b → T (not b) → b ≡ false
+  Tnot-≡false false _ = refl
+  Tnot-≡false true  ()
+
+  ∨-false : ∀ a b → a ∨ b ≡ false → a ≡ false × b ≡ false
+  ∨-false false false _ = refl , refl
+  ∨-false true  b     ()
+  ∨-false false true  ()
+
+  not≡false⇒true : ∀ b → not b ≡ false → b ≡ true
+  not≡false⇒true true  _ = refl
+  not≡false⇒true false ()
+
+  ∧-both : ∀ a b → a ∧ b ≡ true → a ≡ true × b ≡ true
+  ∧-both true  true  refl = refl , refl
+  ∧-both true  false ()
+  ∧-both false b     ()
+
+  split3 : ∀ h m n → h ∧ (m ∧ n) ≡ true → h ≡ true × m ≡ true × n ≡ true
+  split3 h m n eq =
+    let ht , rest = ∧-both h (m ∧ n) eq
+        mt , nt   = ∧-both m n rest
+    in ht , mt , nt
+
+  T-∧-intro : ∀ a b → T a → T b → T (a ∧ b)
+  T-∧-intro true  true  _ _ = tt
+  T-∧-intro true  false _ ()
+  T-∧-intro false b     () _
+
+  T-∧-elim : ∀ a b → T (a ∧ b) → T a × T b
+  T-∧-elim true  true  _ = tt , tt
+  T-∧-elim true  false ()
+  T-∧-elim false b     ()
+
+  contra-not : ∀ b c → (T b → T c) → T (not c) → T (not b)
+  contra-not false c _ _  = tt
+  contra-not true  c f nc = ⊥-elim (not-T c nc (f tt))
+
+  ≟-sound : ∀ {m n} → ⌊ m ≟ n ⌋ ≡ true → m ≡ n
+  ≟-sound {m} {n} eq with m ≟ n | eq
+  ... | yes p | _ = p
+  ... | no _  | ()
+
+  any-cons : ∀ r rs k at ks → hit r k at ks ≡ false →
+             anyWhile (r ∷ rs) k at ks ≡ anyWhile rs k at ks
+  any-cons r rs k at ks eq rewrite eq = refl
+
+  hit-irrefl : ∀ δ r at → hit r (key r) at (whileOf δ (kind r)) ≡ false
+  hit-irrefl δ r at with key r ≟ key r
+  ... | no ¬p = ⊥-elim (¬p refl)
+  ... | yes _ rewrite while-irrefl δ (kind r) = refl
+
+  hit-young : ∀ r k at ks t → born r ≡ t → at < t → hit r k at ks ≡ false
+  hit-young r k at ks t eb at< with k ≟ key r
+  hit-young r k at ks t eb at< | no _ = refl
+  hit-young r k at ks t eb at< | yes _ with elem (kind r) ks
+  hit-young r k at ks t eb at< | yes _ | false = refl
+  hit-young r k at ks t eb at< | yes _ | true with born r ≤? at
+  hit-young r k at ks t eb at< | yes _ | true | no _ = refl
+  hit-young r k at ks t eb at< | yes _ | true | yes le =
+    ⊥-elim (<⇒≱ at< (subst (_≤ at) eb le))
+
+  any-tail : ∀ r rs k at ks → T (anyWhile rs k at ks) → T (anyWhile (r ∷ rs) k at ks)
+  any-tail r rs k at ks t with hit r k at ks
+  ... | true  = tt
+  ... | false = t
+
+  nremove : ℕ → List NRow → List NRow
+  nremove ident []       = []
+  nremove ident (r ∷ rs) with ident ≟ id r
+  ... | yes _ = nremove ident rs
+  ... | no _  = r ∷ nremove ident rs
+
+  any-remove-mono : ∀ ident rs k at ks →
+                    T (anyWhile (nremove ident rs) k at ks) →
+                    T (anyWhile rs k at ks)
+  any-remove-mono ident []       k at ks ()
+  any-remove-mono ident (r ∷ rs) k at ks t with ident ≟ id r
+  ... | yes _ = any-tail r rs k at ks (any-remove-mono ident rs k at ks t)
+  ... | no _ with hit r k at ks
+  ... | true  = tt
+  ... | false = any-remove-mono ident rs k at ks t
+
+  nfind : ℕ → List NRow → Maybe NRow
+  nfind ident []       = nothing
+  nfind ident (r ∷ rs) with ident ≟ id r
+  ... | yes _ = just r
+  ... | no _  = nfind ident rs
+
+  fact-grow : ∀ fs k d k0 d0 → T (fact? fs k d) → T (fact? ((k0 , d0) ∷ fs) k d)
+  fact-grow fs k d k0 d0 t with k ≟ k0
+  ... | no _  = t
+  ... | yes _ with d ≟ d0
+  ... | yes _ = tt
+  ... | no _  = t
+
+  all-grow : ∀ fs k ks k0 d0 → T (allUntil fs k ks) → T (allUntil ((k0 , d0) ∷ fs) k ks)
+  all-grow fs k []       k0 d0 _ = tt
+  all-grow fs k (d ∷ ds) k0 d0 t =
+    let a , b = T-∧-elim (fact? fs k d) (allUntil fs k ds) t in
+    T-∧-intro (fact? ((k0 , d0) ∷ fs) k d) (allUntil ((k0 , d0) ∷ fs) k ds)
+              (fact-grow fs k d k0 d0 a) (all-grow fs k ds k0 d0 b)
+
+  nstamp : ℕ → NRow → Bool → NRow
+  nstamp t r true  = record r { phase = nopen ; openedAt = t }
+  nstamp t r false = r
+
+  -- Held, same key, and clear against the list we are mapping. The
+  -- list is the one before this pass, so a row this pass opens is
+  -- still nhold for the siblings.
+  gate : Dep → List NRow → List Fact → ℕ → ℕ → NRow → Bool
+  gate δ full fs gk t r =
+    held? (phase r) ∧ ⌊ gk ≟ key r ⌋ ∧ not (nblocked? δ full fs gk t (kind r))
+
+  mapStamp : Dep → List NRow → List Fact → ℕ → ℕ → List NRow → List NRow
+  mapStamp δ full fs gk t []       = []
+  mapStamp δ full fs gk t (r ∷ rs) =
+    nstamp t r (gate δ full fs gk t r) ∷ mapStamp δ full fs gk t rs
+
+  openHeld : Dep → List NRow → List Fact → ℕ → ℕ → List NRow
+  openHeld δ rs fs gk t = mapStamp δ rs fs gk t rs
+
+  hit-open : ∀ t r k at ks → hit (nstamp t r true) k at ks ≡ hit r k at ks
+  hit-open t r k at ks = refl
+
+  any-open-go : ∀ δ full fs gk t rs ak at ks →
+                anyWhile (mapStamp δ full fs gk t rs) ak at ks ≡ anyWhile rs ak at ks
+  any-open-go δ full fs gk t []       ak at ks = refl
+  any-open-go δ full fs gk t (r ∷ rs) ak at ks with uncover (gate δ full fs gk t r)
+  ... | reveal false eq =
+    subst (λ b → anyWhile (nstamp t r b ∷ mapStamp δ full fs gk t rs) ak at ks
+               ≡ anyWhile (r ∷ rs) ak at ks)
+          (sym eq)
+          (cong (λ z → hit r ak at ks ∨ z) (any-open-go δ full fs gk t rs ak at ks))
+  ... | reveal true eq =
+    subst (λ b → anyWhile (nstamp t r b ∷ mapStamp δ full fs gk t rs) ak at ks
+               ≡ anyWhile (r ∷ rs) ak at ks)
+          (sym eq)
+          (trans (cong (λ z → hit (nstamp t r true) ak at ks ∨ z)
+                       (any-open-go δ full fs gk t rs ak at ks))
+                 (cong (λ h → h ∨ anyWhile rs ak at ks) (hit-open t r ak at ks)))
+
+  any-open : ∀ δ full fs gk t ak at ks →
+             anyWhile (mapStamp δ full fs gk t full) ak at ks ≡ anyWhile full ak at ks
+  any-open δ full fs gk t ak at ks = any-open-go δ full fs gk t full ak at ks
+
+  ok-keep : ∀ δ full fs gk t r →
+            Ok δ full fs r →
+            Ok δ (mapStamp δ full fs gk t full) fs r
+  ok-keep δ full fs gk t r ok op =
+    let nw , us = ok op
+        same    = any-open δ full fs gk t (key r) (openedAt r) (whileOf δ (kind r))
+    in T-not-subst (sym same) nw , us
+
+  opened-safe : ∀ δ full fs gk t r →
+                gate δ full fs gk t r ≡ true →
+                Safe δ (mapStamp δ full fs gk t full) fs (nstamp t r true)
+  opened-safe δ full fs gk t r eq =
+    let _ , mt , nt = split3 (held? (phase r)) (⌊ gk ≟ key r ⌋)
+                             (not (nblocked? δ full fs gk t (kind r))) eq
+        qk          = ≟-sound mt
+        bf          = Tnot-≡false (nblocked? δ full fs gk t (kind r)) (≡true-T nt)
+        aw , nu     = ∨-false (anyWhile full gk t (whileOf δ (kind r)))
+                              (not (allUntil fs gk (untilOf δ (kind r)))) bf
+        au          = not≡false⇒true (allUntil fs gk (untilOf δ (kind r))) nu
+        aw-r        = trans (sym (cong (λ x → anyWhile full x t (whileOf δ (kind r))) qk)) aw
+        aw-m        = trans (any-open δ full fs gk t (key r) t (whileOf δ (kind r))) aw-r
+        au-r        = trans (sym (cong (λ x → allUntil fs x (untilOf δ (kind r))) qk)) au
+    in ≡false-Tnot (anyWhile (mapStamp δ full fs gk t full) (key r) t (whileOf δ (kind r))) aw-m
+     , ≡true-T au-r
+
+  okCons : Dep → List NRow → List Fact → ℕ → ℕ → NRow → List NRow → Bool → Set
+  okCons δ full fs gk t q rs b =
+    Every (Ok δ (mapStamp δ full fs gk t full) fs)
+          (nstamp t q b ∷ mapStamp δ full fs gk t rs)
+
+  okStep : ∀ δ full fs gk t q rs →
+           Ok δ full fs q →
+           Every (Ok δ (mapStamp δ full fs gk t full) fs) (mapStamp δ full fs gk t rs) →
+           ∀ c → gate δ full fs gk t q ≡ c →
+           okCons δ full fs gk t q rs c
+  okStep δ full fs gk t q rs _  tail true  eq = emore (λ _ → opened-safe δ full fs gk t q eq) tail
+  okStep δ full fs gk t q rs pok tail false _ = emore (ok-keep δ full fs gk t q pok) tail
+
+  map-ok : ∀ δ full fs gk t rs →
+           Every (Ok δ full fs) rs →
+           Every (Ok δ (mapStamp δ full fs gk t full) fs) (mapStamp δ full fs gk t rs)
+  map-ok δ full fs gk t []       enone = enone
+  map-ok δ full fs gk t (q ∷ rs) (emore pok orest) with uncover (gate δ full fs gk t q)
+  ... | reveal c eq =
+    subst (okCons δ full fs gk t q rs) (sym eq)
+          (okStep δ full fs gk t q rs pok (map-ok δ full fs gk t rs orest) c eq)
+
+  nbefore-suc : ∀ {t r} → NBefore t r → NBefore (suc t) r
+  nbefore-suc (bn , on) = m<n⇒m<1+n bn , m<n⇒m<1+n on
+
+  all-nbefore-suc : ∀ {t rs} → Every (NBefore t) rs → Every (NBefore (suc t)) rs
+  all-nbefore-suc enone = enone
+  all-nbefore-suc {t} (emore {x} p ps) =
+    emore (nbefore-suc {t} {x} p) (all-nbefore-suc {t} ps)
+
+  belowStep : ∀ t q c → NBefore t q → NBefore (suc t) (nstamp t q c)
+  belowStep t q true  (bn , _) = m<n⇒m<1+n bn , n<1+n t
+  belowStep t q false bel      = nbefore-suc {t} {q} bel
+
+  belowCons : Dep → List NRow → List Fact → ℕ → ℕ → NRow → List NRow → Bool → Set
+  belowCons δ full fs gk t q rs b =
+    Every (NBefore (suc t)) (nstamp t q b ∷ mapStamp δ full fs gk t rs)
+
+  map-below : ∀ δ full fs gk t rs →
+              Every (NBefore t) rs →
+              Every (NBefore (suc t)) (mapStamp δ full fs gk t rs)
+  map-below δ full fs gk t []       enone = enone
+  map-below δ full fs gk t (q ∷ rs) (emore bel rest) with uncover (gate δ full fs gk t q)
+  ... | reveal c eq =
+    subst (belowCons δ full fs gk t q rs) (sym eq)
+          (emore (belowStep t q c bel) (map-below δ full fs gk t rs rest))
+
+  ok-drop : ∀ δ full fs ident r →
+            Ok δ full fs r →
+            Ok δ (nremove ident full) fs r
+  ok-drop δ full fs ident r ok op =
+    let nw , us = ok op in
+    contra-not (anyWhile (nremove ident full) (key r) (openedAt r) (whileOf δ (kind r)))
+               (anyWhile full (key r) (openedAt r) (whileOf δ (kind r)))
+               (any-remove-mono ident full (key r) (openedAt r) (whileOf δ (kind r)))
+               nw
+    , us
+
+  filter-ok : ∀ δ full fs ident rs →
+              Every (Ok δ full fs) rs →
+              Every (Ok δ (nremove ident full) fs) (nremove ident rs)
+  filter-ok δ full fs ident []       enone = enone
+  filter-ok δ full fs ident (r ∷ rs) (emore p ps) with ident ≟ id r
+  ... | yes _ = filter-ok δ full fs ident rs ps
+  ... | no _  = emore (ok-drop δ full fs ident r p) (filter-ok δ full fs ident rs ps)
+
+  ok-grow : ∀ δ rs fs q k0 d0 →
+            Ok δ rs fs q →
+            Ok δ rs ((k0 , d0) ∷ fs) q
+  ok-grow δ rs fs q k0 d0 ok op =
+    let nw , us = ok op in
+    nw , all-grow fs (key q) (untilOf δ (kind q)) k0 d0 us
+
+  all-ok-grow : ∀ δ rs fs k0 d0 qs →
+                Every (Ok δ rs fs) qs →
+                Every (Ok δ rs ((k0 , d0) ∷ fs)) qs
+  all-ok-grow δ rs fs k0 d0 []       enone = enone
+  all-ok-grow δ rs fs k0 d0 (q ∷ qs) (emore p ps) =
+    emore (ok-grow δ rs fs q k0 d0 p) (all-ok-grow δ rs fs k0 d0 qs ps)
+
+  all-below-nremove : ∀ ident t rs → Every (NBefore t) rs → Every (NBefore t) (nremove ident rs)
+  all-below-nremove ident t []       enone = enone
+  all-below-nremove ident t (r ∷ rs) (emore p ps) with ident ≟ id r
+  ... | yes _ = all-below-nremove ident t rs ps
+  ... | no _  = emore p (all-below-nremove ident t rs ps)
+
+  keep-ok : ∀ δ full fs nr t q →
+            born nr ≡ t →
+            openedAt q < t →
+            Ok δ full fs q →
+            Ok δ (nr ∷ full) fs q
+  keep-ok δ full fs nr t q eb oa< ok op =
+    let nw , us = ok op
+        hf      = hit-young nr (key q) (openedAt q) (whileOf δ (kind q)) t eb oa<
+        same    = any-cons nr full (key q) (openedAt q) (whileOf δ (kind q)) hf
+    in T-not-subst (sym same) nw , us
+
+  all-keep : ∀ δ full fs nr t rs →
+             born nr ≡ t →
+             Every (NBefore t) rs →
+             Every (Ok δ full fs) rs →
+             Every (Ok δ (nr ∷ full) fs) rs
+  all-keep δ full fs nr t []       _  enone        enone = enone
+  all-keep δ full fs nr t (q ∷ rs) eb (emore bel restb) (emore pok resto) =
+    emore (keep-ok δ full fs nr t q eb (proj₂ bel) pok)
+          (all-keep δ full fs nr t rs eb restb resto)
+
+  mkRow : ℕ → ℕ → ℕ → ℕ → ℕ → Bool → NRow
+  mkRow k ix ident kd t b = record
+    { key = k ; index = ix ; id = ident ; kind = kd
+    ; phase = if b then nhold else nopen ; born = t ; openedAt = t }
+
+  arriveB : Dep → NState → ℕ → ℕ → ℕ → Bool → NState
+  arriveB δ s k kd ix b = record s
+    { rows = mkRow k ix (next s) kd (tick s) b ∷ rows s
+    ; tick = suc (tick s)
+    ; next = suc (next s)
+    }
+
+  arriveN : Dep → NState → ℕ → ℕ → ℕ → NState
+  arriveN δ s k kd ix =
+    arriveB δ s k kd ix (nblocked? δ (rows s) (facts s) k (tick s) kd)
+
+  arriveB-inv : ∀ δ s k kd ix b →
+                Inv δ s →
+                b ≡ nblocked? δ (rows s) (facts s) k (tick s) kd →
+                Inv δ (arriveB δ s k kd ix b)
+  arriveB-inv δ s k kd ix true (bel , oks) _ =
+    let t  = tick s
+        nr = mkRow k ix (next s) kd t true
+    in emore (n<1+n t , n<1+n t) (all-nbefore-suc bel)
+     , emore (λ ()) (all-keep δ (rows s) (facts s) nr t (rows s) refl bel oks)
+  arriveB-inv δ s k kd ix false (bel , oks) eq =
+    let t     = tick s
+        nr    = mkRow k ix (next s) kd t false
+        bf    = sym eq
+        aw , nu = ∨-false (anyWhile (rows s) k t (whileOf δ kd))
+                          (not (allUntil (facts s) k (untilOf δ kd))) bf
+        au    = not≡false⇒true (allUntil (facts s) k (untilOf δ kd)) nu
+        same  = any-cons nr (rows s) (key nr) t (whileOf δ (kind nr)) (hit-irrefl δ nr t)
+        clear = trans same aw
+    in emore (n<1+n t , n<1+n t) (all-nbefore-suc bel)
+     , emore (λ _ → ≡false-Tnot (anyWhile (nr ∷ rows s) (key nr) t (whileOf δ (kind nr))) clear
+                   , ≡true-T au)
+             (all-keep δ (rows s) (facts s) nr t (rows s) refl bel oks)
+
+  arriveN-inv : ∀ δ s k kd ix → Inv δ s → Inv δ (arriveN δ s k kd ix)
+  arriveN-inv δ s k kd ix inv =
+    arriveB-inv δ s k kd ix (nblocked? δ (rows s) (facts s) k (tick s) kd) inv refl
+
+  releaseB : Dep → NState → NRow → Bool → NState
+  releaseB δ s r true = record s
+    { rows  = openHeld δ (nremove (id r) (rows s)) ((key r , kind r) ∷ facts s) (key r) (tick s)
+    ; facts = (key r , kind r) ∷ facts s
+    ; tick  = suc (tick s)
+    }
+  releaseB δ s r false = record s
+    { rows  = openHeld δ (nremove (id r) (rows s)) (facts s) (key r) (tick s)
+    ; facts = facts s
+    ; tick  = suc (tick s)
+    }
+
+  release-inv : ∀ δ s r b → Inv δ s → Inv δ (releaseB δ s r b)
+  release-inv δ s r true (bel , oks) =
+    let rs   = nremove (id r) (rows s)
+        fs   = (key r , kind r) ∷ facts s
+        t    = tick s
+        bel1 = all-below-nremove (id r) t (rows s) bel
+        oks1 = filter-ok δ (rows s) (facts s) (id r) (rows s) oks
+        oks2 = all-ok-grow δ rs (facts s) (key r) (kind r) rs oks1
+    in map-below δ rs fs (key r) t rs bel1
+     , map-ok δ rs fs (key r) t rs oks2
+  release-inv δ s r false (bel , oks) =
+    let rs   = nremove (id r) (rows s)
+        fs   = facts s
+        t    = tick s
+        bel1 = all-below-nremove (id r) t (rows s) bel
+        oks1 = filter-ok δ (rows s) (facts s) (id r) (rows s) oks
+    in map-below δ rs fs (key r) t rs bel1
+     , map-ok δ rs fs (key r) t rs oks1
+
+  release-records : ∀ δ s r → fact? (facts (releaseB δ s r true)) (key r) (kind r) ≡ true
+  release-records δ s r with key r ≟ key r
+  ... | no ¬p = ⊥-elim (¬p refl)
+  ... | yes _ with kind r ≟ kind r
+  ... | no ¬p = ⊥-elim (¬p refl)
+  ... | yes _ = refl
+
+  resolveN : Dep → NState → ℕ → NState
+  resolveN δ s ident with nfind ident (rows s)
+  ... | nothing = s
+  ... | just r with phase r
+  ... | nhold   = s
+  ... | nopen = releaseB δ s r true
+
+  resolve-inv : ∀ δ s ident → Inv δ s → Inv δ (resolveN δ s ident)
+  resolve-inv δ s ident inv with nfind ident (rows s)
+  ... | nothing = inv
+  ... | just r with phase r
+  ... | nhold   = inv
+  ... | nopen = release-inv δ s r true inv
+
+  withdrawN : Dep → NState → ℕ → NState
+  withdrawN δ s ident with nfind ident (rows s)
+  ... | nothing = s
+  ... | just r with phase r
+  ... | nopen = s
+  ... | nhold   = releaseB δ s r false
+
+  withdraw-inv : ∀ δ s ident → Inv δ s → Inv δ (withdrawN δ s ident)
+  withdraw-inv δ s ident inv with nfind ident (rows s)
+  ... | nothing = inv
+  ... | just r with phase r
+  ... | nopen = inv
+  ... | nhold   = release-inv δ s r false inv
+
+  withdraw-facts : ∀ δ s ident → facts (withdrawN δ s ident) ≡ facts s
+  withdraw-facts δ s ident with nfind ident (rows s)
+  ... | nothing = refl
+  ... | just r with phase r
+  ... | nopen = refl
+  ... | nhold   = refl
+
+  any-wit : ∀ rs k at ks → T (anyWhile rs k at ks) →
+            Σ NRow (λ q → Any (_≡ q) rs × T (hit q k at ks))
+  any-wit []       k at ks ()
+  any-wit (r ∷ rs) k at ks t with uncover (hit r k at ks)
+  ... | reveal true eq  = r , here refl , ≡true-T eq
+  ... | reveal false eq =
+    let q , mem , ht = any-wit rs k at ks (subst (λ b → T (b ∨ anyWhile rs k at ks)) eq t)
+    in q , there mem , ht
+
+  hit-parts : ∀ q k at ks → T (hit q k at ks) →
+              key q ≡ k × T (elem (kind q) ks) × T (⌊ born q ≤? at ⌋)
+  hit-parts q k at ks t with k ≟ key q
+  hit-parts q k at ks t | no _ = ⊥-elim t
+  hit-parts q k at ks t | yes eq with elem (kind q) ks
+  hit-parts q k at ks t | yes eq | false = ⊥-elim t
+  hit-parts q k at ks t | yes eq | true with born q ≤? at
+  hit-parts q k at ks t | yes eq | true | no _  = ⊥-elim t
+  hit-parts q k at ks t | yes eq | true | yes _ = sym eq , tt , tt
+
+  min-clash : ∀ δ rs r at q →
+              Any (_≡ q) rs →
+              T (hit q (key r) at (whileOf δ (kind r))) →
+              (∀ q' → Any (_≡ q') rs → key q' ≡ key r → phase q' ≡ nhold →
+                    rank δ (kind r) ≤ rank δ (kind q')) →
+              (∀ q' → Any (_≡ q') rs → key q' ≡ key r →
+                    T (elem (kind q') (whileOf δ (kind r))) →
+                    T (⌊ born q' ≤? at ⌋) →
+                    phase q' ≡ nhold) →
+              ⊥
+  min-clash δ rs r at q mem ht min blockers =
+    let qk , el , br = hit-parts q (key r) at (whileOf δ (kind r)) ht
+        ph           = blockers q mem qk el br
+        le           = min q mem qk ph
+        smaller      = while↓ δ (kind r) (kind q) (elem-sound (kind q) (whileOf δ (kind r)) el)
+    in <⇒≱ smaller le
+
+  no-while : ∀ δ rs r at →
+             (∀ q → Any (_≡ q) rs → key q ≡ key r → phase q ≡ nhold →
+                   rank δ (kind r) ≤ rank δ (kind q)) →
+             (∀ q → Any (_≡ q) rs → key q ≡ key r →
+                   T (elem (kind q) (whileOf δ (kind r))) →
+                   T (⌊ born q ≤? at ⌋) →
+                   phase q ≡ nhold) →
+             anyWhile rs (key r) at (whileOf δ (kind r)) ≡ false
+  no-while δ rs r at min blockers with uncover (anyWhile rs (key r) at (whileOf δ (kind r)))
+  ... | reveal false eq = eq
+  ... | reveal true  eq =
+    ⊥-elim (min-clash δ rs r at _ (proj₁ (proj₂ wit)) (proj₂ (proj₂ wit)) min blockers)
+    where
+      wit = any-wit rs (key r) at (whileOf δ (kind r)) (≡true-T eq)
+
+  blocked-split : ∀ δ rs fs k at kd →
+                  anyWhile rs k at (whileOf δ kd) ≡ false →
+                  allUntil fs k (untilOf δ kd) ≡ true →
+                  nblocked? δ rs fs k at kd ≡ false
+  blocked-split δ rs fs k at kd aw au rewrite aw | au = refl
+
+  -- A nhold row of least rank is not blocked. Every `while` witness
+  -- would be a nhold row of strictly smaller rank, which the least row
+  -- does not have. `until` is discharged by the fact premise.
+  unblocked-min :
+    ∀ δ rs fs r at →
+    phase r ≡ nhold →
+    (∀ q → Any (_≡ q) rs → key q ≡ key r → phase q ≡ nhold →
+          rank δ (kind r) ≤ rank δ (kind q)) →
+    T (allUntil fs (key r) (untilOf δ (kind r))) →
+    (∀ q → Any (_≡ q) rs → key q ≡ key r →
+          T (elem (kind q) (whileOf δ (kind r))) →
+          T (⌊ born q ≤? at ⌋) →
+          phase q ≡ nhold) →
+    nblocked? δ rs fs (key r) at (kind r) ≡ false
+  unblocked-min δ rs fs r at _ min au blockers =
+    blocked-split δ rs fs (key r) at (kind r)
+      (no-while δ rs r at min blockers)
+      (as-true (allUntil fs (key r) (untilOf δ (kind r))) au)
